@@ -1,0 +1,411 @@
+{
+  "name": "english-speaking-training-vscode",
+  "displayName": "English Speaking Training",
+  "description": "Standalone VS Code speaking-practice cockpit for local EnglishSpeakingTraining files.",
+  "version": "0.1.11",
+  "publisher": "xianwei-zhang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xwzhangSZU/english-speaking-training-vscode.git"
+  },
+  "homepage": "https://github.com/xwzhangSZU/english-speaking-training-vscode#readme",
+  "bugs": {
+    "url": "https://github.com/xwzhangSZU/english-speaking-training-vscode/issues"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:prebuilt",
+    "workspaceContains:scripts/english_training_progress.py",
+    "onView:englishTraining.practice",
+    "onView:englishTraining.status",
+    "onCommand:englishTraining.refresh",
+    "onCommand:englishTraining.configureGitHubMaterials",
+    "onCommand:englishTraining.configureGitHubToken",
+    "onCommand:englishTraining.clearGitHubToken"
+  ],
+  "main": "./out/extension.js",
+  "icon": "media/marketplace-icon.png",
+  "contributes": {
+    "commands": [
+      {
+        "command": "englishTraining.openPractice",
+        "title": "English Training: Open Practice Cockpit",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.refresh",
+        "title": "English Training: Refresh State",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.configureGitHubMaterials",
+        "title": "English Training: Configure GitHub Materials Source",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.configureGitHubToken",
+        "title": "English Training: Configure GitHub Token",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.clearGitHubToken",
+        "title": "English Training: Clear GitHub Token",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.configureOpenAIKey",
+        "title": "English Training: Configure OpenAI API Key",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.configureGeminiKey",
+        "title": "English Training: Configure Gemini API Key",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.configureMiniMaxKey",
+        "title": "English Training: Configure MiniMax API Key",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.clearApiKeys",
+        "title": "English Training: Clear Stored API Keys",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.configureMiMoKey",
+        "title": "English Training: Configure MiMo API Key",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.configureKimiKey",
+        "title": "English Training: Configure Kimi API Key",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.configureDeepSeekKey",
+        "title": "English Training: Configure DeepSeek API Key",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useGeminiCoach",
+        "title": "English Training: Use Gemini Coach",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useMiniMaxCoach",
+        "title": "English Training: Use MiniMax Coach",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useMiMoCoach",
+        "title": "English Training: Use MiMo Coach",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useKimiCoach",
+        "title": "English Training: Use Kimi Coach",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useDeepSeekCoach",
+        "title": "English Training: Use DeepSeek Coach",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useOpenAIAudioUnderstanding",
+        "title": "English Training: Use OpenAI Speech Input",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useGeminiAudioUnderstanding",
+        "title": "English Training: Use Gemini Speech Input",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useMiMoAudioUnderstanding",
+        "title": "English Training: Use MiMo Speech Input",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useOpenAITts",
+        "title": "English Training: Use OpenAI Speech Output",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useMiniMaxTts",
+        "title": "English Training: Use MiniMax Speech Output",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useGeminiTts",
+        "title": "English Training: Use Gemini Speech Output",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useMiMoTts",
+        "title": "English Training: Use MiMo Speech Output",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.completeLocal",
+        "title": "English Training: Complete Current Package Locally",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.openTaskCard",
+        "title": "English Training: Open Current Task Card",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.revealPackage",
+        "title": "English Training: Reveal Current Package",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.openSessionFolder",
+        "title": "English Training: Open Local Session Folder",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.createSamplePackage",
+        "title": "English Training: Create Sample Package",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.openMaterialsGuide",
+        "title": "English Training: Open Materials Guide",
+        "category": "English Training"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "englishTraining",
+          "title": "English Training",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "englishTraining": [
+        {
+          "id": "englishTraining.practice",
+          "name": "Practice",
+          "type": "webview"
+        },
+        {
+          "id": "englishTraining.status",
+          "name": "Status"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "English Training",
+      "properties": {
+        "englishTraining.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "Python executable used only for optional local progress completion."
+        },
+        "englishTraining.timezone": {
+          "type": "string",
+          "default": "Asia/Shanghai",
+          "description": "Timezone used for daily package dates."
+        },
+        "englishTraining.materialsSource": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "local",
+            "github"
+          ],
+          "description": "Practice material source. Auto uses a local EnglishSpeakingTraining root when available and falls back to GitHub when configured."
+        },
+        "englishTraining.localMaterialsRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to a local training materials root that contains prebuilt/. When set, the extension can read local materials from any VS Code workspace."
+        },
+        "englishTraining.githubMaterialsBaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub repo/tree URL or raw.githubusercontent.com base URL that contains the prebuilt/ practice materials folder."
+        },
+        "englishTraining.coachProvider": {
+          "type": "string",
+          "default": "mimo",
+          "enum": [
+            "mimo",
+            "minimax",
+            "gemini",
+            "kimi",
+            "deepseek"
+          ],
+          "description": "Language-model provider used for transcript correction and follow-up generation."
+        },
+        "englishTraining.audioUnderstandingProvider": {
+          "type": "string",
+          "default": "openai",
+          "enum": [
+            "openai",
+            "gemini",
+            "mimo"
+          ],
+          "description": "Speech input provider used to understand or transcribe the VS Code recording."
+        },
+        "englishTraining.ttsProvider": {
+          "type": "string",
+          "default": "minimax",
+          "enum": [
+            "openai",
+            "gemini",
+            "mimo",
+            "minimax"
+          ],
+          "description": "Speech output provider used to generate the native-version follow-along audio."
+        },
+        "englishTraining.openaiTranscriptionModel": {
+          "type": "string",
+          "default": "gpt-4o-transcribe",
+          "description": "OpenAI model used for speech-to-text from the VS Code recorder."
+        },
+        "englishTraining.openaiTtsModel": {
+          "type": "string",
+          "default": "gpt-4o-mini-tts",
+          "description": "OpenAI model used for native-version follow-along audio."
+        },
+        "englishTraining.openaiTtsVoice": {
+          "type": "string",
+          "default": "coral",
+          "description": "OpenAI voice used for native-version follow-along audio."
+        },
+        "englishTraining.geminiCoachModel": {
+          "type": "string",
+          "default": "gemini-2.5-flash",
+          "description": "Gemini model used for correction and follow-up coaching."
+        },
+        "englishTraining.geminiAudioUnderstandingModel": {
+          "type": "string",
+          "default": "gemini-2.5-flash",
+          "description": "Gemini model used for speech input understanding."
+        },
+        "englishTraining.geminiTtsModel": {
+          "type": "string",
+          "default": "gemini-2.5-flash-preview-tts",
+          "description": "Gemini model used for native-version follow-along audio."
+        },
+        "englishTraining.geminiTtsVoice": {
+          "type": "string",
+          "default": "Kore",
+          "description": "Gemini prebuilt voice name for native-version audio."
+        },
+        "englishTraining.minimaxChatBaseUrl": {
+          "type": "string",
+          "default": "https://api.minimax.io/v1",
+          "description": "MiniMax OpenAI-compatible chat base URL."
+        },
+        "englishTraining.minimaxCoachModel": {
+          "type": "string",
+          "default": "MiniMax-M2.7-highspeed",
+          "description": "MiniMax model used for correction and follow-up coaching."
+        },
+        "englishTraining.minimaxTtsBaseUrl": {
+          "type": "string",
+          "default": "https://api.minimax.io/v1/t2a_v2",
+          "description": "MiniMax T2A endpoint."
+        },
+        "englishTraining.minimaxTtsModel": {
+          "type": "string",
+          "default": "speech-2.8-hd",
+          "description": "MiniMax speech model for native-version audio."
+        },
+        "englishTraining.minimaxTtsVoiceId": {
+          "type": "string",
+          "default": "English_expressive_narrator",
+          "description": "MiniMax voice id for English follow-along audio."
+        },
+        "englishTraining.mimoChatBaseUrl": {
+          "type": "string",
+          "default": "https://token-plan-cn.xiaomimimo.com/v1",
+          "description": "Xiaomi MiMo OpenAI-compatible chat base URL."
+        },
+        "englishTraining.mimoCoachModel": {
+          "type": "string",
+          "default": "mimo-v2.5",
+          "description": "Xiaomi MiMo model used for correction and follow-up coaching."
+        },
+        "englishTraining.mimoAudioUnderstandingModel": {
+          "type": "string",
+          "default": "mimo-v2.5",
+          "description": "Xiaomi MiMo model used for speech input understanding."
+        },
+        "englishTraining.mimoTtsModel": {
+          "type": "string",
+          "default": "mimo-v2.5-tts",
+          "description": "Xiaomi MiMo model used for native-version follow-along audio."
+        },
+        "englishTraining.mimoTtsVoice": {
+          "type": "string",
+          "default": "mimo_default",
+          "description": "Xiaomi MiMo built-in voice used for native-version follow-along audio."
+        },
+        "englishTraining.kimiChatBaseUrl": {
+          "type": "string",
+          "default": "https://api.kimi.com/coding/v1",
+          "description": "Kimi Code OpenAI-compatible chat base URL. Use a Kimi Code key for this endpoint."
+        },
+        "englishTraining.kimiCoachModel": {
+          "type": "string",
+          "default": "kimi-for-coding",
+          "description": "Kimi Code model used for correction and follow-up coaching."
+        },
+        "englishTraining.deepseekChatBaseUrl": {
+          "type": "string",
+          "default": "https://api.deepseek.com",
+          "description": "DeepSeek OpenAI-compatible chat base URL."
+        },
+        "englishTraining.deepseekCoachModel": {
+          "type": "string",
+          "default": "deepseek-v4-pro",
+          "description": "DeepSeek model used for correction and follow-up coaching."
+        },
+        "englishTraining.ttsSpeed": {
+          "type": "number",
+          "default": 0.9,
+          "description": "Playback speed used when generating follow-along TTS audio."
+        },
+        "englishTraining.nativeRecorderFfmpegPath": {
+          "type": "string",
+          "default": "ffmpeg",
+          "description": "ffmpeg executable used when VS Code webview microphone access is denied."
+        },
+        "englishTraining.nativeRecorderFfmpegAudioDevice": {
+          "type": "string",
+          "default": "0",
+          "description": "macOS AVFoundation audio device index for ffmpeg fallback recording. Use ffmpeg -f avfoundation -list_devices true -i \"\" to inspect devices."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./ --noEmit && node esbuild.js",
+    "bundle": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc -p ./ --noEmit",
+    "vscode:prepublish": "npm run typecheck && npm run bundle"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.5.4"
+  }
+}
