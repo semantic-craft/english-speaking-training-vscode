@@ -15,6 +15,7 @@ import type {
   NativeRecordingSession,
   PracticeResult,
   PracticeStage,
+  PracticeTarget,
   ProgressCell,
   ProgressSnapshot,
   ProviderName,
@@ -68,6 +69,33 @@ let nativeRecording: NativeRecordingSession | undefined;
 const DEFAULT_BLOCKED_MICROPHONE_PATTERN = "iphone|ipad|continuity|karios";
 const DEFAULT_TIMEZONE = "Asia/Shanghai";
 const LOCAL_MICROPHONE_PATTERN = /\b(imac|macbook|mac mini|mac studio|studio display|built[- ]?in|internal)\b/i;
+type ConfigSettingName =
+  | "minimaxCoachModel"
+  | "mimoCoachModel"
+  | "openaiCoachModel"
+  | "openaiRealtimeTranscriptionModel"
+  | "geminiCoachModel"
+  | "kimiCoachModel"
+  | "deepseekCoachModel"
+  | "geminiAudioUnderstandingModel"
+  | "azureSpeechRegion"
+  | "azureSpeechLocale"
+  | "minimaxTtsModel"
+  | "openaiTtsModel"
+  | "openaiTtsVoice"
+  | "geminiTtsModel"
+  | "geminiTtsVoice";
+
+const GEMINI_TEXT_MODEL_OPTIONS = [
+  "gemini-3-flash-preview",
+  "gemini-3.1-pro-preview",
+  "gemini-3.1-flash-lite",
+  "gemini-3.1-flash-lite-preview",
+];
+
+const GEMINI_TTS_MODEL_OPTIONS = [
+  "gemini-3.1-flash-tts-preview",
+];
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("English Training");
@@ -138,6 +166,9 @@ export function activate(context: vscode.ExtensionContext): void {
   register("englishTraining.useAzureAudioUnderstanding", async () => {
     await setProviderSetting("audioUnderstandingProvider", "azure");
   });
+  register("englishTraining.useOpenAIRealtimeAudioUnderstanding", async () => {
+    await setProviderSetting("audioUnderstandingProvider", "openai");
+  });
   register("englishTraining.useMiniMaxTts", async () => {
     await setProviderSetting("ttsProvider", "minimax");
   });
@@ -146,6 +177,12 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   register("englishTraining.useGeminiTts", async () => {
     await setProviderSetting("ttsProvider", "gemini");
+  });
+  register("englishTraining.useGeminiOnly", async () => {
+    await setGeminiOnlyProviders();
+  });
+  register("englishTraining.useRecommendedHybrid", async () => {
+    await setRecommendedHybridProviders();
   });
   register("englishTraining.completeLocal", async () => {
     await completeLocalPackage(context);
@@ -167,6 +204,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   void refreshAll();
+  void migrateGeminiModelDefaults();
 }
 
 export function deactivate(): void {
@@ -182,15 +220,15 @@ function pythonPath(): string {
 function trainingSettings(): TrainingState["settings"] {
   return {
     localMaterialsRoot: config<string>("localMaterialsRoot") || "",
-    coachProvider: config<string>("coachProvider") || "minimax",
+    coachProvider: config<string>("coachProvider") || "gemini",
     audioUnderstandingProvider: config<string>("audioUnderstandingProvider") || "azure",
-    ttsProvider: config<string>("ttsProvider") || "minimax",
-    openaiTranscriptionModel: config<string>("openaiTranscriptionModel") || "gpt-4o-transcribe",
+    ttsProvider: config<string>("ttsProvider") || "gemini",
     openaiCoachModel: config<string>("openaiCoachModel") || "gpt-4o-mini",
-    geminiCoachModel: config<string>("geminiCoachModel") || "gemini-2.5-flash",
-    geminiTtsModel: config<string>("geminiTtsModel") || "gemini-2.5-flash-preview-tts",
+    openaiRealtimeTranscriptionModel: config<string>("openaiRealtimeTranscriptionModel") || "gpt-realtime-whisper",
+    geminiCoachModel: config<string>("geminiCoachModel") || "gemini-3-flash-preview",
+    geminiTtsModel: config<string>("geminiTtsModel") || "gemini-3.1-flash-tts-preview",
     geminiTtsVoice: config<string>("geminiTtsVoice") || "Kore",
-    geminiAudioUnderstandingModel: config<string>("geminiAudioUnderstandingModel") || "gemini-2.5-flash",
+    geminiAudioUnderstandingModel: config<string>("geminiAudioUnderstandingModel") || "gemini-3-flash-preview",
     minimaxAnthropicBaseUrl: config<string>("minimaxAnthropicBaseUrl") || MINIMAX_ANTHROPIC_BASE_URL,
     minimaxCoachModel: config<string>("minimaxCoachModel") || "MiniMax-M2.7",
     mimoAnthropicBaseUrl: config<string>("mimoAnthropicBaseUrl") || MIMO_ANTHROPIC_BASE_URL,
@@ -206,6 +244,51 @@ function trainingSettings(): TrainingState["settings"] {
     preferredMicrophoneName: config<string>("preferredMicrophoneName") || "",
     blockedMicrophoneNamePattern: config<string>("blockedMicrophoneNamePattern") || DEFAULT_BLOCKED_MICROPHONE_PATTERN,
   };
+}
+
+async function migrateGeminiModelDefaults(): Promise<void> {
+  const settings = vscode.workspace.getConfiguration("englishTraining");
+  await migrateProviderSetting(settings, "coachProvider", "minimax", "gemini");
+  await migrateProviderSetting(settings, "ttsProvider", "minimax", "gemini");
+  await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-flash", "gemini-3-flash-preview");
+  await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-pro", "gemini-3.1-pro-preview");
+  await migrateGeminiSetting(settings, "geminiAudioUnderstandingModel", "gemini-2.5-flash", "gemini-3-flash-preview");
+  await migrateGeminiSetting(settings, "geminiAudioUnderstandingModel", "gemini-2.5-pro", "gemini-3.1-pro-preview");
+  await migrateGeminiSetting(settings, "geminiTtsModel", "gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview");
+  await migrateGeminiSetting(settings, "geminiTtsModel", "gemini-2.5-pro-preview-tts", "gemini-3.1-flash-tts-preview");
+  await refreshAll();
+}
+
+async function migrateProviderSetting(
+  settings: vscode.WorkspaceConfiguration,
+  setting: "coachProvider" | "ttsProvider",
+  oldDefault: string,
+  nextDefault: string,
+): Promise<void> {
+  const inspection = settings.inspect<string>(setting);
+  const targets: Array<[string, vscode.ConfigurationTarget]> = [
+    [inspection?.workspaceValue, vscode.ConfigurationTarget.Workspace],
+    [inspection?.globalValue, vscode.ConfigurationTarget.Global],
+  ].filter((entry): entry is [string, vscode.ConfigurationTarget] => entry[0] === oldDefault);
+  for (const [, target] of targets) {
+    await settings.update(setting, nextDefault, target);
+  }
+}
+
+async function migrateGeminiSetting(
+  settings: vscode.WorkspaceConfiguration,
+  setting: "geminiCoachModel" | "geminiAudioUnderstandingModel" | "geminiTtsModel",
+  oldDefault: string,
+  nextDefault: string,
+): Promise<void> {
+  const inspection = settings.inspect<string>(setting);
+  const targets: Array<[string, vscode.ConfigurationTarget]> = [
+    [inspection?.workspaceValue, vscode.ConfigurationTarget.Workspace],
+    [inspection?.globalValue, vscode.ConfigurationTarget.Global],
+  ].filter((entry): entry is [string, vscode.ConfigurationTarget] => entry[0] === oldDefault);
+  for (const [, target] of targets) {
+    await settings.update(setting, nextDefault, target);
+  }
 }
 
 async function refreshAll(): Promise<void> {
@@ -712,7 +795,7 @@ async function configureApiKey(context: vscode.ExtensionContext, provider: Provi
 }
 
 async function pickAndConfigureProviderKey(context: vscode.ExtensionContext): Promise<void> {
-  const providers: ProviderName[] = ["azure", "minimax", "mimo", "openai", "gemini", "kimi", "deepseek"];
+  const providers: ProviderName[] = ["gemini", "azure", "minimax", "mimo", "openai", "kimi", "deepseek"];
   const availability = await apiKeyAvailability(context);
   const items: (vscode.QuickPickItem & { provider: ProviderName })[] = providers.map((provider) => ({
     provider,
@@ -731,13 +814,145 @@ async function pickAndConfigureProviderKey(context: vscode.ExtensionContext): Pr
   await configureApiKey(context, picked.provider);
 }
 
+async function configureCoreRouteKeys(context: vscode.ExtensionContext): Promise<void> {
+  let availability = await apiKeyAvailability(context);
+  if (!availability.gemini) {
+    await configureApiKey(context, "gemini");
+    availability = await apiKeyAvailability(context);
+  }
+  if (!availability.azure) {
+    await configureApiKey(context, "azure");
+  }
+}
+
+function isConfigSettingName(value: unknown): value is ConfigSettingName {
+  return (
+    value === "minimaxCoachModel" ||
+    value === "mimoCoachModel" ||
+    value === "openaiCoachModel" ||
+    value === "openaiRealtimeTranscriptionModel" ||
+    value === "geminiCoachModel" ||
+    value === "kimiCoachModel" ||
+    value === "deepseekCoachModel" ||
+    value === "geminiAudioUnderstandingModel" ||
+    value === "azureSpeechRegion" ||
+    value === "azureSpeechLocale" ||
+    value === "minimaxTtsModel" ||
+    value === "openaiTtsModel" ||
+    value === "openaiTtsVoice" ||
+    value === "geminiTtsModel" ||
+    value === "geminiTtsVoice"
+  );
+}
+
+async function configureSetting(setting: ConfigSettingName): Promise<void> {
+  const settings = vscode.workspace.getConfiguration("englishTraining");
+  const current = stringValue(settings.get(setting)).trim();
+  const options = configSettingOptions(setting);
+  let nextValue: string | undefined;
+
+  if (options.length) {
+    const items: (vscode.QuickPickItem & { value?: string; custom?: boolean })[] = options.map((value) => ({
+      label: value,
+      value,
+      description: value === current ? "current" : undefined,
+    }));
+    items.push({
+      label: "Custom...",
+      description: current ? `current: ${current}` : undefined,
+      custom: true,
+    });
+    const picked = await vscode.window.showQuickPick(items, {
+      title: `Set ${configSettingLabel(setting)}`,
+      placeHolder: current || "Pick a value",
+      ignoreFocusOut: true,
+    });
+    if (!picked) {
+      return;
+    }
+    nextValue = picked.custom
+      ? await promptForConfigValue(setting, current)
+      : picked.value ?? picked.label;
+  } else {
+    nextValue = await promptForConfigValue(setting, current);
+  }
+
+  const trimmed = stringValue(nextValue).trim();
+  if (!trimmed || trimmed === current) {
+    return;
+  }
+  await settings.update(setting, trimmed, vscode.ConfigurationTarget.Workspace);
+  vscode.window.showInformationMessage(`English Training ${configSettingLabel(setting)} set to ${trimmed}.`);
+  await refreshAll();
+}
+
+async function promptForConfigValue(setting: ConfigSettingName, current: string): Promise<string | undefined> {
+  return vscode.window.showInputBox({
+    title: `Set ${configSettingLabel(setting)}`,
+    prompt: configSettingPrompt(setting),
+    value: current,
+    ignoreFocusOut: true,
+  });
+}
+
+function configSettingLabel(setting: ConfigSettingName): string {
+  switch (setting) {
+    case "minimaxCoachModel": return "MiniMax coach model";
+    case "mimoCoachModel": return "MiMo coach model";
+    case "openaiCoachModel": return "OpenAI coach model";
+    case "openaiRealtimeTranscriptionModel": return "OpenAI Realtime speech-input model";
+    case "geminiCoachModel": return "Gemini coach model";
+    case "kimiCoachModel": return "Kimi coach model";
+    case "deepseekCoachModel": return "DeepSeek coach model";
+    case "geminiAudioUnderstandingModel": return "Gemini speech-input model";
+    case "azureSpeechRegion": return "Azure Speech region";
+    case "azureSpeechLocale": return "Azure Speech locale";
+    case "minimaxTtsModel": return "MiniMax speech-output model";
+    case "openaiTtsModel": return "OpenAI speech-output model";
+    case "openaiTtsVoice": return "OpenAI voice";
+    case "geminiTtsModel": return "Gemini speech-output model";
+    case "geminiTtsVoice": return "Gemini voice";
+  }
+}
+
+function configSettingPrompt(setting: ConfigSettingName): string {
+  switch (setting) {
+    case "azureSpeechRegion": return "Azure Speech resource region, for example eastus or southeastasia.";
+    case "azureSpeechLocale": return "BCP-47 locale for recognition and pronunciation assessment, for example en-US or en-GB.";
+    case "openaiRealtimeTranscriptionModel": return "OpenAI Realtime transcription model id.";
+    case "openaiTtsVoice": return "OpenAI TTS voice name.";
+    case "geminiTtsVoice": return "Gemini prebuilt voice name.";
+    default: return "Model id used by this provider.";
+  }
+}
+
+function configSettingOptions(setting: ConfigSettingName): string[] {
+  switch (setting) {
+    case "minimaxCoachModel": return ["MiniMax-M2.7", "MiniMax-M2.7-highspeed"];
+    case "mimoCoachModel": return ["mimo-v2.5-pro", "mimo-v2.5-flash"];
+    case "openaiCoachModel": return ["gpt-4o-mini", "gpt-4o"];
+    case "openaiRealtimeTranscriptionModel": return ["gpt-realtime-whisper"];
+    case "geminiCoachModel": return GEMINI_TEXT_MODEL_OPTIONS;
+    case "kimiCoachModel": return ["kimi-for-coding"];
+    case "deepseekCoachModel": return ["deepseek-v4-pro", "deepseek-v4-flash"];
+    case "geminiAudioUnderstandingModel": return GEMINI_TEXT_MODEL_OPTIONS;
+    case "azureSpeechRegion": return ["eastus", "westus", "westus2", "southeastasia", "eastasia"];
+    case "azureSpeechLocale": return ["en-US", "en-GB", "en-AU", "en-CA", "en-IN"];
+    case "minimaxTtsModel": return ["speech-2.8-hd", "speech-2.8-turbo"];
+    case "openaiTtsModel": return ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"];
+    case "openaiTtsVoice": return ["coral", "alloy", "ash", "ballad", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"];
+    case "geminiTtsModel": return GEMINI_TTS_MODEL_OPTIONS;
+    case "geminiTtsVoice": return ["Kore", "Puck", "Charon", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
+  }
+}
+
 function providerSetupHint(provider: ProviderName): string {
   switch (provider) {
-    case "azure": return "Azure Speech · STT + Pronunciation Assessment (required for speech input)";
-    case "minimax": return "MiniMax · default coach (Token Plan, Anthropic-compatible) + TTS";
+    case "azure": return "Azure Speech · speech input + Pronunciation Assessment";
+    case "gemini": return "Gemini · default coach + native-version TTS";
+    case "minimax": return "MiniMax · optional fallback coach + TTS";
     case "mimo": return "Xiaomi MiMo · alternate coach (Token Plan, Anthropic-compatible)";
-    case "openai": return "OpenAI · GPT coach + TTS";
-    case "gemini": return "Gemini · coach + TTS";
+    case "openai": return "OpenAI · GPT coach + Realtime speech input + TTS";
     case "kimi": return "Kimi (Moonshot) · alternate coach";
     case "deepseek": return "DeepSeek · alternate coach (Anthropic-compatible)";
   }
@@ -776,6 +991,24 @@ async function configureLocalMaterialsRoot(): Promise<void> {
 async function setProviderSetting(setting: "coachProvider" | "audioUnderstandingProvider" | "ttsProvider", value: string): Promise<void> {
   await vscode.workspace.getConfiguration("englishTraining").update(setting, value, vscode.ConfigurationTarget.Workspace);
   vscode.window.showInformationMessage(`English Training ${providerSettingLabel(setting)} provider set to ${value}.`);
+  await refreshAll();
+}
+
+async function setGeminiOnlyProviders(): Promise<void> {
+  const settings = vscode.workspace.getConfiguration("englishTraining");
+  await settings.update("coachProvider", "gemini", vscode.ConfigurationTarget.Workspace);
+  await settings.update("audioUnderstandingProvider", "gemini", vscode.ConfigurationTarget.Workspace);
+  await settings.update("ttsProvider", "gemini", vscode.ConfigurationTarget.Workspace);
+  vscode.window.showInformationMessage("English Training Gemini-only mode enabled: Gemini coach + speech input + speech output.");
+  await refreshAll();
+}
+
+async function setRecommendedHybridProviders(): Promise<void> {
+  const settings = vscode.workspace.getConfiguration("englishTraining");
+  await settings.update("coachProvider", "gemini", vscode.ConfigurationTarget.Workspace);
+  await settings.update("audioUnderstandingProvider", "azure", vscode.ConfigurationTarget.Workspace);
+  await settings.update("ttsProvider", "gemini", vscode.ConfigurationTarget.Workspace);
+  vscode.window.showInformationMessage("English Training recommended route enabled: Gemini coach + Azure speech input/scoring + Gemini speech output.");
   await refreshAll();
 }
 
@@ -885,6 +1118,10 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         }
         return;
       }
+      if (payload.type === "configureSetting" && isConfigSettingName(payload.setting)) {
+        await configureSetting(payload.setting);
+        return;
+      }
       if (payload.type === "setMinimaxVoice") {
         const voiceId = stringValue(payload.voiceId);
         if (voiceId) {
@@ -897,6 +1134,14 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         if (Number.isFinite(value) && value > 0) {
           await setTtsSpeedConfig(value);
         }
+        return;
+      }
+      if (payload.type === "useGeminiOnly") {
+        await setGeminiOnlyProviders();
+        return;
+      }
+      if (payload.type === "useRecommendedHybrid") {
+        await setRecommendedHybridProviders();
         return;
       }
       if (payload.type === "slowRead") {
@@ -930,7 +1175,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
           await openSessionFolder(this.context);
         }
         if (payload.command === "setupProviderKey") {
-          await pickAndConfigureProviderKey(this.context);
+          await configureCoreRouteKeys(this.context);
         }
         if (payload.command === "createSamplePackage") {
           await createSamplePackage(this.context);
@@ -941,7 +1186,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (payload.type === "startNativeRecording") {
-        await this.startNativeRecording();
+        await this.startNativeRecording(normalizePracticeTargetPayload(payload.practiceTarget));
         return;
       }
       if (payload.type === "stopNativeRecording") {
@@ -1004,7 +1249,8 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
     }
     this.view.webview.postMessage({ type: "stage", stage: "transcribe", status: "active", show: true });
     const priorTurn = message.priorTurn ?? this.pendingPriorTurn;
-    const result = await processPracticeAudio(this.context, message, this.stageReporter(), priorTurn);
+    const practiceTarget = normalizePracticeTargetPayload(message.practiceTarget);
+    const result = await processPracticeAudio(this.context, message, this.stageReporter(), priorTurn, practiceTarget);
     this.pendingPriorTurn = undefined;
     const audioUri = result.audioFile ? this.view.webview.asWebviewUri(vscode.Uri.file(result.audioFile)).toString() : "";
     const followUpAudioUri = result.followUpAudioFile
@@ -1017,16 +1263,17 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         audioUri,
         followUpAudioUri,
         priorTurn: priorTurn ?? null,
+        practiceTarget: practiceTarget ?? null,
       },
     });
     await refreshAll();
   }
 
-  private async startNativeRecording(): Promise<void> {
+  private async startNativeRecording(practiceTarget?: PracticeTarget): Promise<void> {
     if (!this.view) {
       return;
     }
-    const session = await startNativeFfmpegRecording(this.context);
+    const session = await startNativeFfmpegRecording(this.context, practiceTarget);
     this.view.webview.postMessage({
       type: "nativeRecordingStarted",
       sessionDir: session.sessionDir,
@@ -1041,6 +1288,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
     const session = await stopNativeFfmpegRecording();
     const state = await loadState(this.context);
     const priorTurn = this.pendingPriorTurn;
+    const practiceTarget = session.practiceTarget;
     const result = await processPracticeFile(
       this.context,
       state,
@@ -1050,6 +1298,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       session.packageDate,
       this.stageReporter(),
       priorTurn,
+      practiceTarget,
     );
     this.pendingPriorTurn = undefined;
     const audioUri = result.audioFile ? this.view.webview.asWebviewUri(vscode.Uri.file(result.audioFile)).toString() : "";
@@ -1064,6 +1313,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         followUpAudioUri,
         localAudioUri: this.view.webview.asWebviewUri(vscode.Uri.file(session.filePath)).toString(),
         priorTurn: priorTurn ?? null,
+        practiceTarget: practiceTarget ?? null,
       },
     });
     await refreshAll();
@@ -1693,6 +1943,152 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       background: var(--soft);
       font-size: 11px;
     }
+    .route-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      margin: 8px 0 10px;
+    }
+    .route-summary-item {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 8px;
+      background: var(--soft);
+      min-width: 0;
+    }
+    .route-summary-item span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .route-summary-item strong {
+      display: block;
+      margin-top: 2px;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .provider-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin: 8px 0 12px;
+    }
+    .provider-role {
+      margin-top: 12px;
+    }
+    .provider-role-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+    }
+    .provider-role-head .label { margin-bottom: 0; }
+    .provider-role-current {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .provider-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(146px, 1fr));
+      gap: 8px;
+    }
+    .provider-card {
+      display: grid;
+      gap: 7px;
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--soft);
+      padding: 9px;
+    }
+    .provider-card.active {
+      border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+      background: color-mix(in srgb, var(--accent) 10%, var(--vscode-editor-background));
+    }
+    .provider-card-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: flex-start;
+    }
+    .provider-name {
+      font-weight: 650;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .provider-note {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .provider-badge {
+      flex: 0 0 auto;
+      padding: 1px 6px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 16px;
+      white-space: nowrap;
+    }
+    .provider-badge.active {
+      border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+      color: var(--vscode-editor-foreground);
+      background: color-mix(in srgb, var(--accent) 16%, transparent);
+    }
+    .provider-badge.missing {
+      border-color: color-mix(in srgb, var(--vscode-errorForeground, #e51400) 45%, var(--border));
+      color: var(--vscode-errorForeground, #e51400);
+    }
+    .provider-model {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .provider-card-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .provider-card-actions button {
+      min-height: 24px;
+      padding: 2px 8px;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .key-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 12px;
+    }
+    .key-pill {
+      min-height: 24px;
+      padding: 2px 8px;
+      font-size: 11px;
+      border-radius: 999px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .key-pill.saved {
+      color: var(--vscode-editor-foreground);
+      background: color-mix(in srgb, var(--vscode-testing-iconPassed, #16a34a) 12%, transparent);
+      border-color: color-mix(in srgb, var(--vscode-testing-iconPassed, #16a34a) 45%, var(--border));
+    }
+    @media (max-width: 420px) {
+      .route-summary { grid-template-columns: 1fr; }
+    }
     .row { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
     #minimaxVoicePicker { row-gap: 6px; }
     .voice-group-label {
@@ -1823,51 +2219,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         <button class="secondary" id="configureMaterials">Local Folder</button>
       </div>
     </section>
-    <section class="panel">
-      <h3>Providers</h3>
-      <div class="field">
-        <span class="label">Coach</span>
-        <div class="row">
-          <button class="secondary" data-provider-setting="coachProvider" data-provider-value="minimax">MiniMax M2.7</button>
-          <button class="secondary" data-provider-setting="coachProvider" data-provider-value="mimo">MiMo v2.5</button>
-          <button class="secondary" data-provider-setting="coachProvider" data-provider-value="openai">OpenAI</button>
-          <button class="secondary" data-provider-setting="coachProvider" data-provider-value="gemini">Gemini</button>
-          <button class="secondary" data-provider-setting="coachProvider" data-provider-value="kimi">Kimi</button>
-          <button class="secondary" data-provider-setting="coachProvider" data-provider-value="deepseek">DeepSeek</button>
-        </div>
-      </div>
-      <div class="field">
-        <span class="label">Speech in</span>
-        <div class="row">
-          <button class="secondary" data-provider-setting="audioUnderstandingProvider" data-provider-value="azure">Azure</button>
-        </div>
-      </div>
-      <div class="field">
-        <span class="label">Speech out</span>
-        <div class="row">
-          <button class="secondary" data-provider-setting="ttsProvider" data-provider-value="minimax">MiniMax</button>
-          <button class="secondary" data-provider-setting="ttsProvider" data-provider-value="openai">OpenAI</button>
-          <button class="secondary" data-provider-setting="ttsProvider" data-provider-value="gemini">Gemini</button>
-        </div>
-      </div>
-      <div class="field" id="minimaxVoiceField" hidden>
-        <span class="label">MiniMax voice</span>
-        <div class="row" id="minimaxVoicePicker"></div>
-      </div>
-    </section>
-    <section class="panel">
-      <h3>Keys</h3>
-      <div id="keys" class="chips"></div>
-      <div class="row">
-        <button class="secondary" data-key="minimax">MiniMax</button>
-        <button class="secondary" data-key="mimo">MiMo</button>
-        <button class="secondary" data-key="azure">Azure</button>
-        <button class="secondary" data-key="openai">OpenAI</button>
-        <button class="secondary" data-key="gemini">Gemini</button>
-        <button class="secondary" data-key="kimi">Kimi</button>
-        <button class="secondary" data-key="deepseek">DeepSeek</button>
-      </div>
-    </section>
+    <section class="panel" id="providersPanel"></section>
     <section class="panel">
       <h3>Local</h3>
       <div class="row">
@@ -1891,6 +2243,9 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
     let vuRaf = null;
     let timerHandle = null;
     let recordingStartedAt = 0;
+    let pendingPracticeTarget = null;
+    let activeRecordingTarget = null;
+    let currentExampleText = "";
     const STAGES = ["transcribe", "coach", "tts", "save"];
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -1997,14 +2352,32 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       STAGES.forEach((stage) => setStage(stage, "done"));
     }
 
+    function practiceTarget(referenceText, referenceLabel, followUpQuestion) {
+      const text = String(referenceText || "").trim();
+      if (!text) return null;
+      return {
+        mode: "shadow",
+        referenceText: text,
+        referenceLabel: referenceLabel || "Reference",
+        followUpQuestion: String(followUpQuestion || "").trim(),
+      };
+    }
+
+    function consumePracticeTarget() {
+      const target = pendingPracticeTarget;
+      pendingPracticeTarget = null;
+      return target;
+    }
+
     function renderState(nextState) {
       state = nextState;
       const next = state.next || {};
       const training = state.training || {};
       const drill = state.drill || {};
-      const settings = state.settings || {};
-      const assets = next.assets || {};
-      const todayAudioText = training.tts_example_text || training.clean_tts_text || training.audio_text || training.demo_line || "";
+	      const settings = state.settings || {};
+	      const assets = next.assets || {};
+	      const todayAudioText = training.tts_example_text || training.clean_tts_text || training.audio_text || training.demo_line || "";
+	      currentExampleText = todayAudioText;
       renderOnboarding(state);
       renderProgress(state.progress);
       renderSourceDiagnostics(state.sourceDiagnostics);
@@ -2017,9 +2390,9 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         \${weekTag ? '<p class="muted" style="margin: 0 0 8px;">' + esc(weekTag) + '</p>' : ''}
         <div class="chips">
           <span class="chip">\${esc(state.source || "local")} source</span>
-          <span class="chip">\${esc(settings.coachProvider || "minimax")} coach</span>
+          <span class="chip">\${esc(settings.coachProvider || "gemini")} coach</span>
           <span class="chip">\${esc(settings.audioUnderstandingProvider || "azure")} speech in</span>
-          <span class="chip">\${esc(settings.ttsProvider || "minimax")} speech out</span>
+          <span class="chip">\${esc(settings.ttsProvider || "gemini")} speech out</span>
           <span class="chip">\${esc(next.training_type || "practice")}</span>
         </div>
         <p>\${esc(training.goal || next.goal || "")}</p>
@@ -2030,7 +2403,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
           <span class="label">Example audio</span>
           <div class="row">
             <button class="secondary" data-action="today-tts" \${todayAudioText ? "" : "disabled"}>Generate Example</button>
-            <span class="muted" id="todayTtsStatus">Reads example only, with \${esc(settings.ttsProvider || "minimax")}</span>
+            <span class="muted" id="todayTtsStatus">Reads example only, with \${esc(settings.ttsProvider || "gemini")}</span>
           </div>
           <audio id="todayAudio" controls hidden></audio>
         </div>
@@ -2055,16 +2428,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         <span class="chip">\${esc(state.source || "local")}</span>
         \${state.sourceLabel ? '<span class="chip">' + esc(shortSourceLabel(state.sourceLabel)) + '</span>' : ''}
       \`;
-      $("keys").innerHTML = ["minimax", "mimo", "azure", "openai", "gemini", "kimi", "deepseek"].map((name) => {
-        const ok = state.keys && state.keys[name];
-        return \`<span class="chip">\${name}: \${ok ? "saved" : "missing"}</span>\`;
-      }).join("");
-      document.querySelectorAll("[data-provider-setting]").forEach((button) => {
-        const setting = button.dataset.providerSetting;
-        const value = button.dataset.providerValue;
-        const active = settings && settings[setting] === value;
-        button.classList.toggle("active", Boolean(active));
-      });
+      renderProviderPanel(settings, state.keys || {});
       renderMinimaxVoicePicker(settings);
       renderSpeedChips(settings);
     }
@@ -2127,6 +2491,141 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
     ];
 
     let voicePickerExpanded = false;
+
+    const PROVIDER_LABELS = {
+      minimax: "MiniMax",
+      mimo: "MiMo",
+      openai: "OpenAI",
+      gemini: "Gemini",
+      kimi: "Kimi",
+      deepseek: "DeepSeek",
+      azure: "Azure"
+    };
+
+    const PROVIDER_ROUTES = {
+      coachProvider: [
+        { value: "gemini", label: "Gemini", note: "default coach", modelSetting: "geminiCoachModel" },
+        { value: "minimax", label: "MiniMax", note: "optional fallback", modelSetting: "minimaxCoachModel" },
+        { value: "mimo", label: "MiMo", note: "optional fallback", modelSetting: "mimoCoachModel" },
+        { value: "openai", label: "OpenAI", note: "optional GPT coach", modelSetting: "openaiCoachModel" },
+        { value: "kimi", label: "Kimi", note: "Moonshot", modelSetting: "kimiCoachModel" },
+        { value: "deepseek", label: "DeepSeek", note: "reasoning alternate", modelSetting: "deepseekCoachModel" },
+      ],
+      audioUnderstandingProvider: [
+        { value: "azure", label: "Azure", note: "scoring route", modelSetting: "azureSpeechRegion", extraSetting: "azureSpeechLocale", modelLabel: "Region" },
+        { value: "openai", label: "OpenAI Realtime", note: "live transcript", modelSetting: "openaiRealtimeTranscriptionModel" },
+        { value: "gemini", label: "Gemini", note: "audio understanding", modelSetting: "geminiAudioUnderstandingModel" },
+      ],
+      ttsProvider: [
+        { value: "gemini", label: "Gemini", note: "default TTS", modelSetting: "geminiTtsModel", extraSetting: "geminiTtsVoice", extraLabel: "Voice" },
+        { value: "minimax", label: "MiniMax", note: "optional fallback", modelSetting: "minimaxTtsModel" },
+        { value: "openai", label: "OpenAI", note: "OpenAI voices", modelSetting: "openaiTtsModel", extraSetting: "openaiTtsVoice", extraLabel: "Voice" },
+      ],
+    };
+
+    function providerLabel(name) {
+      return PROVIDER_LABELS[name] || name;
+    }
+
+    function providerModelSummary(setting, option, settings) {
+      if (!settings) return "";
+      if (setting === "audioUnderstandingProvider" && option.value === "azure") {
+        return "Region: " + esc(settings.azureSpeechRegion || "eastus") + " · Locale: " + esc(settings.azureSpeechLocale || "en-US");
+      }
+      if (!option.modelSetting) return "";
+      const model = settings[option.modelSetting] || "";
+      const extra = option.extraSetting ? settings[option.extraSetting] || "" : "";
+      if (extra) {
+        return esc(model) + " · " + esc(extra);
+      }
+      return esc(model);
+    }
+
+    function providerCardHtml(setting, option, settings, keys) {
+      const active = settings && settings[setting] === option.value;
+      const hasKey = keys && keys[option.value];
+      const modelText = providerModelSummary(setting, option, settings);
+      const keyBadgeClass = hasKey ? "provider-badge" : "provider-badge missing";
+      const routeBadge = active
+        ? '<span class="provider-badge active">active</span>'
+        : '<span class="' + keyBadgeClass + '">' + (hasKey ? "key" : "missing") + '</span>';
+      const useButton = active
+        ? '<button class="secondary" disabled>Active</button>'
+        : '<button class="secondary" data-provider-setting="' + esc(setting) + '" data-provider-value="' + esc(option.value) + '">Use</button>';
+      const modelButton = option.modelSetting
+        ? '<button class="secondary" data-config-setting="' + esc(option.modelSetting) + '">' + esc(option.modelLabel || "Model") + '</button>'
+        : '';
+      const extraButton = option.extraSetting
+        ? '<button class="secondary" data-config-setting="' + esc(option.extraSetting) + '">' + esc(option.extraLabel || "Locale") + '</button>'
+        : '';
+      return [
+        '<div class="provider-card ' + (active ? "active" : "") + '">',
+          '<div class="provider-card-top">',
+            '<div><div class="provider-name">' + esc(option.label) + '</div><div class="provider-note">' + esc(option.note || "") + '</div></div>',
+            routeBadge,
+          '</div>',
+          modelText ? '<div class="provider-model">' + modelText + '</div>' : '',
+          '<div class="provider-card-actions">',
+            useButton,
+            '<button class="secondary" data-key="' + esc(option.value) + '">' + (hasKey ? "Key saved" : "Add key") + '</button>',
+            modelButton,
+            extraButton,
+          '</div>',
+        '</div>',
+      ].join("");
+    }
+
+    function providerRoleHtml(title, setting, settings, keys) {
+      const options = PROVIDER_ROUTES[setting] || [];
+      const activeValue = settings && settings[setting];
+      const activeOption = options.find((option) => option.value === activeValue);
+      const current = activeOption ? activeOption.label : providerLabel(activeValue || "");
+      return [
+        '<div class="provider-role">',
+          '<div class="provider-role-head"><span class="label">' + esc(title) + '</span><span class="provider-role-current">' + esc(current) + '</span></div>',
+          '<div class="provider-grid">',
+            options.map((option) => providerCardHtml(setting, option, settings, keys)).join(""),
+          '</div>',
+        '</div>',
+      ].join("");
+    }
+
+    function routeSummaryHtml(label, setting, settings) {
+      const value = settings && settings[setting];
+      const options = PROVIDER_ROUTES[setting] || [];
+      const activeOption = options.find((option) => option.value === value);
+      const name = activeOption ? activeOption.label : providerLabel(value || "");
+      return '<div class="route-summary-item"><span>' + esc(label) + '</span><strong>' + esc(name) + '</strong></div>';
+    }
+
+    function keyStripHtml(keys) {
+      return '<div class="key-strip">' + ["gemini", "azure", "minimax", "mimo", "openai", "kimi", "deepseek"].map((name) => {
+        const saved = keys && keys[name];
+        return '<button class="key-pill ' + (saved ? "saved" : "") + '" data-key="' + esc(name) + '">' + esc(providerLabel(name)) + ': ' + (saved ? "saved" : "missing") + '</button>';
+      }).join("") + '</div>';
+    }
+
+    function renderProviderPanel(settings, keys) {
+      const panel = $("providersPanel");
+      if (!panel) return;
+      panel.innerHTML = [
+        '<h3>Routes & Models</h3>',
+        '<div class="route-summary">',
+          routeSummaryHtml("Coach", "coachProvider", settings),
+          routeSummaryHtml("Speech in", "audioUnderstandingProvider", settings),
+          routeSummaryHtml("Speech out", "ttsProvider", settings),
+        '</div>',
+        '<div class="provider-presets">',
+          '<button class="secondary" id="useRecommendedHybrid">Gemini + Azure</button>',
+          '<button class="secondary" id="useGeminiOnly">Gemini only</button>',
+        '</div>',
+        providerRoleHtml("Coach", "coachProvider", settings, keys),
+        providerRoleHtml("Speech in", "audioUnderstandingProvider", settings, keys),
+        providerRoleHtml("Speech out", "ttsProvider", settings, keys),
+        '<div class="field" id="minimaxVoiceField" hidden><span class="label">MiniMax voice</span><div class="row" id="minimaxVoicePicker"></div></div>',
+        keyStripHtml(keys),
+      ].join("");
+    }
 
     function voiceChipHtml(opt, current) {
       const active = opt.id === current ? " active" : "";
@@ -2199,14 +2698,13 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       const panel = $("onboarding");
       if (!panel) return;
       const keys = (currentState && currentState.keys) || {};
-      const providerNames = ["minimax", "mimo", "openai", "gemini", "kimi", "deepseek"];
-      const hasAnyProviderKey = providerNames.some((name) => keys[name]);
+      const coreKeysReady = Boolean(keys.gemini && keys.azure);
       const source = currentState && currentState.source;
       const sourceLabel = currentState && currentState.sourceLabel;
       const sourceConfigured = Boolean(sourceLabel) || source === "local";
       const progress = currentState && currentState.progress;
       const hasLessons = Boolean(progress && progress.total && progress.total > 0);
-      const allDone = hasAnyProviderKey && sourceConfigured && hasLessons;
+      const allDone = coreKeysReady && sourceConfigured && hasLessons;
       if (allDone) {
         panel.hidden = true;
         panel.innerHTML = "";
@@ -2218,9 +2716,9 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       const lessonStep = hasLessons
         ? { state: "done", title: "Lesson library ready", hint: progress.total + " lesson" + (progress.total === 1 ? "" : "s") + " in prebuilt/", action: "" }
         : { state: "active", title: "Create your first lesson", hint: "Writes a starter prebuilt/<today>/english-training.json", action: '<button class="primary" data-onboard="create-sample">Create sample</button>' };
-      const keyStep = hasAnyProviderKey
-        ? { state: "done", title: "AI provider ready", hint: "At least one provider key saved", action: "" }
-        : { state: "active", title: "Add your first AI key", hint: "MiniMax (recommended), OpenAI, Gemini, Kimi, or DeepSeek", action: '<button class="primary" data-onboard="provider-key">Set up</button>' };
+      const keyStep = coreKeysReady
+        ? { state: "done", title: "Gemini + Azure ready", hint: "Core practice route is fully configured", action: "" }
+        : { state: "active", title: "Connect Gemini + Azure", hint: "Gemini handles coach/TTS; Azure handles speech input and scoring", action: '<button class="primary" data-onboard="provider-key">Set up</button>' };
       const steps = [sourceStep, lessonStep, keyStep].filter(Boolean);
       const renderedSteps = steps.map((step, idx) => {
         const mark = step.state === "done" ? "✓" : String(idx + 1);
@@ -2453,6 +2951,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
     }
 
     async function startRecording() {
+      activeRecordingTarget = consumePracticeTarget();
       if (recorderBackend() === "macLocal") {
         startNativeRecording("Using Mac local microphone.");
         return;
@@ -2487,7 +2986,8 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
               throw new Error("Recording could not be encoded for processing.");
             }
             const priorTurn = pendingReplyContext;
-            vscode.postMessage({ type: "practiceAudio", mimeType, base64, priorTurn });
+            const practiceTarget = activeRecordingTarget;
+            vscode.postMessage({ type: "practiceAudio", mimeType, base64, priorTurn, practiceTarget });
           } catch (error) {
             setBusy(false);
             setRecording(false);
@@ -2501,6 +3001,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
             mediaRecorder = null;
             chunks = [];
             recorderMode = null;
+            activeRecordingTarget = null;
           }
         };
         recorderMode = "webview";
@@ -2545,7 +3046,9 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       setRecording(true);
       setStatus((reason ? reason + " " : "") + "Using Mac local recorder…");
       startTimer();
-      vscode.postMessage({ type: "startNativeRecording" });
+      const practiceTarget = activeRecordingTarget || consumePracticeTarget();
+      activeRecordingTarget = practiceTarget;
+      vscode.postMessage({ type: "startNativeRecording", practiceTarget });
     }
 
     function blobToBase64(blob) {
@@ -2654,10 +3157,11 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       }
       panel.hidden = false;
       const earlier = turnHistory.slice(0, -1);
-      const items = earlier.map((turn) => {
-        const audio = turn.userAudioUri ? '<audio controls src="' + esc(turn.userAudioUri) + '"></audio>' : '';
-        const nativeAudio = turn.nativeAudioUri ? '<audio controls src="' + esc(turn.nativeAudioUri) + '"></audio>' : '';
-        const followUpBlock = turn.followUpQuestion
+	      const items = earlier.map((turn) => {
+	        const audio = turn.userAudioUri ? '<audio controls src="' + esc(turn.userAudioUri) + '"></audio>' : '';
+	        const nativeAudio = turn.nativeAudioUri ? '<audio controls src="' + esc(turn.nativeAudioUri) + '"></audio>' : '';
+	        const nativeLabel = turn.mode === "shadow" ? (turn.referenceLabel || "Reference") : "Native";
+	        const followUpBlock = turn.followUpQuestion
           ? '<div class="turn-followup"><span class="muted">→ Coach asked:</span> ' + esc(turn.followUpQuestion) + '</div>'
           : '';
         const replyTag = turn.priorTurn ? '<span class="turn-chip-tag">reply</span>' : '';
@@ -2665,7 +3169,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
           '<div class="turn-head"><span class="turn-num">Turn ' + esc(String(turn.turnIndex)) + '</span>' + replyTag + '</div>' +
           '<div class="turn-cols">' +
             '<div class="turn-col"><span class="muted">You said</span><p>' + esc(turn.transcript) + '</p>' + audio + '</div>' +
-            '<div class="turn-col"><span class="muted">Native</span><p>' + esc(turn.nativeVersion) + '</p>' + nativeAudio + '</div>' +
+	            '<div class="turn-col"><span class="muted">' + esc(nativeLabel) + '</span><p>' + esc(turn.nativeVersion) + '</p>' + nativeAudio + '</div>' +
           '</div>' +
           followUpBlock +
         '</li>';
@@ -2690,11 +3194,14 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    function renderResult(result) {
-      const diff = wordDiff(result.transcript, result.nativeVersion);
-      const userAudioSrc = (result && result.localAudioUri) || ($("localAudio").src || "");
-      const nativeAudioSrc = (result && result.audioUri) || "";
-      const followUpAudioSrc = (result && result.followUpAudioUri) || "";
+	    function renderResult(result) {
+	      const diff = wordDiff(result.transcript, result.nativeVersion);
+	      const userAudioSrc = (result && result.localAudioUri) || ($("localAudio").src || "");
+	      const nativeAudioSrc = (result && result.audioUri) || "";
+	      const followUpAudioSrc = (result && result.followUpAudioUri) || "";
+	      const isShadow = result && result.mode === "shadow";
+	      const nativeLabel = isShadow ? (result.referenceLabel || "Reference") : "Native says";
+	      const heading = isShadow ? "Shadowing check" : "Coaching";
       const tagsHtml = Array.isArray(result.errorTags) && result.errorTags.length
         ? '<div class="chips">' + result.errorTags.map((tag) => '<span class="chip">' + esc(tag) + '</span>').join("") + '</div>'
         : '<p class="muted">No tags.</p>';
@@ -2704,7 +3211,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
 
       $("result").hidden = false;
       $("result").innerHTML = \`
-        <h3>Coaching · Turn \${turnHistory.length || 1}</h3>
+	        <h3>\${heading} · Turn \${turnHistory.length || 1}</h3>
         \${turnBreadcrumbHtml()}
         <div class="diff-card">
           <div class="diff-side diff-you">
@@ -2712,7 +3219,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
             <p class="diff-text">\${renderDiffSide(diff.left)}</p>
           </div>
           <div class="diff-side diff-native">
-            <div class="diff-label">Native says</div>
+	            <div class="diff-label">\${esc(nativeLabel)}</div>
             <p class="diff-text">\${renderDiffSide(diff.right)}</p>
           </div>
         </div>
@@ -2807,9 +3314,19 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
           followUpQuestion: lastTurn.followUpQuestion || "",
           userTranscript: lastTurn.transcript || "",
         };
+        pendingPracticeTarget = null;
         vscode.postMessage({ type: "setReplyContext", priorTurn: pendingReplyContext });
+      } else if (action === "imitate" && lastTurn && lastTurn.nativeVersion) {
+        pendingReplyContext = null;
+        pendingPracticeTarget = practiceTarget(
+          lastTurn.nativeVersion,
+          "Native version",
+          lastTurn.followUpQuestion || "",
+        );
+        vscode.postMessage({ type: "clearReplyContext" });
       } else {
         pendingReplyContext = null;
+        pendingPracticeTarget = null;
         vscode.postMessage({ type: "clearReplyContext" });
       }
       const cta = $("record");
@@ -2829,6 +3346,35 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         vscode.postMessage({ type: "todayTts" });
         return;
       }
+      const hybridTrigger = event.target.closest && event.target.closest("#useRecommendedHybrid");
+      if (hybridTrigger) {
+        vscode.postMessage({ type: "useRecommendedHybrid" });
+        return;
+      }
+      const geminiTrigger = event.target.closest && event.target.closest("#useGeminiOnly");
+      if (geminiTrigger) {
+        vscode.postMessage({ type: "useGeminiOnly" });
+        return;
+      }
+      const keyTrigger = event.target.closest && event.target.closest("[data-key]");
+      if (keyTrigger) {
+        vscode.postMessage({ type: "configureKey", provider: keyTrigger.dataset.key });
+        return;
+      }
+      const providerTrigger = event.target.closest && event.target.closest("[data-provider-setting]");
+      if (providerTrigger) {
+        vscode.postMessage({
+          type: "setProvider",
+          setting: providerTrigger.dataset.providerSetting,
+          value: providerTrigger.dataset.providerValue,
+        });
+        return;
+      }
+      const configTrigger = event.target.closest && event.target.closest("[data-config-setting]");
+      if (configTrigger) {
+        vscode.postMessage({ type: "configureSetting", setting: configTrigger.dataset.configSetting });
+        return;
+      }
       const trigger = event.target.closest && event.target.closest("[data-onboard]");
       if (!trigger) return;
       const action = trigger.dataset.onboard;
@@ -2846,16 +3392,6 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
     $("configureMaterials").addEventListener("click", () => vscode.postMessage({ type: "command", command: "configureMaterials" }));
     $("openTask").addEventListener("click", () => vscode.postMessage({ type: "command", command: "openTask" }));
     $("openFolder").addEventListener("click", () => vscode.postMessage({ type: "command", command: "openSessionFolder" }));
-    document.querySelectorAll("[data-key]").forEach((button) => {
-      button.addEventListener("click", () => vscode.postMessage({ type: "configureKey", provider: button.dataset.key }));
-    });
-    document.querySelectorAll("[data-provider-setting]").forEach((button) => {
-      button.addEventListener("click", () => vscode.postMessage({
-        type: "setProvider",
-        setting: button.dataset.providerSetting,
-        value: button.dataset.providerValue,
-      }));
-    });
 
     window.addEventListener("message", (event) => {
       const message = event.data || {};
@@ -2871,9 +3407,11 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       if (message.type === "practiceResult") {
         markAllStagesDone();
         setBusy(false);
-        setStatus("Ready ✓");
-        recorderMode = null;
-        pendingReplyContext = null;
+	        setStatus("Ready ✓");
+	        recorderMode = null;
+	        pendingReplyContext = null;
+	        pendingPracticeTarget = null;
+	        activeRecordingTarget = null;
         if (message.result && message.result.localAudioUri) {
           $("localAudio").src = message.result.localAudioUri;
           $("localAudio").hidden = false;
@@ -2883,12 +3421,16 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
           nativeVersion: r.nativeVersion || "",
           followUpQuestion: r.followUpQuestion || "",
           transcript: r.transcript || "",
+          mode: r.mode || "free",
+          referenceLabel: r.referenceLabel || "",
         };
         const localAudioFallback = r.localAudioUri || ($("localAudio").src || "");
         turnHistory.push({
           turnIndex: turnHistory.length + 1,
           transcript: r.transcript || "",
           nativeVersion: r.nativeVersion || "",
+          mode: r.mode || "free",
+          referenceLabel: r.referenceLabel || "",
           followUpQuestion: r.followUpQuestion || "",
           quickFix: r.quickFix || "",
           userAudioUri: localAudioFallback,
@@ -2955,9 +3497,14 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
           audio.hidden = false;
           audio.play().catch(() => {});
         }
+        if (message.result && message.result.text) {
+          pendingPracticeTarget = practiceTarget(message.result.text, "Example text", "");
+        } else if (currentExampleText) {
+          pendingPracticeTarget = practiceTarget(currentExampleText, "Example text", "");
+        }
         if (status) {
           status.textContent = message.result && message.result.provider
-            ? "Example generated with " + message.result.provider
+            ? "Example generated with " + message.result.provider + " · next recording shadows this text"
             : "Example generated";
         }
         const button = document.querySelector('[data-action="today-tts"]');
@@ -3008,6 +3555,7 @@ async function processPracticeAudio(
   message: WebviewAudioMessage,
   progress?: StageReporter,
   priorTurn?: CoachPriorTurn,
+  practiceTarget?: PracticeTarget,
 ): Promise<PracticeResult> {
   const state = await loadState(context);
   const packageDate = stringValue(state.next.package_date) || state.today;
@@ -3028,10 +3576,28 @@ async function processPracticeAudio(
     packageDate,
     progress,
     priorTurn,
+    practiceTarget,
   );
 }
 
-async function startNativeFfmpegRecording(context: vscode.ExtensionContext): Promise<NativeRecordingSession> {
+function normalizePracticeTargetPayload(value: unknown): PracticeTarget | undefined {
+  const obj = (value && typeof value === "object" ? value : undefined) as JsonObject | undefined;
+  const referenceText = stringValue(obj?.referenceText).trim();
+  if (!referenceText) {
+    return undefined;
+  }
+  return {
+    mode: "shadow",
+    referenceText,
+    referenceLabel: stringValue(obj?.referenceLabel).trim() || "Reference",
+    followUpQuestion: stringValue(obj?.followUpQuestion).trim(),
+  };
+}
+
+async function startNativeFfmpegRecording(
+  context: vscode.ExtensionContext,
+  practiceTarget?: PracticeTarget,
+): Promise<NativeRecordingSession> {
   if (nativeRecording) {
     throw new Error("Native recorder is already running.");
   }
@@ -3072,6 +3638,7 @@ async function startNativeFfmpegRecording(context: vscode.ExtensionContext): Pro
     filePath,
     sessionDir,
     packageDate,
+    practiceTarget,
     startedAt: Date.now(),
     stderr,
   };
@@ -3280,7 +3847,7 @@ async function synthesizeTodayAudio(context: vscode.ExtensionContext): Promise<J
   if (!text.trim()) {
     throw new Error("No example text is available for today's package. Add clean_tts_text, audio_text, demo_line, or frames[].text.");
   }
-  const provider = config<string>("ttsProvider") || "minimax";
+  const provider = config<string>("ttsProvider") || "gemini";
   const outDir = createReferenceAudioDir(state.root, packageDate);
   const outPath = path.join(outDir, `today-${stamp()}.${speechOutputExtension(provider)}`);
   const result = await synthesizeWithConfiguredTts(context, text, outPath, provider);
@@ -3303,7 +3870,7 @@ async function synthesizeOnDemandText(
 ): Promise<JsonObject> {
   const state = await loadState(context);
   const packageDate = stringValue(state.next.package_date) || state.today;
-  const provider = config<string>("ttsProvider") || "minimax";
+  const provider = config<string>("ttsProvider") || "gemini";
   const outDir = createReferenceAudioDir(state.root, packageDate);
   const outPath = path.join(outDir, `slow-${stamp()}.${speechOutputExtension(provider)}`);
   const result = await synthesizeWithConfiguredTts(context, text, outPath, provider, speed);

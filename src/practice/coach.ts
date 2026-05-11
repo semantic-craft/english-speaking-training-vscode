@@ -13,41 +13,46 @@ import {
   parseLooseJson,
   stringValue,
 } from "../core.js";
-import type { CoachPriorTurn, JsonObject, TrainingState } from "../types.js";
+import type { CoachPriorTurn, JsonObject, PracticeTarget, TrainingState } from "../types.js";
 
 export async function coachTranscript(
   context: vscode.ExtensionContext,
   state: TrainingState,
   transcript: string,
   priorTurn?: CoachPriorTurn,
+  practiceTarget?: PracticeTarget,
 ): Promise<JsonObject> {
-  const provider = config<string>("coachProvider") || "minimax";
+  const provider = config<string>("coachProvider") || "gemini";
   if (provider === "gemini") {
-    return coachWithGemini(context, state, transcript, priorTurn);
+    return coachWithGemini(context, state, transcript, priorTurn, practiceTarget);
   }
   if (provider === "kimi") {
-    return coachWithKimi(context, state, transcript, priorTurn);
+    return coachWithKimi(context, state, transcript, priorTurn, practiceTarget);
   }
   if (provider === "deepseek") {
-    return coachWithDeepSeek(context, state, transcript, priorTurn);
+    return coachWithDeepSeek(context, state, transcript, priorTurn, practiceTarget);
   }
   if (provider === "mimo") {
-    return coachWithMimo(context, state, transcript, priorTurn);
+    return coachWithMimo(context, state, transcript, priorTurn, practiceTarget);
   }
   if (provider === "openai") {
-    return coachWithOpenAI(context, state, transcript, priorTurn);
+    return coachWithOpenAI(context, state, transcript, priorTurn, practiceTarget);
   }
-  return coachWithMiniMax(context, state, transcript, priorTurn);
+  return coachWithMiniMax(context, state, transcript, priorTurn, practiceTarget);
 }
 
 export function coachingSystemPrompt(): string {
   return [
     "You are an English speaking coach for a Chinese legal academic.",
     "Return strict JSON only.",
+    "Do not wrap the JSON in Markdown fences, comments, explanations, or trailing text.",
+    "Use exactly these top-level keys: native_version, problems, error_tags, scores, quick_fix, shadowing_instruction, follow_up_question, next_drill.",
+    "Keep every string on one line; escape quotation marks as JSON; do not use trailing commas.",
+    "When a shadow_target is provided, it is authoritative: native_version must copy shadow_target.reference_text exactly, and user_transcript is only an STT observation of the learner's imitation.",
     "Focus on natural spoken academic English, not generic encouragement.",
     "If a learner profile is provided, use it to adapt examples, terminology, tone, and follow-up questions.",
     "If prior_turn is present, the user_transcript is the learner replying to that follow_up_question; build on it instead of resetting the conversation.",
-    "Give one native speaker version, 1-2 concrete problems, one quick fix, one shadowing instruction, and one specific follow-up question.",
+    "Without a shadow_target, give one native speaker version, 1-2 concrete problems, one quick fix, one shadowing instruction, and one specific follow-up question.",
     "Explanations may be in Chinese, but native_version and follow_up_question must be natural English.",
   ].join(" ");
 }
@@ -56,6 +61,7 @@ export function coachingUserPrompt(
   state: TrainingState,
   transcript: string,
   priorTurn?: CoachPriorTurn,
+  practiceTarget?: PracticeTarget,
 ): string {
   const training = state.training;
   const frames = Array.isArray(training.frames)
@@ -81,7 +87,9 @@ export function coachingUserPrompt(
       : null,
     user_transcript: transcript,
     output_shape: {
-      native_version: "one natural spoken English version of what the user meant",
+      native_version: practiceTarget?.referenceText
+        ? "copy shadow_target.reference_text exactly"
+        : "one natural spoken English version of what the user meant",
       problems: ["1-2 concrete issues in Chinese, with tiny English examples if useful"],
       error_tags: ["0-3 of [TA], [ART], [COUNT], [REF], [ORG], [LINK], [PRAG], [PROS]"],
       scores: {
@@ -91,10 +99,24 @@ export function coachingUserPrompt(
       },
       quick_fix: "one practical fix in Chinese",
       shadowing_instruction: "short instruction asking user to repeat the native version once",
-      follow_up_question: "one specific English follow-up question",
+      follow_up_question: practiceTarget?.followUpQuestion
+        ? "copy shadow_target.follow_up_question exactly"
+        : practiceTarget?.referenceText
+          ? "empty string; this is only a shadowing check"
+          : "one specific English follow-up question",
       next_drill: "one short FSI-style drill instruction for the next repetition",
     },
   };
+  if (practiceTarget?.referenceText) {
+    payload.shadow_target = {
+      mode: practiceTarget.mode,
+      reference_label: practiceTarget.referenceLabel || "Reference",
+      reference_text: practiceTarget.referenceText,
+      follow_up_question: practiceTarget.followUpQuestion || "",
+      instruction:
+        "Compare user_transcript against reference_text for shadowing. Do not treat STT wording errors as the learner's intended wording, and never replace reference_text with user_transcript.",
+    };
+  }
   if (priorTurn) {
     payload.prior_turn = {
       coach_native_version: priorTurn.nativeVersion,
@@ -110,12 +132,13 @@ async function coachWithOpenAI(
   state: TrainingState,
   transcript: string,
   priorTurn?: CoachPriorTurn,
+  practiceTarget?: PracticeTarget,
 ): Promise<JsonObject> {
   const apiKey = await getRequiredKey(context, "openai");
   const model = config<string>("openaiCoachModel") || "gpt-4o-mini";
   const input = [
     { role: "system", content: coachingSystemPrompt() },
-    { role: "user", content: coachingUserPrompt(state, transcript, priorTurn) },
+    { role: "user", content: coachingUserPrompt(state, transcript, priorTurn, practiceTarget) },
   ];
 
   const responsesBody = {
@@ -161,9 +184,10 @@ async function coachWithMiniMax(
   state: TrainingState,
   transcript: string,
   priorTurn?: CoachPriorTurn,
+  practiceTarget?: PracticeTarget,
 ): Promise<JsonObject> {
   const apiKey = await getRequiredKey(context, "minimax");
-  return coachWithAnthropic(state, transcript, priorTurn, {
+  return coachWithAnthropic(state, transcript, priorTurn, practiceTarget, {
     provider: "MiniMax",
     apiKey,
     baseUrl: config<string>("minimaxAnthropicBaseUrl") || MINIMAX_ANTHROPIC_BASE_URL,
@@ -176,9 +200,10 @@ async function coachWithMimo(
   state: TrainingState,
   transcript: string,
   priorTurn?: CoachPriorTurn,
+  practiceTarget?: PracticeTarget,
 ): Promise<JsonObject> {
   const apiKey = await getRequiredKey(context, "mimo");
-  return coachWithAnthropic(state, transcript, priorTurn, {
+  return coachWithAnthropic(state, transcript, priorTurn, practiceTarget, {
     provider: "MiMo",
     apiKey,
     baseUrl: config<string>("mimoAnthropicBaseUrl") || MIMO_ANTHROPIC_BASE_URL,
@@ -191,9 +216,10 @@ async function coachWithKimi(
   state: TrainingState,
   transcript: string,
   priorTurn?: CoachPriorTurn,
+  practiceTarget?: PracticeTarget,
 ): Promise<JsonObject> {
   const apiKey = await getRequiredKey(context, "kimi");
-  return coachWithOpenAICompatibleChat(state, transcript, priorTurn, {
+  return coachWithOpenAICompatibleChat(state, transcript, priorTurn, practiceTarget, {
     provider: "Kimi",
     baseUrl: config<string>("kimiChatBaseUrl") || "https://api.kimi.com/coding/v1",
     model: config<string>("kimiCoachModel") || "kimi-for-coding",
@@ -208,9 +234,10 @@ async function coachWithDeepSeek(
   state: TrainingState,
   transcript: string,
   priorTurn?: CoachPriorTurn,
+  practiceTarget?: PracticeTarget,
 ): Promise<JsonObject> {
   const apiKey = await getRequiredKey(context, "deepseek");
-  return coachWithAnthropic(state, transcript, priorTurn, {
+  return coachWithAnthropic(state, transcript, priorTurn, practiceTarget, {
     provider: "DeepSeek",
     apiKey,
     baseUrl: config<string>("deepseekAnthropicBaseUrl") || DEEPSEEK_ANTHROPIC_BASE_URL,
@@ -222,6 +249,7 @@ async function coachWithAnthropic(
   state: TrainingState,
   transcript: string,
   priorTurn: CoachPriorTurn | undefined,
+  practiceTarget: PracticeTarget | undefined,
   options: {
     provider: string;
     apiKey: string;
@@ -247,7 +275,7 @@ async function coachWithAnthropic(
           content: [
             {
               type: "text",
-              text: coachingUserPrompt(state, transcript, priorTurn),
+              text: coachingUserPrompt(state, transcript, priorTurn, practiceTarget),
             },
           ],
         },
@@ -267,6 +295,7 @@ async function coachWithOpenAICompatibleChat(
   state: TrainingState,
   transcript: string,
   priorTurn: CoachPriorTurn | undefined,
+  practiceTarget: PracticeTarget | undefined,
   options: {
     provider: string;
     baseUrl: string;
@@ -279,7 +308,7 @@ async function coachWithOpenAICompatibleChat(
     model: options.model,
     messages: [
       { role: "system", content: coachingSystemPrompt() },
-      { role: "user", content: coachingUserPrompt(state, transcript, priorTurn) },
+      { role: "user", content: coachingUserPrompt(state, transcript, priorTurn, practiceTarget) },
     ],
     stream: false,
   };
@@ -309,9 +338,10 @@ async function coachWithGemini(
   state: TrainingState,
   transcript: string,
   priorTurn?: CoachPriorTurn,
+  practiceTarget?: PracticeTarget,
 ): Promise<JsonObject> {
   const apiKey = await getRequiredKey(context, "gemini");
-  const model = config<string>("geminiCoachModel") || "gemini-2.5-flash";
+  const model = config<string>("geminiCoachModel") || "gemini-3-flash-preview";
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
@@ -324,7 +354,7 @@ async function coachWithGemini(
         contents: [
           {
             role: "user",
-            parts: [{ text: coachingUserPrompt(state, transcript, priorTurn) }],
+            parts: [{ text: coachingUserPrompt(state, transcript, priorTurn, practiceTarget) }],
           },
         ],
         generationConfig: {

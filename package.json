@@ -2,7 +2,7 @@
   "name": "english-speaking-training-vscode",
   "displayName": "English Speaking Training",
   "description": "Standalone VS Code speaking-practice cockpit for local EnglishSpeakingTraining files.",
-  "version": "0.1.20",
+  "version": "0.1.28",
   "publisher": "xianwei-zhang",
   "license": "MIT",
   "repository": {
@@ -122,6 +122,11 @@
         "category": "English Training"
       },
       {
+        "command": "englishTraining.useOpenAIRealtimeAudioUnderstanding",
+        "title": "English Training: Use OpenAI Realtime Speech Input",
+        "category": "English Training"
+      },
+      {
         "command": "englishTraining.useOpenAITts",
         "title": "English Training: Use OpenAI Speech Output",
         "category": "English Training"
@@ -134,6 +139,16 @@
       {
         "command": "englishTraining.useGeminiTts",
         "title": "English Training: Use Gemini Speech Output",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useGeminiOnly",
+        "title": "English Training: Use Gemini Only",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useRecommendedHybrid",
+        "title": "English Training: Use Gemini + Azure Route",
         "category": "English Training"
       },
       {
@@ -209,24 +224,26 @@
         },
         "englishTraining.coachProvider": {
           "type": "string",
-          "default": "minimax",
+          "default": "gemini",
           "enum": [
+            "gemini",
             "minimax",
             "mimo",
             "openai",
-            "gemini",
             "kimi",
             "deepseek"
           ],
-          "description": "Language-model provider used for transcript correction and follow-up generation. Default routes via the MiniMax Anthropic-compatible endpoint. mimo (Xiaomi MiMo) and deepseek also use Anthropic-compatible endpoints."
+          "description": "Language-model provider used for transcript correction and follow-up generation. Default routes through Gemini so the full core loop only needs Gemini + Azure keys; MiniMax, MiMo, OpenAI, Kimi, and DeepSeek are optional fallbacks."
         },
         "englishTraining.audioUnderstandingProvider": {
           "type": "string",
           "default": "azure",
           "enum": [
-            "azure"
+            "azure",
+            "openai",
+            "gemini"
           ],
-          "description": "Speech input provider. Currently only Azure Speech is supported (Fast Transcription API + optional Pronunciation Assessment)."
+          "description": "Speech input provider. Azure Speech remains the precise scoring route; OpenAI Realtime provides low-latency transcript deltas through gpt-realtime-whisper; Gemini can replace Azure for general audio understanding/transcription."
         },
         "englishTraining.azureSpeechRegion": {
           "type": "string",
@@ -240,23 +257,26 @@
         },
         "englishTraining.ttsProvider": {
           "type": "string",
-          "default": "minimax",
+          "default": "gemini",
           "enum": [
+            "gemini",
             "minimax",
-            "openai",
-            "gemini"
+            "openai"
           ],
-          "description": "Speech output provider used to generate the native-version follow-along audio. Default uses MiniMax T2A (speech-2.8-hd / speech-2.8-turbo)."
-        },
-        "englishTraining.openaiTranscriptionModel": {
-          "type": "string",
-          "default": "gpt-4o-transcribe",
-          "description": "OpenAI model used for speech-to-text from the VS Code recorder."
+          "description": "Speech output provider used to generate the native-version follow-along audio. Default uses Gemini TTS so the full core loop only needs Gemini + Azure keys; MiniMax and OpenAI are optional fallbacks."
         },
         "englishTraining.openaiCoachModel": {
           "type": "string",
           "default": "gpt-4o-mini",
           "description": "OpenAI model used for correction and follow-up coaching."
+        },
+        "englishTraining.openaiRealtimeTranscriptionModel": {
+          "type": "string",
+          "default": "gpt-realtime-whisper",
+          "enum": [
+            "gpt-realtime-whisper"
+          ],
+          "description": "OpenAI Realtime transcription model used when speech input is set to OpenAI. Current official realtime transcription guidance recommends gpt-realtime-whisper for live audio transcript deltas."
         },
         "englishTraining.openaiTtsModel": {
           "type": "string",
@@ -270,23 +290,33 @@
         },
         "englishTraining.geminiCoachModel": {
           "type": "string",
-          "default": "gemini-2.5-flash",
-          "description": "Gemini model used for correction and follow-up coaching."
+          "default": "gemini-3-flash-preview",
+          "enum": [
+            "gemini-3-flash-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-flash-lite",
+            "gemini-3.1-flash-lite-preview"
+          ],
+          "description": "Gemini model used for correction and follow-up coaching. Gemini 3 Flash is the default; Gemini 3.1 Pro Preview and 3.1 Flash-Lite variants are available from Google AI Studio for stronger reasoning or lower latency."
         },
         "englishTraining.geminiAudioUnderstandingModel": {
           "type": "string",
-          "default": "gemini-2.5-flash",
-          "description": "Gemini model used for speech input understanding."
+          "default": "gemini-3-flash-preview",
+          "enum": [
+            "gemini-3-flash-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-flash-lite",
+            "gemini-3.1-flash-lite-preview"
+          ],
+          "description": "Gemini model used for speech input understanding/transcription when speech in is set to Gemini. Google audio-understanding examples use gemini-3-flash-preview; 3.1 Pro and Flash-Lite options are available when you want quality or speed tradeoffs."
         },
         "englishTraining.geminiTtsModel": {
           "type": "string",
           "default": "gemini-3.1-flash-tts-preview",
           "enum": [
-            "gemini-3.1-flash-tts-preview",
-            "gemini-2.5-flash-preview-tts",
-            "gemini-2.5-pro-preview-tts"
+            "gemini-3.1-flash-tts-preview"
           ],
-          "description": "Gemini model used for native-version follow-along audio. gemini-3.1-flash-tts-preview is the newest preview (Google AI Studio); the 2.5 variants remain selectable for fallback. All use generativelanguage.googleapis.com generateContent with responseModalities=AUDIO."
+          "description": "Gemini model used for native-version follow-along audio. Uses the latest Google AI Studio TTS preview through generativelanguage.googleapis.com generateContent with responseModalities=AUDIO."
         },
         "englishTraining.geminiTtsVoice": {
           "type": "string",
@@ -412,7 +442,11 @@
   "devDependencies": {
     "@types/node": "^20.14.10",
     "@types/vscode": "^1.90.0",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.28.0",
     "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "ws": "^8.20.0"
   }
 }

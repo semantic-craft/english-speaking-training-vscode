@@ -31,7 +31,7 @@ export async function synthesizeWithConfiguredTts(
   context: vscode.ExtensionContext,
   text: string,
   outPath: string,
-  provider = config<string>("ttsProvider") || "minimax",
+  provider = config<string>("ttsProvider") || "gemini",
   speedOverride?: number,
 ): Promise<{ provider: string; filePath: string }> {
   if (provider === "gemini") {

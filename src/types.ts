@@ -74,8 +74,8 @@ export interface TrainingState {
     coachProvider: string;
     audioUnderstandingProvider: string;
     ttsProvider: string;
-    openaiTranscriptionModel: string;
     openaiCoachModel: string;
+    openaiRealtimeTranscriptionModel: string;
     geminiCoachModel: string;
     geminiTtsModel: string;
     geminiTtsVoice: string;
@@ -103,9 +103,19 @@ export interface CoachPriorTurn {
   userTranscript: string;
 }
 
+export interface PracticeTarget {
+  mode: "shadow";
+  referenceText: string;
+  referenceLabel?: string;
+  followUpQuestion?: string;
+}
+
 export interface PracticeResult {
   transcript: string;
   nativeVersion: string;
+  mode?: "free" | "shadow";
+  referenceText?: string;
+  referenceLabel?: string;
   problems: string[];
   quickFix: string;
   followUpQuestion: string;
@@ -124,6 +134,7 @@ export interface WebviewAudioMessage {
   base64: string;
   mimeType: string;
   priorTurn?: CoachPriorTurn;
+  practiceTarget?: PracticeTarget;
 }
 
 export interface NativeRecordingSession {
@@ -131,6 +142,7 @@ export interface NativeRecordingSession {
   filePath: string;
   sessionDir: string;
   packageDate: string;
+  practiceTarget?: PracticeTarget;
   startedAt: number;
   stderr: string[];
 }

@@ -22,8 +22,9 @@ There is no required curriculum length: 7 lessons or 365 lessons both work.
 3. Click *Create your first lesson* → pick a folder; the extension
    creates `prebuilt/` and `progress/` inside it and writes a starter
    `prebuilt/<today>/english-training.json` you can edit.
-4. Click *Add your first AI key* → pick a provider (MiMo recommended for the
-   default coach + STT + TTS combo).
+4. Click *Connect Gemini + Azure* -> save a Gemini API key and an Azure Speech
+   key. That pair completes the core route: Gemini handles coaching and native
+   audio, while Azure handles speech input and scoring.
 5. Press the red record button.
 
 For the field-by-field schema, run `English Training: Open Materials Guide`
@@ -54,14 +55,18 @@ expected path.
 
 ## Provider Defaults
 
-- Speech input: OpenAI `gpt-4o-transcribe` by default, with Gemini
-  `gemini-2.5-flash` and MiMo `mimo-v2.5` as options
-- Coach: Xiaomi MiMo `mimo-v2.5`, with MiniMax `MiniMax-M2.7-highspeed` and
-  Gemini `gemini-2.5-flash`, Kimi Code `kimi-for-coding`, and DeepSeek `deepseek-v4-pro`
-  as language-model options
-- Speech output: MiniMax `speech-2.8-hd` with `English_expressive_narrator` by
-  default, with OpenAI `gpt-4o-mini-tts`, Gemini
-  `gemini-2.5-flash-preview-tts`, and MiMo `mimo-v2.5-tts` as options
+- Coach: Gemini by default with `gemini-3-flash-preview`, plus
+  `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, and
+  `gemini-3.1-flash-lite-preview` available from the model picker. MiniMax,
+  MiMo, OpenAI, Kimi, and DeepSeek remain optional fallbacks.
+- Speech input: Azure Speech by default for transcription and pronunciation
+  assessment workflows; OpenAI Realtime `gpt-realtime-whisper` can be selected
+  for low-latency transcript generation, and Gemini can be selected for general
+  audio understanding with the Gemini 3 model family.
+- Speech output: Gemini `gemini-3.1-flash-tts-preview` by default. MiniMax and
+  OpenAI speech output remain optional fallbacks.
+- The sidebar's **Routes & Models** panel shows the active route, key status,
+  and model/voice controls in one place.
 
 ## Features
 
@@ -79,8 +84,13 @@ expected path.
   - `English Training: Configure Gemini API Key`
   - `English Training: Configure MiniMax API Key`
   - `English Training: Configure MiMo API Key`
+  - `English Training: Configure Azure Speech Key`
   - `English Training: Configure Kimi API Key`
   - `English Training: Configure DeepSeek API Key`
+- Route commands:
+  - `English Training: Use Recommended Hybrid Route`
+  - `English Training: Use Gemini Only`
+  - `English Training: Use OpenAI Realtime Speech Input`
 - Local actions:
   - `English Training: Complete Current Package Locally`
   - `English Training: Open Current Task Card`
