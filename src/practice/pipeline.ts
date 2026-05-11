@@ -14,6 +14,7 @@ import {
 import type {
   CoachPriorTurn,
   JsonObject,
+  PracticeTarget,
   PracticeResult,
   StageReporter,
   TrainingState,
@@ -35,24 +36,36 @@ export async function processPracticeFile(
   packageDate: string,
   progress?: StageReporter,
   priorTurn?: CoachPriorTurn,
+  practiceTarget?: PracticeTarget,
 ): Promise<PracticeResult> {
+  const target = normalizePracticeTarget(practiceTarget);
   progress?.("transcribe", "active");
   const transcript = await transcribeAudio(context, inputPath, mimeType, sessionDir);
   fs.writeFileSync(path.join(sessionDir, "transcript.txt"), `${transcript}\n`, "utf8");
   progress?.("transcribe", "done");
 
   progress?.("coach", "active");
-  const coaching = await coachTranscript(context, state, transcript, priorTurn);
+  const coaching = await coachTranscript(context, state, transcript, priorTurn, target);
   const nativeVersion =
-    stringValue(coaching.native_version) || stringValue(coaching.nativeVersion) || transcript;
-  const problems = arrayOfStrings(coaching.problems).slice(0, 3);
-  const quickFix = stringValue(coaching.quick_fix) || stringValue(coaching.quickFix);
+    target?.referenceText ||
+    stringValue(coaching.native_version) ||
+    stringValue(coaching.nativeVersion) ||
+    transcript;
+  const problems = normalizeProblems(transcript, nativeVersion, target, coaching);
+  const quickFix =
+    (target
+      ? stringValue(coaching.quick_fix) ||
+        stringValue(coaching.quickFix) ||
+        "以右侧 Reference 为准，先慢速跟读差异词，再完整读一遍。"
+      : stringValue(coaching.quick_fix) || stringValue(coaching.quickFix));
   const followUpQuestion =
-    stringValue(coaching.follow_up_question) || stringValue(coaching.followUpQuestion);
+    target
+      ? stringValue(target.followUpQuestion)
+      : stringValue(coaching.follow_up_question) || stringValue(coaching.followUpQuestion);
   const shadowingInstruction =
     stringValue(coaching.shadowing_instruction) ||
     stringValue(coaching.shadowingInstruction) ||
-    `Repeat once: ${nativeVersion}`;
+    (target ? `Repeat the reference once: ${nativeVersion}` : `Repeat once: ${nativeVersion}`);
   const errorTags = normalizeErrorTags(coaching.error_tags ?? coaching.errorTags);
   const nextDrill =
     stringValue(coaching.next_drill) ||
@@ -62,7 +75,7 @@ export async function processPracticeFile(
   progress?.("coach", "done");
 
   progress?.("tts", "active");
-  const ttsProvider = config<string>("ttsProvider") || "minimax";
+  const ttsProvider = config<string>("ttsProvider") || "gemini";
   const outputAudio = path.join(sessionDir, speechOutputFileName(ttsProvider));
   let audioFile: string | undefined;
   if (nativeVersion.trim()) {
@@ -89,6 +102,9 @@ export async function processPracticeFile(
   const result: PracticeResult = {
     transcript,
     nativeVersion,
+    mode: target ? "shadow" : "free",
+    referenceText: target?.referenceText,
+    referenceLabel: target?.referenceLabel,
     problems,
     quickFix,
     followUpQuestion,
@@ -116,6 +132,7 @@ export async function processPracticeFile(
       summary: state.learnerProfile.summary,
     },
     priorTurn: priorTurn ?? null,
+    practiceTarget: target ?? null,
   });
   writeSessionMarkdown(path.join(sessionDir, "session.md"), state, result);
   appendSessionLog(state, inputPath, result, coaching);
@@ -155,6 +172,9 @@ export function appendSessionLog(
     follow_up_question: result.followUpQuestion,
     shadowing_instruction: result.shadowingInstruction,
     next_drill: result.nextDrill,
+    mode: result.mode,
+    reference_text: result.referenceText,
+    reference_label: result.referenceLabel,
     audio_file: result.audioFile,
     session_dir: result.sessionDir,
     raw_coaching: coaching,
@@ -163,6 +183,44 @@ export function appendSessionLog(
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
   fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, "utf8");
   writeJson(path.join(state.root, "runtime", "vscode-sessions", "session-log-latest.json"), entry);
+}
+
+function normalizePracticeTarget(target: PracticeTarget | undefined): PracticeTarget | undefined {
+  const referenceText = stringValue(target?.referenceText).trim();
+  if (!referenceText) {
+    return undefined;
+  }
+  return {
+    mode: "shadow",
+    referenceText,
+    referenceLabel: stringValue(target?.referenceLabel).trim() || "Reference",
+    followUpQuestion: stringValue(target?.followUpQuestion).trim(),
+  };
+}
+
+function normalizeProblems(
+  transcript: string,
+  nativeVersion: string,
+  target: PracticeTarget | undefined,
+  coaching: JsonObject,
+): string[] {
+  const coached = arrayOfStrings(coaching.problems).slice(0, 3);
+  if (!target) {
+    return coached;
+  }
+  if (coached.length) {
+    return coached;
+  }
+  if (normalizeComparableText(transcript) === normalizeComparableText(nativeVersion)) {
+    return ["跟读文本与目标句基本一致。下一轮可以把重音和连读做得更自然。"];
+  }
+  return [
+    "这轮是跟读检查：右侧 Reference 是标准文本，左侧转写可能混入语音识别误差。请优先对照高亮差异重读目标句。",
+  ];
+}
+
+function normalizeComparableText(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9']+/gi, " ").trim();
 }
 
 export function readRecentSessionLog(root: string, limit: number): JsonObject[] {

@@ -7,6 +7,102 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.28] — 2026-05-11
+
+### Changed
+- Removed Gemini 2.5 model choices from the current provider UI. Gemini coach
+  and speech input now expose only the current Gemini 3 family, and Gemini TTS
+  exposes only `gemini-3.1-flash-tts-preview`.
+- Expanded migration so older saved Gemini 2.5 coach, speech-input, or TTS
+  settings are lifted to the latest Gemini 3 / 3.1 equivalents automatically.
+
+## [0.1.27] — 2026-05-11
+
+### Changed
+- Made Gemini + Azure the core recommended route: Gemini is now the default
+  coach and speech-output provider, while Azure remains the default speech-input
+  and pronunciation-scoring provider.
+- Updated onboarding to require the two core keys (Gemini + Azure) instead of
+  suggesting MiniMax or any single AI provider key as enough for the main loop.
+- Moved MiniMax, OpenAI, MiMo, Kimi, and DeepSeek into optional fallback
+  positions in the Routes & Models panel.
+
+### Fixed
+- Added migration for old saved MiniMax default route settings so an upgraded
+  install does not keep requiring MiniMax when the intended route is Gemini +
+  Azure.
+
+## [0.1.26] — 2026-05-11
+
+### Changed
+- Updated Gemini model choices from Google AI Studio / Gemini API docs:
+  Gemini coach and Gemini speech input now default to `gemini-3-flash-preview`
+  and expose `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, and
+  `gemini-3.1-flash-lite-preview` as selectable Gemini 3 family options.
+- Kept Gemini speech output on the latest `gemini-3.1-flash-tts-preview` route
+  while preserving older 2.5 TTS previews as fallback options.
+- Added a small migration for old saved `gemini-2.5-flash` defaults so the
+  Routes & Models panel does not keep showing the old Gemini speech-input model
+  after upgrading the extension.
+
+## [0.1.25] — 2026-05-11
+
+### Added
+- Added OpenAI Realtime as a selectable speech-input provider using
+  `gpt-realtime-whisper` over a server-side WebSocket connection in the VS Code
+  extension host.
+- Added `englishTraining.openaiRealtimeTranscriptionModel` and a command/card
+  for `English Training: Use OpenAI Realtime Speech Input`.
+
+### Changed
+- The provider UX now presents Azure, OpenAI Realtime, and Gemini as distinct
+  speech-input routes: Azure remains the scoring/pronunciation-assessment route,
+  while OpenAI Realtime is used for transcript generation.
+
+## [0.1.24] — 2026-05-11
+
+### Added
+- Reworked the sidebar provider controls into a single `Routes & Models` panel
+  with active route cards, key status, provider switching, and model/region/voice
+  configuration entry points.
+- Added a `Recommended hybrid` preset for MiniMax coach + Azure speech input +
+  MiniMax speech output, keeping `Gemini only` as a one-click route.
+
+### Fixed
+- Corrected stale README/changelog provider descriptions from the old
+  OpenAI/Gemini/MiMo speech-input era.
+
+## [0.1.23] — 2026-05-11
+
+### Added
+- Added Gemini as a speech-input provider. The VS Code recorder can now send
+  short practice audio to Gemini audio understanding for JSON transcript
+  extraction instead of Azure Fast Transcription.
+- Added a `Gemini only` preset/command that switches coach, speech input, and
+  speech output to Gemini while keeping Azure available for precise
+  Pronunciation Assessment workflows.
+
+## [0.1.22] — 2026-05-11
+
+### Fixed
+- Split free-answer coaching from shadowing checks. After generating example
+  audio or clicking `Imitate native`, the next recording now carries a
+  reference target, and the generated native audio is forced to read that
+  reference instead of replaying Azure STT mistakes.
+- Shadowing results label the right-hand side as `Reference` / `Example text`
+  rather than treating the learner's misrecognized transcript as a new native
+  sentence.
+
+## [0.1.21] — 2026-05-11
+
+### Fixed
+- Made coach-response parsing tolerant of provider JSON glitches: the extension
+  now extracts fenced/embedded JSON, repairs common malformed output, and
+  recovers partial coaching fields instead of blocking the practice turn with a
+  raw `Could not parse coaching JSON` error.
+- Tightened the coach prompt so MiMo/MiniMax-style providers return only compact
+  one-line JSON strings with the expected coaching keys.
+
 ## [0.1.20] — 2026-05-11
 
 ### Fixed
@@ -72,8 +168,8 @@ and this project adheres to
 ## [0.1.17] — 2026-05-10
 
 ### Changed
-- **Speech input replaced with Azure Speech.** OpenAI / Gemini / MiMo audio
-  understanding paths are removed; recording is now transcribed via the Azure
+- **Speech input replaced with Azure Speech.** The older OpenAI/MiMo speech
+  input paths were removed; recording is now transcribed via the Azure
   Fast Transcription REST API (`speechtotext/transcriptions:transcribe`,
   api-version `2025-10-15`). Configure with the new
   `English Training: Configure Azure Speech Key` command, which also prompts
@@ -164,7 +260,7 @@ First public Marketplace release.
 
 ### Added
 - **Onboarding empty state**: a Quick Setup card in the Practice sidebar that
-  surfaces missing pieces (source, GitHub token, lessons, AI key) and routes
+  surfaces missing pieces (source, lessons, AI key) and routes
   each step to the right configure flow.
 - **Bring-your-own-materials path**: `English Training: Create Sample Package`
   writes a starter `prebuilt/<date>/english-training.json`. Bootstraps the
@@ -195,9 +291,9 @@ First public Marketplace release.
 Pre-public iterations distributed as `.vsix` files only. Highlights:
 
 - VS Code webview practice cockpit decoupled from Hermes/Telegram.
-- Multi-provider AI: 5 coach LLMs (MiMo, MiniMax, Gemini, Kimi, DeepSeek),
-  3 speech-input providers (OpenAI, Gemini, MiMo), 4 TTS providers (OpenAI,
-  Gemini, MiMo, MiniMax).
+- Multi-provider AI: coach LLMs across MiniMax, MiMo, OpenAI, Gemini, Kimi,
+  and DeepSeek; speech input through Azure or Gemini; speech output through
+  MiniMax, OpenAI, or Gemini.
 - Native ffmpeg AVFoundation fallback for VS Code microphone denial.
 - GitHub materials source mode with private-repo PAT support and asset caching
   in VS Code global storage.

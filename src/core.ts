@@ -119,7 +119,7 @@ export function isCoachProvider(value: unknown): value is ProviderName {
 }
 
 export function isAudioUnderstandingProvider(value: unknown): value is ProviderName {
-  return value === "azure";
+  return value === "azure" || value === "gemini" || value === "openai";
 }
 
 export function isTtsProvider(value: unknown): value is ProviderName {
@@ -132,17 +132,335 @@ export function chatCompletionsUrl(baseUrl: string): string {
 }
 
 export function parseLooseJson(text: string): JsonObject {
-  const cleaned = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
-  try {
-    return JSON.parse(cleaned) as JsonObject;
-  } catch {
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      return JSON.parse(cleaned.slice(start, end + 1)) as JsonObject;
+  const cleaned = stripJsonFence(text);
+  const candidates = uniqueStrings([
+    cleaned,
+    extractCompleteJsonObject(cleaned),
+    extractOuterJsonObject(cleaned),
+  ]);
+
+  for (const candidate of candidates) {
+    for (const variant of repairJsonCandidates(candidate)) {
+      const parsed = tryParseJsonObject(variant);
+      if (parsed) {
+        if (variant !== candidate) {
+          appendOutput("Recovered malformed coaching JSON from provider response.");
+        }
+        return parsed;
+      }
     }
-    throw new Error(`Could not parse coaching JSON: ${cleaned.slice(0, 600)}`);
   }
+
+  const recovered = recoverCoachingJson(cleaned);
+  if (recovered) {
+    appendOutput("Recovered partial coaching JSON from provider response.");
+    return recovered;
+  }
+  throw new Error(`Could not parse coaching JSON after repair: ${cleaned.slice(0, 600)}`);
+}
+
+function stripJsonFence(text: string): string {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced?.[1]) {
+    return fenced[1].trim();
+  }
+  return trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter(Boolean) as string[]));
+}
+
+function tryParseJsonObject(text: string): JsonObject | undefined {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as JsonObject;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function repairJsonCandidates(text: string): string[] {
+  const escaped = escapeControlCharsInJsonStrings(text);
+  return uniqueStrings([
+    text,
+    escaped,
+    removeTrailingCommas(escaped),
+    closePartialJsonObject(escaped),
+    closePartialJsonObject(removeTrailingCommas(escaped)),
+  ]);
+}
+
+function removeTrailingCommas(text: string): string {
+  return text.replace(/,\s*([}\]])/g, "$1");
+}
+
+function escapeControlCharsInJsonStrings(text: string): string {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  for (const char of text) {
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+    if (inString && char === "\\") {
+      result += char;
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      result += char;
+      inString = !inString;
+      continue;
+    }
+    if (inString && char === "\n") {
+      result += "\\n";
+      continue;
+    }
+    if (inString && char === "\r") {
+      result += "\\r";
+      continue;
+    }
+    if (inString && char === "\t") {
+      result += "\\t";
+      continue;
+    }
+    result += char;
+  }
+  return result;
+}
+
+function extractCompleteJsonObject(text: string): string | undefined {
+  const start = text.indexOf("{");
+  if (start < 0) return undefined;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "{") depth += 1;
+    if (char === "}") depth -= 1;
+    if (depth === 0) {
+      return text.slice(start, index + 1);
+    }
+  }
+  return undefined;
+}
+
+function extractOuterJsonObject(text: string): string | undefined {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  return start >= 0 && end > start ? text.slice(start, end + 1) : undefined;
+}
+
+function closePartialJsonObject(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) return trimmed;
+
+  const state = scanJsonState(trimmed);
+  let repaired = trimmed;
+  if (state.escaped) {
+    repaired += "\\";
+  }
+  if (state.inString) {
+    repaired += '"';
+  }
+  repaired = repaired.replace(/,\s*$/g, "");
+  repaired = repaired.replace(/:\s*$/g, '""');
+  for (const closer of [...state.stack].reverse()) {
+    repaired += closer;
+  }
+  return removeTrailingCommas(repaired);
+}
+
+function scanJsonState(text: string): {
+  escaped: boolean;
+  inString: boolean;
+  stack: string[];
+} {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (const char of text) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "{") {
+      stack.push("}");
+      continue;
+    }
+    if (char === "[") {
+      stack.push("]");
+      continue;
+    }
+    if ((char === "}" || char === "]") && stack[stack.length - 1] === char) {
+      stack.pop();
+    }
+  }
+  return { escaped, inString, stack };
+}
+
+function recoverCoachingJson(text: string): JsonObject | undefined {
+  const nativeVersion = extractJsonStringField(text, "native_version");
+  const problems = extractJsonStringArray(text, "problems");
+  const quickFix = extractJsonStringField(text, "quick_fix");
+  const shadowingInstruction = extractJsonStringField(text, "shadowing_instruction");
+  const followUpQuestion = extractJsonStringField(text, "follow_up_question");
+  const nextDrill = extractJsonStringField(text, "next_drill");
+  const errorTags = extractJsonStringArray(text, "error_tags");
+  const scores = recoverScores(text);
+
+  if (!nativeVersion && problems.length === 0 && !quickFix && !followUpQuestion) {
+    return undefined;
+  }
+
+  const recovered: JsonObject = {
+    _parse_recovered: true,
+    native_version: nativeVersion,
+    problems,
+    error_tags: errorTags,
+    scores,
+    quick_fix: quickFix,
+    shadowing_instruction:
+      shadowingInstruction || (nativeVersion ? `Repeat once: ${nativeVersion}` : ""),
+    follow_up_question: followUpQuestion,
+    next_drill: nextDrill,
+  };
+  return recovered;
+}
+
+function extractJsonStringField(text: string, key: string): string {
+  const valueStart = findJsonValueStart(text, key);
+  if (valueStart < 0) return "";
+  const start = skipWhitespace(text, valueStart);
+  if (text[start] === '"') {
+    return readJsonLikeString(text, start).value.trim();
+  }
+  const endMatch = text.slice(start).match(/[,}\]\n\r]/);
+  const end = endMatch?.index === undefined ? text.length : start + endMatch.index;
+  return text.slice(start, end).trim();
+}
+
+function extractJsonStringArray(text: string, key: string): string[] {
+  const valueStart = findJsonValueStart(text, key);
+  if (valueStart < 0) return [];
+  let index = skipWhitespace(text, valueStart);
+  if (text[index] !== "[") return [];
+  index += 1;
+  const values: string[] = [];
+  while (index < text.length) {
+    index = skipWhitespaceAndCommas(text, index);
+    if (text[index] === "]") break;
+    if (text[index] !== '"') {
+      index += 1;
+      continue;
+    }
+    const item = readJsonLikeString(text, index);
+    if (item.value.trim()) {
+      values.push(item.value.trim());
+    }
+    index = item.nextIndex;
+    if (!item.closed) break;
+  }
+  return values;
+}
+
+function findJsonValueStart(text: string, key: string): number {
+  const keyPattern = `"${key}"`;
+  const keyStart = text.indexOf(keyPattern);
+  if (keyStart < 0) return -1;
+  const colon = text.indexOf(":", keyStart + keyPattern.length);
+  return colon < 0 ? -1 : colon + 1;
+}
+
+function skipWhitespace(text: string, index: number): number {
+  while (index < text.length && /\s/.test(text[index])) {
+    index += 1;
+  }
+  return index;
+}
+
+function skipWhitespaceAndCommas(text: string, index: number): number {
+  while (index < text.length && (/[\s,]/.test(text[index]))) {
+    index += 1;
+  }
+  return index;
+}
+
+function readJsonLikeString(text: string, quoteIndex: number): {
+  closed: boolean;
+  nextIndex: number;
+  value: string;
+} {
+  let value = "";
+  let escaped = false;
+  for (let index = quoteIndex + 1; index < text.length; index += 1) {
+    const char = text[index];
+    if (escaped) {
+      value += unescapeJsonChar(char);
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      return { closed: true, nextIndex: index + 1, value };
+    }
+    value += char;
+  }
+  return { closed: false, nextIndex: text.length, value };
+}
+
+function unescapeJsonChar(char: string): string {
+  if (char === "n") return "\n";
+  if (char === "r") return "\r";
+  if (char === "t") return "\t";
+  if (char === "b") return "\b";
+  if (char === "f") return "\f";
+  return char;
+}
+
+function recoverScores(text: string): JsonObject {
+  const scores: JsonObject = {};
+  for (const key of ["fluency", "accuracy", "naturalness"]) {
+    const match = text.match(new RegExp(`"${key}"\\s*:\\s*("?)(\\d)\\1`));
+    if (match?.[2]) {
+      scores[key] = Number(match[2]);
+    }
+  }
+  return scores;
 }
 
 export function parseFirstJson(stdout: string): JsonObject | undefined {
