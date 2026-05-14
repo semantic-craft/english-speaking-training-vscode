@@ -38,6 +38,7 @@ import {
   MIMO_ANTHROPIC_BASE_URL,
   MINIMAX_ANTHROPIC_BASE_URL,
   normalizeTtsSpeed,
+  parseLooseJson,
   parseFirstJson,
   providerLabel,
   readJson,
@@ -213,6 +214,22 @@ export function deactivate(): void {
   }
 }
 
+export const __test__ = {
+  buildProgressSnapshot,
+  chooseLocalAvfoundationAudioDevice,
+  dateRangeLabel,
+  extensionFromMime,
+  listAvfoundationAudioDevices,
+  looksLikeTrainingRoot,
+  mimeTypeForAudioPath,
+  normalizePracticeTargetPayload,
+  normalizeTtsSpeed,
+  parseAvfoundationAudioDevices,
+  parseLooseJson,
+  speechOutputExtension,
+  todayExampleText,
+};
+
 function pythonPath(): string {
   return config<string>("pythonPath") || "python3";
 }
@@ -329,11 +346,15 @@ async function findTrainingRoot(): Promise<string> {
 }
 
 function looksLikeTrainingRoot(root: string): boolean {
-  return fs.existsSync(path.join(root, "prebuilt")) && (
-    fs.existsSync(path.join(root, "progress")) ||
-    fs.existsSync(path.join(root, "scripts", "english_training_progress.py")) ||
-    fs.existsSync(path.join(root, "two-month-english-speaking-training-project.md"))
-  );
+  return isDirectory(path.join(root, "prebuilt"));
+}
+
+function isDirectory(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function expandHome(value: string): string {
@@ -928,7 +949,7 @@ function configSettingPrompt(setting: ConfigSettingName): string {
 
 function configSettingOptions(setting: ConfigSettingName): string[] {
   switch (setting) {
-    case "minimaxCoachModel": return ["MiniMax-M2.7", "MiniMax-M2.7-highspeed"];
+    case "minimaxCoachModel": return ["MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"];
     case "mimoCoachModel": return ["mimo-v2.5-pro", "mimo-v2.5-flash"];
     case "openaiCoachModel": return ["gpt-4o-mini", "gpt-4o"];
     case "openaiRealtimeTranscriptionModel": return ["gpt-realtime-whisper"];
@@ -3755,7 +3776,14 @@ function listAvfoundationAudioDevices(ffmpegPath: string): AvfoundationAudioDevi
   const result = cp.spawnSync(ffmpegPath, ["-f", "avfoundation", "-list_devices", "true", "-i", ""], {
     encoding: "utf8",
   });
+  if (result.error) {
+    throw new Error(`Could not run ffmpeg at "${ffmpegPath}": ${result.error.message}`);
+  }
   const text = `${result.stdout || ""}\n${result.stderr || ""}`;
+  return parseAvfoundationAudioDevices(text);
+}
+
+function parseAvfoundationAudioDevices(text: string): AvfoundationAudioDevice[] {
   const devices: AvfoundationAudioDevice[] = [];
   let inAudioSection = false;
   for (const line of text.split(/\r?\n/)) {

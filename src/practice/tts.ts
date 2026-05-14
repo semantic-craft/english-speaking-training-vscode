@@ -62,7 +62,7 @@ async function synthesizeOpenAI(
     },
     body: JSON.stringify({
       model: config<string>("openaiTtsModel") || "gpt-4o-mini-tts",
-      voice: config<string>("openaiTtsVoice") || "marin",
+      voice: config<string>("openaiTtsVoice") || "coral",
       input: text,
       response_format: "mp3",
       speed: resolveSpeed(speedOverride),
