@@ -7,6 +7,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.29] — 2026-05-14
+
+### Added
+- Added regression tests for activation, command/manifest drift, provider model
+  schema alignment, local materials root detection, recorder microphone
+  selection, malformed coaching JSON recovery, TTS speed normalization, and
+  audio MIME handling.
+
+### Fixed
+- Treat a local materials folder with only `prebuilt/` as a valid bring-your-own
+  lesson root, matching the README first-run flow.
+- Aligned the MiniMax coach model picker with the package schema, including
+  `MiniMax-M2.7-highspeed`.
+- Restored the OpenAI TTS fallback voice to the package default `coral`.
+- Report missing or unlaunchable `ffmpeg` directly in the native recorder path
+  instead of falling through to a misleading microphone-selection error.
+- Excluded local regression tests from the packaged VSIX.
+
 ## [0.1.28] — 2026-05-11
 
 ### Changed
