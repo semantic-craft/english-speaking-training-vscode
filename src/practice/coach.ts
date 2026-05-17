@@ -13,7 +13,13 @@ import {
   parseLooseJson,
   stringValue,
 } from "../core.js";
-import type { CoachPriorTurn, JsonObject, PracticeTarget, TrainingState } from "../types.js";
+import type {
+  CoachPriorTurn,
+  DrillExample,
+  JsonObject,
+  PracticeTarget,
+  TrainingState,
+} from "../types.js";
 
 export async function coachTranscript(
   context: vscode.ExtensionContext,
@@ -22,23 +28,11 @@ export async function coachTranscript(
   priorTurn?: CoachPriorTurn,
   practiceTarget?: PracticeTarget,
 ): Promise<JsonObject> {
-  const provider = config<string>("coachProvider") || "gemini";
-  if (provider === "gemini") {
-    return coachWithGemini(context, state, transcript, priorTurn, practiceTarget);
-  }
-  if (provider === "kimi") {
-    return coachWithKimi(context, state, transcript, priorTurn, practiceTarget);
-  }
-  if (provider === "deepseek") {
-    return coachWithDeepSeek(context, state, transcript, priorTurn, practiceTarget);
-  }
-  if (provider === "mimo") {
-    return coachWithMimo(context, state, transcript, priorTurn, practiceTarget);
-  }
-  if (provider === "openai") {
-    return coachWithOpenAI(context, state, transcript, priorTurn, practiceTarget);
-  }
-  return coachWithMiniMax(context, state, transcript, priorTurn, practiceTarget);
+  return requestProviderJson(
+    context,
+    coachingSystemPrompt(),
+    coachingUserPrompt(state, transcript, priorTurn, practiceTarget),
+  );
 }
 
 export function coachingSystemPrompt(): string {
@@ -138,32 +132,178 @@ export function coachingUserPrompt(
   return JSON.stringify(payload, null, 2);
 }
 
-async function coachWithOpenAI(
+/**
+ * Generate fresh FSI-style substitution lines for the current package, so the
+ * learner can keep drilling beyond the prebuilt rounds. Routed through the same
+ * configured coach provider as {@link coachTranscript}.
+ */
+export async function generateDrillLines(
   context: vscode.ExtensionContext,
   state: TrainingState,
-  transcript: string,
-  priorTurn?: CoachPriorTurn,
-  practiceTarget?: PracticeTarget,
-): Promise<JsonObject> {
-  const apiKey = await getRequiredKey(context, "openai");
-  const model = config<string>("openaiCoachModel") || "gpt-4o-mini";
-  const input = [
-    { role: "system", content: coachingSystemPrompt() },
-    { role: "user", content: coachingUserPrompt(state, transcript, priorTurn, practiceTarget) },
-  ];
+  count: number,
+  existing: string[] = [],
+): Promise<DrillExample[]> {
+  const n = Math.max(1, Math.min(12, Math.floor(count) || 5));
+  const parsed = await requestProviderJson(
+    context,
+    drillGenSystemPrompt(),
+    drillGenUserPrompt(state, n, existing),
+  );
+  const raw = Array.isArray(parsed.lines)
+    ? parsed.lines
+    : Array.isArray((parsed as JsonObject).drill_examples)
+      ? ((parsed as JsonObject).drill_examples as unknown[])
+      : [];
+  const out: DrillExample[] = [];
+  for (const item of raw) {
+    if (typeof item === "string") {
+      const text = item.replace(/\s+/g, " ").trim();
+      if (text) {
+        out.push({ label: "FSI drill", text, source: "coach" });
+      }
+      continue;
+    }
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const obj = item as JsonObject;
+    const text = stringValue(obj.text).replace(/\s+/g, " ").trim();
+    if (!text) {
+      continue;
+    }
+    out.push({
+      label: stringValue(obj.label || obj.cue || obj.id).trim() || "FSI drill",
+      text,
+      reason: stringValue(obj.reason || obj.note).trim(),
+      source: "coach",
+    });
+  }
+  return out.slice(0, n);
+}
 
-  const responsesBody = {
-    model,
-    input,
-    text: { format: { type: "json_object" } },
+export function drillGenSystemPrompt(): string {
+  return [
+    "You are an FSI-style English drill writer for a Chinese legal academic.",
+    'Return strict JSON only: {"lines":[{"label":"...","text":"...","reason":"..."}]}.',
+    "Do not wrap the JSON in Markdown fences, comments, explanations, or trailing text.",
+    "Each text is ONE complete, natural spoken English sentence the learner can immediately shadow.",
+    "Stay on the same scenario, frames, and legal-academic register as the task; vary the substitution slot every line.",
+    "label is a short English cue; reason is a brief Chinese note (e.g. 替换 claim 槽位 / 练 nucleus 重音).",
+    "Never repeat or lightly paraphrase any sentence listed in avoid_texts.",
+  ].join(" ");
+}
+
+export function drillGenUserPrompt(state: TrainingState, count: number, existing: string[]): string {
+  const training = state.training;
+  const frames = Array.isArray(training.frames)
+    ? training.frames
+        .map((item) =>
+          typeof item === "object" && item ? stringValue((item as JsonObject).text) : stringValue(item),
+        )
+        .filter(Boolean)
+    : [];
+  const payload: JsonObject = {
+    task: {
+      package_date: stringValue(state.next.package_date),
+      goal: stringValue(training.goal) || stringValue(state.next.goal),
+      scenario: stringValue(training.scenario) || stringValue(state.next.scenario),
+      frames,
+    },
+    learner_profile: state.learnerProfile.loaded
+      ? {
+          source: state.learnerProfile.source,
+          summary: state.learnerProfile.summary,
+        }
+      : null,
+    request: {
+      count,
+      instruction:
+        "Produce fresh FSI substitution lines that extend the existing drill without repeating it.",
+    },
+    avoid_texts: existing.filter(Boolean).slice(0, 40),
+    output_shape: {
+      lines: [
+        {
+          label: "short English cue",
+          text: "one complete spoken English sentence",
+          reason: "brief Chinese note on the substitution or prosody focus",
+        },
+      ],
+    },
   };
+  if (state.drill && Object.keys(state.drill).length) {
+    payload.fsi_drill = state.drill;
+  }
+  return JSON.stringify(payload, null, 2);
+}
+
+async function requestProviderJson(
+  context: vscode.ExtensionContext,
+  system: string,
+  user: string,
+): Promise<JsonObject> {
+  const provider = config<string>("coachProvider") || "gemini";
+  if (provider === "gemini") {
+    const apiKey = await getRequiredKey(context, "gemini");
+    return callGeminiJson(apiKey, config<string>("geminiCoachModel") || "gemini-3-flash-preview", system, user);
+  }
+  if (provider === "openai") {
+    const apiKey = await getRequiredKey(context, "openai");
+    return callOpenAIJson(apiKey, config<string>("openaiCoachModel") || "gpt-4o-mini", system, user);
+  }
+  if (provider === "kimi") {
+    const apiKey = await getRequiredKey(context, "kimi");
+    return callOpenAICompatibleJson(system, user, {
+      provider: "Kimi",
+      baseUrl: config<string>("kimiChatBaseUrl") || "https://api.kimi.com/coding/v1",
+      model: config<string>("kimiCoachModel") || "kimi-for-coding",
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+  }
+  if (provider === "mimo") {
+    const apiKey = await getRequiredKey(context, "mimo");
+    return callAnthropicJson(system, user, {
+      provider: "MiMo",
+      apiKey,
+      baseUrl: config<string>("mimoAnthropicBaseUrl") || MIMO_ANTHROPIC_BASE_URL,
+      model: config<string>("mimoCoachModel") || "mimo-v2.5-pro",
+    });
+  }
+  if (provider === "deepseek") {
+    const apiKey = await getRequiredKey(context, "deepseek");
+    return callAnthropicJson(system, user, {
+      provider: "DeepSeek",
+      apiKey,
+      baseUrl: config<string>("deepseekAnthropicBaseUrl") || DEEPSEEK_ANTHROPIC_BASE_URL,
+      model: config<string>("deepseekCoachModel") || "deepseek-v4-pro",
+    });
+  }
+  const apiKey = await getRequiredKey(context, "minimax");
+  return callAnthropicJson(system, user, {
+    provider: "MiniMax",
+    apiKey,
+    baseUrl: config<string>("minimaxAnthropicBaseUrl") || MINIMAX_ANTHROPIC_BASE_URL,
+    model: config<string>("minimaxCoachModel") || "MiniMax-M2.7",
+  });
+}
+
+async function callOpenAIJson(
+  apiKey: string,
+  model: string,
+  system: string,
+  user: string,
+): Promise<JsonObject> {
+  const input = [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(responsesBody),
+    body: JSON.stringify({ model, input, text: { format: { type: "json_object" } } }),
   });
   const body = await response.text();
   if (response.ok) {
@@ -177,90 +317,18 @@ async function coachWithOpenAI(
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model,
-      messages: input,
-      response_format: { type: "json_object" },
-    }),
+    body: JSON.stringify({ model, messages: input, response_format: { type: "json_object" } }),
   });
   const fallbackBody = await fallback.text();
   if (!fallback.ok) {
-    throw new Error(`OpenAI coaching failed (${fallback.status}): ${fallbackBody.slice(0, 1200)}`);
+    throw new Error(`OpenAI request failed (${fallback.status}): ${fallbackBody.slice(0, 1200)}`);
   }
   return parseLooseJson(extractOpenAIText(JSON.parse(fallbackBody) as JsonObject));
 }
 
-async function coachWithMiniMax(
-  context: vscode.ExtensionContext,
-  state: TrainingState,
-  transcript: string,
-  priorTurn?: CoachPriorTurn,
-  practiceTarget?: PracticeTarget,
-): Promise<JsonObject> {
-  const apiKey = await getRequiredKey(context, "minimax");
-  return coachWithAnthropic(state, transcript, priorTurn, practiceTarget, {
-    provider: "MiniMax",
-    apiKey,
-    baseUrl: config<string>("minimaxAnthropicBaseUrl") || MINIMAX_ANTHROPIC_BASE_URL,
-    model: config<string>("minimaxCoachModel") || "MiniMax-M2.7",
-  });
-}
-
-async function coachWithMimo(
-  context: vscode.ExtensionContext,
-  state: TrainingState,
-  transcript: string,
-  priorTurn?: CoachPriorTurn,
-  practiceTarget?: PracticeTarget,
-): Promise<JsonObject> {
-  const apiKey = await getRequiredKey(context, "mimo");
-  return coachWithAnthropic(state, transcript, priorTurn, practiceTarget, {
-    provider: "MiMo",
-    apiKey,
-    baseUrl: config<string>("mimoAnthropicBaseUrl") || MIMO_ANTHROPIC_BASE_URL,
-    model: config<string>("mimoCoachModel") || "mimo-v2.5-pro",
-  });
-}
-
-async function coachWithKimi(
-  context: vscode.ExtensionContext,
-  state: TrainingState,
-  transcript: string,
-  priorTurn?: CoachPriorTurn,
-  practiceTarget?: PracticeTarget,
-): Promise<JsonObject> {
-  const apiKey = await getRequiredKey(context, "kimi");
-  return coachWithOpenAICompatibleChat(state, transcript, priorTurn, practiceTarget, {
-    provider: "Kimi",
-    baseUrl: config<string>("kimiChatBaseUrl") || "https://api.kimi.com/coding/v1",
-    model: config<string>("kimiCoachModel") || "kimi-for-coding",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-  });
-}
-
-async function coachWithDeepSeek(
-  context: vscode.ExtensionContext,
-  state: TrainingState,
-  transcript: string,
-  priorTurn?: CoachPriorTurn,
-  practiceTarget?: PracticeTarget,
-): Promise<JsonObject> {
-  const apiKey = await getRequiredKey(context, "deepseek");
-  return coachWithAnthropic(state, transcript, priorTurn, practiceTarget, {
-    provider: "DeepSeek",
-    apiKey,
-    baseUrl: config<string>("deepseekAnthropicBaseUrl") || DEEPSEEK_ANTHROPIC_BASE_URL,
-    model: config<string>("deepseekCoachModel") || "deepseek-v4-pro",
-  });
-}
-
-async function coachWithAnthropic(
-  state: TrainingState,
-  transcript: string,
-  priorTurn: CoachPriorTurn | undefined,
-  practiceTarget: PracticeTarget | undefined,
+async function callAnthropicJson(
+  system: string,
+  user: string,
   options: {
     provider: string;
     apiKey: string;
@@ -279,34 +347,27 @@ async function coachWithAnthropic(
     body: JSON.stringify({
       model: options.model,
       max_tokens: 2048,
-      system: coachingSystemPrompt(),
+      system,
       messages: [
         {
           role: "user",
-          content: [
-            {
-              type: "text",
-              text: coachingUserPrompt(state, transcript, priorTurn, practiceTarget),
-            },
-          ],
+          content: [{ type: "text", text: user }],
         },
       ],
     }),
   });
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(`${options.provider} coaching failed (${response.status}): ${body.slice(0, 1200)}`);
+    throw new Error(`${options.provider} request failed (${response.status}): ${body.slice(0, 1200)}`);
   }
   const parsed = JSON.parse(body) as JsonObject;
   const text = extractAnthropicText(parsed);
   return parseLooseJson(stripThinkBlocks(text));
 }
 
-async function coachWithOpenAICompatibleChat(
-  state: TrainingState,
-  transcript: string,
-  priorTurn: CoachPriorTurn | undefined,
-  practiceTarget: PracticeTarget | undefined,
+async function callOpenAICompatibleJson(
+  system: string,
+  user: string,
   options: {
     provider: string;
     baseUrl: string;
@@ -318,8 +379,8 @@ async function coachWithOpenAICompatibleChat(
   const requestBody: JsonObject = {
     model: options.model,
     messages: [
-      { role: "system", content: coachingSystemPrompt() },
-      { role: "user", content: coachingUserPrompt(state, transcript, priorTurn, practiceTarget) },
+      { role: "system", content: system },
+      { role: "user", content: user },
     ],
     stream: false,
   };
@@ -339,20 +400,17 @@ async function coachWithOpenAICompatibleChat(
   });
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(`${options.provider} coaching failed (${response.status}): ${body.slice(0, 1200)}`);
+    throw new Error(`${options.provider} request failed (${response.status}): ${body.slice(0, 1200)}`);
   }
   return parseLooseJson(stripThinkBlocks(extractOpenAIText(JSON.parse(body) as JsonObject)));
 }
 
-async function coachWithGemini(
-  context: vscode.ExtensionContext,
-  state: TrainingState,
-  transcript: string,
-  priorTurn?: CoachPriorTurn,
-  practiceTarget?: PracticeTarget,
+async function callGeminiJson(
+  apiKey: string,
+  model: string,
+  system: string,
+  user: string,
 ): Promise<JsonObject> {
-  const apiKey = await getRequiredKey(context, "gemini");
-  const model = config<string>("geminiCoachModel") || "gemini-3-flash-preview";
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
@@ -360,12 +418,12 @@ async function coachWithGemini(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         systemInstruction: {
-          parts: [{ text: coachingSystemPrompt() }],
+          parts: [{ text: system }],
         },
         contents: [
           {
             role: "user",
-            parts: [{ text: coachingUserPrompt(state, transcript, priorTurn, practiceTarget) }],
+            parts: [{ text: user }],
           },
         ],
         generationConfig: {
@@ -376,11 +434,10 @@ async function coachWithGemini(
   );
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(`Gemini coaching failed (${response.status}): ${body.slice(0, 1200)}`);
+    throw new Error(`Gemini request failed (${response.status}): ${body.slice(0, 1200)}`);
   }
   const parsed = JSON.parse(body) as JsonObject;
-  const text = extractGeminiText(parsed);
-  return parseLooseJson(text);
+  return parseLooseJson(extractGeminiText(parsed));
 }
 
 function extractAnthropicText(parsed: JsonObject): string {
