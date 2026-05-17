@@ -7,6 +7,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.32] — 2026-05-17
+
+A flow-stability and counter-intuitive-design pass over the full practice
+loop: record → transcribe → coach → speak → save → drill.
+
+### Fixed
+- A speech-output (TTS) failure on the main coached reply no longer discards
+  an already-successful transcribe + coach turn. The coaching result is kept
+  and only playback is skipped, matching the existing follow-up TTS behaviour.
+- The record button now ships disabled with a neutral "Checking setup…"
+  status until the first state arrives, closing a window where an early click
+  could start recording before setup had been verified.
+- Stale turn history, drill state, and reply context are now cleared when the
+  active lesson changes, instead of leaking from the previous lesson into the
+  new one.
+- Pressing stop during the brief native-recorder arming window no longer
+  drops the request; it waits for the recorder to start listening.
+- The slow-read host is reset after a slow-read failure so a later retry is
+  no longer blocked.
+- Missing API key errors now name the exact Command Palette command to run
+  (for example "English Training: Configure Gemini API Key") instead of a
+  vague "run the configure command first".
+
+### Changed
+- A deliberate MiniMax speech-output (TTS) choice is no longer silently
+  reverted to Gemini on every activation.
+- Selecting an unsupported provider value now reports a clear error instead
+  of silently doing nothing.
+- The drill "Generate" action is disabled with an explanatory hint until the
+  core key and a lesson are ready, and a persistent reminder is shown while a
+  shadowing example is armed for the next recording.
+
 ## [0.1.31] — 2026-05-17
 
 Supersedes the 0.1.30 Marketplace build, which was published from an

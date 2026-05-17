@@ -127,12 +127,17 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
       if (payload.type === "setProvider") {
         if (payload.setting === "coachProvider" && isCoachProvider(payload.value)) {
           await setProviderSetting("coachProvider", payload.value);
-        }
-        if (payload.setting === "audioUnderstandingProvider" && isAudioUnderstandingProvider(payload.value)) {
+        } else if (payload.setting === "audioUnderstandingProvider" && isAudioUnderstandingProvider(payload.value)) {
           await setProviderSetting("audioUnderstandingProvider", payload.value);
-        }
-        if (payload.setting === "ttsProvider" && isTtsProvider(payload.value)) {
+        } else if (payload.setting === "ttsProvider" && isTtsProvider(payload.value)) {
           await setProviderSetting("ttsProvider", payload.value);
+        } else {
+          // Never let a provider "Use" click silently no-op: the card would
+          // look clickable but dead. Tell the user why it was rejected.
+          this.view.webview.postMessage({
+            type: "error",
+            message: `Cannot use "${stringValue(payload.value)}" for ${stringValue(payload.setting)}.`,
+          });
         }
         return;
       }

@@ -13,7 +13,10 @@ export async function migrateGeminiModelDefaults(): Promise<void> {
   await migrateProviderSetting(settings, "coachProvider", "openai", "gemini");
   await migrateProviderSetting(settings, "coachProvider", "kimi", "gemini");
   await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "gemini");
-  await migrateProviderSetting(settings, "ttsProvider", "minimax", "gemini");
+  // NOTE: do not migrate `ttsProvider: minimax`. MiniMax is a currently
+  // supported, UI-selectable speech-output provider. Migrating it here ran on
+  // every activation and silently reverted a user's deliberate MiniMax TTS
+  // choice back to Gemini after each VS Code restart.
   await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-flash", "gemini-3-flash-preview");
   await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-pro", "gemini-3.1-pro-preview");
   await migrateGeminiSetting(settings, "geminiAudioUnderstandingModel", "gemini-2.5-flash", "gemini-3-flash-preview");
