@@ -167,6 +167,11 @@
         "category": "English Training"
       },
       {
+        "command": "englishTraining.generateNextPackage",
+        "title": "English Training: Generate Next Package",
+        "category": "English Training"
+      },
+      {
         "command": "englishTraining.openMaterialsGuide",
         "title": "English Training: Open Materials Guide",
         "category": "English Training"

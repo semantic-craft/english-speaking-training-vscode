@@ -110,11 +110,59 @@ test("activates without a workspace and registers the command surface", async ()
 
   extension.activate(context);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(registered.length, 28);
+  assert.equal(registered.length, 29);
   assert.ok(registered.includes("englishTraining.openPractice"));
   assert.ok(registered.includes("englishTraining.createSamplePackage"));
+  assert.ok(registered.includes("englishTraining.generateNextPackage"));
   extension.deactivate();
   mockVscode.commands.registerCommand = previousRegisterCommand;
+});
+
+test("exposes a versioned card-schema contract any LLM can consume", () => {
+  const raw = api.cardSchemaContractJson();
+  const schema = JSON.parse(raw);
+  assert.equal(schema.version, api.CARD_SCHEMA_VERSION);
+  assert.equal(schema.schema, "english-training/card-schema");
+  assert.ok(schema.prosodyContract.word_level_prosody.groups, "documents prosody groups");
+  assert.ok(schema.prosodyContract.word_level_prosody.words, "documents sparse stress words");
+  assert.ok(schema.prosodyContract.stress_guide, "documents the stress card fallback");
+  assert.ok(schema.prosodyContract.intonation_guide, "documents the falling-tone card fallback");
+  assert.ok(schema.assets.keys.daily_card && schema.assets.keys.prosody_detail, "documents image assets");
+  assert.ok(Array.isArray(schema.hardRules) && schema.hardRules.length > 0, "states hard rules");
+});
+
+test("scaffolds schema-conformant blank skeletons", () => {
+  const training = api.blankTrainingPackage("2026-06-01");
+  assert.equal(training.date, "2026-06-01");
+  for (const key of ["scenario", "goal", "chinese_setup", "frames", "clean_tts_text", "word_level_prosody"]) {
+    assert.ok(key in training, `skeleton has ${key}`);
+  }
+  const groups = training.word_level_prosody.groups;
+  const words = training.word_level_prosody.words;
+  assert.ok(Array.isArray(groups) && groups.length >= 1);
+  const fallingGroup = groups.find((g) => g.contour === "↘");
+  assert.ok(fallingGroup, "skeleton includes a falling-tone group");
+  assert.ok(words.some((w) => w.stress === "nucleus"), "skeleton includes a nucleus word");
+
+  const drill = api.blankFollowupDrillPackage("2026-06-01");
+  assert.equal(drill.date, "2026-06-01");
+  assert.ok(Array.isArray(drill.rounds) && drill.rounds.length >= 1);
+  assert.ok(drill.shadowing_loop && Array.isArray(drill.shadowing_loop.chunks));
+});
+
+test("builds a provider-agnostic generation prompt embedding the contract and an example", () => {
+  const prompt = api.buildGenerationPrompt({
+    date: "2026-06-02",
+    brief: "Conference small talk about my research",
+    sampleTraining: { date: "2026-06-02", scenario: "demo", clean_tts_text: "Demo line." },
+    sampleDrill: { schema_version: 1, date: "2026-06-02", rounds: [] },
+  });
+  assert.match(prompt, /Card Schema v/);
+  assert.ok(prompt.includes(api.CARD_SCHEMA_VERSION));
+  assert.ok(prompt.includes("2026-06-02"), "targets the requested date");
+  assert.ok(prompt.includes("Conference small talk about my research"), "embeds the learner brief");
+  assert.ok(prompt.includes("english-training/card-schema"), "embeds the machine-readable contract");
+  assert.ok(prompt.includes("english-training.json") && prompt.includes("followup-drill.json"), "states the output contract");
 });
 
 test("accepts a bring-your-own-materials root that only has prebuilt", () => {
