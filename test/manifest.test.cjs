@@ -66,3 +66,15 @@ test("OpenAI TTS source fallback matches package default", () => {
   const packageDefault = packageJson.contributes.configuration.properties["englishTraining.openaiTtsVoice"].default;
   assert.match(ttsSource, new RegExp(`config<string>\\("openaiTtsVoice"\\) \\|\\| "${packageDefault}"`));
 });
+
+test("speech input manifest no longer exposes Azure", () => {
+  const speechInput = packageJson.contributes.configuration.properties["englishTraining.audioUnderstandingProvider"];
+  assert.equal(speechInput.default, "gemini");
+  assert.deepEqual(speechInput.enum, ["gemini", "openai"]);
+  assert.equal(packageJson.contributes.configuration.properties["englishTraining.azureSpeechRegion"], undefined);
+  assert.equal(packageJson.contributes.configuration.properties["englishTraining.azureSpeechLocale"], undefined);
+  assert.equal(
+    packageJson.contributes.commands.some((item) => item.command.includes("Azure")),
+    false,
+  );
+});

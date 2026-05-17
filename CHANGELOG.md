@@ -7,6 +7,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Added a Reading Card panel that displays prebuilt `daily-card.png`,
+  `prosody-detail.png`, `audio/demo.ogg`, stress guide, intonation guide, and
+  word-level prosody from local lesson packages.
+- Documented the package-generation contract for reading-card assets and
+  structured prosody fields so future materials can stay aligned with the VS
+  Code surface.
+- Added interactive FSI drill choices after a practice result, with Listen,
+  Practice, and Skip actions for generated or prebuilt substitution examples.
+
+### Changed
+- Removed Azure from the active speech-input route. Gemini is now the default
+  transcript-matching path, with OpenAI Realtime as the optional low-latency
+  STT route.
+- Shadowing checks now use simple transcript-vs-reference matching instead of
+  Azure-style pronunciation scoring.
+
 ## [0.1.29] — 2026-05-14
 
 ### Added

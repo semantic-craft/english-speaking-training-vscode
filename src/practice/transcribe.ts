@@ -1,4 +1,3 @@
-import { Blob } from "node:buffer";
 import * as cp from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -15,22 +14,17 @@ import {
 } from "../core.js";
 import type { JsonObject } from "../types.js";
 
-const FAST_TRANSCRIPTION_API_VERSION = "2025-10-15";
-
 export async function transcribeAudio(
   context: vscode.ExtensionContext,
   audioPath: string,
   mimeType: string,
   sessionDir: string,
 ): Promise<string> {
-  const provider = config<string>("audioUnderstandingProvider") || "azure";
+  const provider = config<string>("audioUnderstandingProvider") || "gemini";
   if (provider === "openai") {
     return transcribeWithOpenAIRealtime(context, audioPath, sessionDir);
   }
-  if (provider === "gemini") {
-    return transcribeWithGemini(context, audioPath, mimeType, sessionDir);
-  }
-  return transcribeWithAzure(context, audioPath, mimeType, sessionDir);
+  return transcribeWithGemini(context, audioPath, mimeType, sessionDir);
 }
 
 export async function prepareInlineAudio(
@@ -125,111 +119,6 @@ export function extensionFromMime(mimeType: string): string {
   if (mimeType.includes("mp4")) return "mp4";
   if (mimeType.includes("mpeg") || mimeType.includes("mp3")) return "mp3";
   return "webm";
-}
-
-async function transcribeWithAzure(
-  context: vscode.ExtensionContext,
-  audioPath: string,
-  mimeType: string,
-  sessionDir: string,
-): Promise<string> {
-  const apiKey = await getRequiredKey(context, "azure");
-  const region = (config<string>("azureSpeechRegion") || "eastus").trim();
-  const locale = (config<string>("azureSpeechLocale") || "en-US").trim();
-  const uploadPath = await ensureAzureUploadPath(audioPath, mimeType, sessionDir);
-  const audioMime = uploadMimeType(uploadPath);
-  const audioBuffer = fs.readFileSync(uploadPath);
-
-  const form = new FormData();
-  form.append("audio", new Blob([audioBuffer], { type: audioMime }), path.basename(uploadPath));
-  form.append(
-    "definition",
-    JSON.stringify({
-      locales: [locale],
-      profanityFilterMode: "Masked",
-    }),
-  );
-
-  const url = `https://${encodeURIComponent(region)}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe?api-version=${FAST_TRANSCRIPTION_API_VERSION}`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Ocp-Apim-Subscription-Key": apiKey,
-      Accept: "application/json",
-    },
-    body: form,
-  });
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(
-      `Azure fast transcription failed (${response.status}): ${body.slice(0, 1500)}`,
-    );
-  }
-  const text = extractAzureTranscript(JSON.parse(body) as JsonObject).trim();
-  if (!text) {
-    throw new Error("Azure fast transcription returned empty text.");
-  }
-  return text;
-}
-
-async function ensureAzureUploadPath(
-  audioPath: string,
-  mimeType: string,
-  sessionDir: string,
-): Promise<string> {
-  if (isAzureSupportedAudio(audioPath, mimeType)) {
-    return audioPath;
-  }
-  const wavPath = path.join(sessionDir, "azure-fast-transcribe.wav");
-  await convertAudioToWav(audioPath, wavPath);
-  return wavPath;
-}
-
-function isAzureSupportedAudio(audioPath: string, mimeType: string): boolean {
-  const lower = (mimeType || "").toLowerCase();
-  if (
-    lower.includes("wav") ||
-    lower.includes("mpeg") ||
-    lower.includes("mp3") ||
-    lower.includes("ogg") ||
-    lower.includes("flac") ||
-    lower.includes("opus")
-  ) {
-    return true;
-  }
-  const ext = path.extname(audioPath).toLowerCase();
-  return [".wav", ".mp3", ".ogg", ".opus", ".flac"].includes(ext);
-}
-
-function uploadMimeType(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".wav") return "audio/wav";
-  if (ext === ".mp3") return "audio/mpeg";
-  if (ext === ".ogg" || ext === ".opus") return "audio/ogg";
-  if (ext === ".flac") return "audio/flac";
-  return "application/octet-stream";
-}
-
-function extractAzureTranscript(parsed: JsonObject): string {
-  const combined = parsed.combinedPhrases;
-  if (Array.isArray(combined) && combined.length) {
-    const parts = combined
-      .map((entry) => stringValue((entry as JsonObject).text))
-      .filter(Boolean);
-    if (parts.length) {
-      return parts.join(" ").trim();
-    }
-  }
-  const phrases = parsed.phrases;
-  if (Array.isArray(phrases) && phrases.length) {
-    const parts = phrases
-      .map((entry) => stringValue((entry as JsonObject).text))
-      .filter(Boolean);
-    if (parts.length) {
-      return parts.join(" ").trim();
-    }
-  }
-  return stringValue(parsed.displayText);
 }
 
 async function transcribeWithOpenAIRealtime(
@@ -379,7 +268,7 @@ async function transcribeWithGemini(
   const audio = await prepareInlineAudio(audioPath, mimeType, sessionDir);
   const byteLength = Buffer.byteLength(audio.base64, "base64");
   if (byteLength > 18 * 1024 * 1024) {
-    throw new Error("Gemini inline audio limit is close to 20 MB. Use Azure Speech or shorten the recording.");
+    throw new Error("Gemini inline audio limit is close to 20 MB. Shorten the recording or switch speech input to OpenAI Realtime.");
   }
 
   const response = await fetch(

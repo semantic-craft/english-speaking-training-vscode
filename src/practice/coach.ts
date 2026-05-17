@@ -46,13 +46,14 @@ export function coachingSystemPrompt(): string {
     "You are an English speaking coach for a Chinese legal academic.",
     "Return strict JSON only.",
     "Do not wrap the JSON in Markdown fences, comments, explanations, or trailing text.",
-    "Use exactly these top-level keys: native_version, problems, error_tags, scores, quick_fix, shadowing_instruction, follow_up_question, next_drill.",
+    "Use exactly these top-level keys: native_version, problems, error_tags, scores, quick_fix, shadowing_instruction, follow_up_question, next_drill, drill_examples.",
     "Keep every string on one line; escape quotation marks as JSON; do not use trailing commas.",
     "When a shadow_target is provided, it is authoritative: native_version must copy shadow_target.reference_text exactly, and user_transcript is only an STT observation of the learner's imitation.",
     "Focus on natural spoken academic English, not generic encouragement.",
     "If a learner profile is provided, use it to adapt examples, terminology, tone, and follow-up questions.",
     "If prior_turn is present, the user_transcript is the learner replying to that follow_up_question; build on it instead of resetting the conversation.",
     "Without a shadow_target, give one native speaker version, 1-2 concrete problems, one quick fix, one shadowing instruction, and one specific follow-up question.",
+    "Always include drill_examples: 2-4 short FSI-style substitution sentences the learner can immediately shadow next, using the same scenario, frames, or legal-academic topic.",
     "Explanations may be in Chinese, but native_version and follow_up_question must be natural English.",
   ].join(" ");
 }
@@ -105,8 +106,18 @@ export function coachingUserPrompt(
           ? "empty string; this is only a shadowing check"
           : "one specific English follow-up question",
       next_drill: "one short FSI-style drill instruction for the next repetition",
+      drill_examples: [
+        {
+          label: "short cue label",
+          text: "one complete English sentence for FSI substitution or shadowing",
+          reason: "brief Chinese reason, e.g. 替换 claim slot / 练 nucleus stress",
+        },
+      ],
     },
   };
+  if (state.drill && Object.keys(state.drill).length) {
+    payload.fsi_drill = state.drill;
+  }
   if (practiceTarget?.referenceText) {
     payload.shadow_target = {
       mode: practiceTarget.mode,

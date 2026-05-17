@@ -21,10 +21,9 @@ There is no required curriculum length: 7 lessons or 365 lessons both work.
    Folder`.
 3. Click *Create your first lesson* → pick a folder; the extension
    creates `prebuilt/` and `progress/` inside it and writes a starter
-   `prebuilt/<today>/english-training.json` you can edit.
-4. Click *Connect Gemini + Azure* -> save a Gemini API key and an Azure Speech
-   key. That pair completes the core route: Gemini handles coaching and native
-   audio, while Azure handles speech input and scoring.
+   `prebuilt/<today>/english-training.json` plus `followup-drill.json` you can edit.
+4. Click *Connect Gemini* -> save a Gemini API key. That completes the core
+   route: Gemini handles coaching, speech input, and native audio.
 5. Press the red record button.
 
 For the field-by-field schema, run `English Training: Open Materials Guide`
@@ -53,16 +52,43 @@ When found, the sidebar shows **Profile loaded** and the coach receives that
 profile with every practice turn. If no profile exists, the sidebar shows the
 expected path.
 
+## Reading Cards and Prosody
+
+The sidebar now treats the generated Hermes package as the source of truth for
+reading cards. For each `prebuilt/YYYY-MM-DD/` package, it displays these files
+when present:
+
+- `daily-card.png`
+- `prosody-detail.png`
+- `audio/demo.ogg`
+
+If `manifest.json` is present, the extension reads `files.daily_card`,
+`files.prosody_detail`, `files.audio_demo`, `files.audio_queue`, and
+`files.telegram_task_card`; otherwise it falls back to the default paths above.
+
+For new package generation, keep these JSON fields in `english-training.json`:
+
+- `stress_guide`: text with stressed words marked, for example `ˈBROADER`.
+- `intonation_guide`: thought groups separated by `|`, with contours such as
+  `→` and `↘`.
+- `word_level_prosody.groups[]`: `id`, `text`, `function`, `nucleus`,
+  `contour`, and `pause_after`.
+- `word_level_prosody.words[]`: `text`, `stress` (`weak`, `support`,
+  `nucleus`), `pitch_role`, `arrow`, and `group`.
+
+For FSI-style follow-up practice, include `followup-drill.json` with
+`rounds[].examples[].text`. The sidebar turns those examples into Listen /
+Practice / Skip choices after each result, and coach-generated
+`drill_examples[]` can add extra targeted substitution sentences.
+
 ## Provider Defaults
 
 - Coach: Gemini by default with `gemini-3-flash-preview`, plus
   `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, and
   `gemini-3.1-flash-lite-preview` available from the model picker. MiniMax,
   MiMo, OpenAI, Kimi, and DeepSeek remain optional fallbacks.
-- Speech input: Azure Speech by default for transcription and pronunciation
-  assessment workflows; OpenAI Realtime `gpt-realtime-whisper` can be selected
-  for low-latency transcript generation, and Gemini can be selected for general
-  audio understanding with the Gemini 3 model family.
+- Speech input: Gemini by default for transcript matching; OpenAI Realtime
+  `gpt-realtime-whisper` can be selected for low-latency transcript generation.
 - Speech output: Gemini `gemini-3.1-flash-tts-preview` by default. MiniMax and
   OpenAI speech output remain optional fallbacks.
 - The sidebar's **Routes & Models** panel shows the active route, key status,
@@ -74,6 +100,10 @@ expected path.
 - Direct `Record` / `Stop` microphone flow inside the sidebar.
 - Transcript, native-speaker version, concrete problems, repeat instruction,
   and follow-up question returned in the same sidebar.
+- Reading Card panel for prebuilt `daily-card.png`, `prosody-detail.png`,
+  `audio/demo.ogg`, stress guide, intonation guide, and word-level prosody.
+- FSI drill choices after each result: listen to a substitution sentence,
+  practice it as a shadowing target, or skip the extra drill.
 - On-demand *Example audio*: click `Generate Example` to synthesize only the
   lesson example text (`clean_tts_text`, `audio_text`, or `demo_line`) with
   your configured speech-output provider. Scenario and goal background are not
@@ -84,11 +114,10 @@ expected path.
   - `English Training: Configure Gemini API Key`
   - `English Training: Configure MiniMax API Key`
   - `English Training: Configure MiMo API Key`
-  - `English Training: Configure Azure Speech Key`
   - `English Training: Configure Kimi API Key`
   - `English Training: Configure DeepSeek API Key`
 - Route commands:
-  - `English Training: Use Recommended Hybrid Route`
+  - `English Training: Use Gemini Core Route`
   - `English Training: Use Gemini Only`
   - `English Training: Use OpenAI Realtime Speech Input`
 - Local actions:

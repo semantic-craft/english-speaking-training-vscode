@@ -58,6 +58,8 @@ import {
 } from "./practice/tts.js";
 import {
   createSessionDir,
+  drillExamplesFromState,
+  normalizeDrillExamples,
   processPracticeFile,
   readRecentSessionLog,
   splitPracticeText,
@@ -70,6 +72,7 @@ let nativeRecording: NativeRecordingSession | undefined;
 const DEFAULT_BLOCKED_MICROPHONE_PATTERN = "iphone|ipad|continuity|karios";
 const DEFAULT_TIMEZONE = "Asia/Shanghai";
 const LOCAL_MICROPHONE_PATTERN = /\b(imac|macbook|mac mini|mac studio|studio display|built[- ]?in|internal)\b/i;
+type ProviderSettingName = "coachProvider" | "audioUnderstandingProvider" | "ttsProvider";
 type ConfigSettingName =
   | "minimaxCoachModel"
   | "mimoCoachModel"
@@ -79,8 +82,6 @@ type ConfigSettingName =
   | "kimiCoachModel"
   | "deepseekCoachModel"
   | "geminiAudioUnderstandingModel"
-  | "azureSpeechRegion"
-  | "azureSpeechLocale"
   | "minimaxTtsModel"
   | "openaiTtsModel"
   | "openaiTtsVoice"
@@ -140,9 +141,6 @@ export function activate(context: vscode.ExtensionContext): void {
   register("englishTraining.configureDeepSeekKey", async () => {
     await configureApiKey(context, "deepseek");
   });
-  register("englishTraining.configureAzureSpeechKey", async () => {
-    await configureApiKey(context, "azure");
-  });
   register("englishTraining.clearApiKeys", async () => {
     await clearApiKeys(context);
   });
@@ -163,9 +161,6 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   register("englishTraining.useDeepSeekCoach", async () => {
     await setProviderSetting("coachProvider", "deepseek");
-  });
-  register("englishTraining.useAzureAudioUnderstanding", async () => {
-    await setProviderSetting("audioUnderstandingProvider", "azure");
   });
   register("englishTraining.useOpenAIRealtimeAudioUnderstanding", async () => {
     await setProviderSetting("audioUnderstandingProvider", "openai");
@@ -218,16 +213,21 @@ export const __test__ = {
   buildProgressSnapshot,
   chooseLocalAvfoundationAudioDevice,
   dateRangeLabel,
+  drillExamplesFromState,
   extensionFromMime,
   listAvfoundationAudioDevices,
   looksLikeTrainingRoot,
   mimeTypeForAudioPath,
+  normalizedSpeechInputProvider,
   normalizePracticeTargetPayload,
+  normalizeDrillExamples,
   normalizeTtsSpeed,
+  packageAssets,
   parseAvfoundationAudioDevices,
   parseLooseJson,
   speechOutputExtension,
   todayExampleText,
+  toWebviewState,
 };
 
 function pythonPath(): string {
@@ -238,7 +238,7 @@ function trainingSettings(): TrainingState["settings"] {
   return {
     localMaterialsRoot: config<string>("localMaterialsRoot") || "",
     coachProvider: config<string>("coachProvider") || "gemini",
-    audioUnderstandingProvider: config<string>("audioUnderstandingProvider") || "azure",
+    audioUnderstandingProvider: normalizedSpeechInputProvider(),
     ttsProvider: config<string>("ttsProvider") || "gemini",
     openaiCoachModel: config<string>("openaiCoachModel") || "gpt-4o-mini",
     openaiRealtimeTranscriptionModel: config<string>("openaiRealtimeTranscriptionModel") || "gpt-realtime-whisper",
@@ -263,9 +263,15 @@ function trainingSettings(): TrainingState["settings"] {
   };
 }
 
+function normalizedSpeechInputProvider(): string {
+  const provider = config<string>("audioUnderstandingProvider") || "gemini";
+  return provider === "openai" || provider === "gemini" ? provider : "gemini";
+}
+
 async function migrateGeminiModelDefaults(): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
   await migrateProviderSetting(settings, "coachProvider", "minimax", "gemini");
+  await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "gemini");
   await migrateProviderSetting(settings, "ttsProvider", "minimax", "gemini");
   await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-flash", "gemini-3-flash-preview");
   await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-pro", "gemini-3.1-pro-preview");
@@ -278,7 +284,7 @@ async function migrateGeminiModelDefaults(): Promise<void> {
 
 async function migrateProviderSetting(
   settings: vscode.WorkspaceConfiguration,
-  setting: "coachProvider" | "ttsProvider",
+  setting: ProviderSettingName,
   oldDefault: string,
   nextDefault: string,
 ): Promise<void> {
@@ -688,16 +694,40 @@ async function resolveNextPackage(root: string, today: string): Promise<JsonObje
 
 function packageAssets(root: string, packageDate: string): JsonObject {
   const dir = path.join(root, "prebuilt", packageDate);
+  const manifest = readJson(path.join(dir, "manifest.json")) ?? {};
+  const files = (manifest.files && typeof manifest.files === "object" ? manifest.files : {}) as JsonObject;
   return {
     package_dir: dir,
-    task_card: path.join(dir, "telegram-task-card.md"),
-    daily_card: path.join(dir, "daily-card.png"),
-    prosody_detail: path.join(dir, "prosody-detail.png"),
-    json: path.join(dir, "english-training.json"),
-    followup_drill_json: path.join(dir, "followup-drill.json"),
-    followup_drill_md: path.join(dir, "followup-drill.md"),
+    task_card: resolvePackageAsset(dir, files, ["telegram_task_card", "task_card"], "telegram-task-card.md"),
+    daily_card: resolvePackageAsset(dir, files, ["daily_card"], "daily-card.png"),
+    prosody_detail: resolvePackageAsset(dir, files, ["prosody_detail"], "prosody-detail.png"),
+    demo_audio: resolvePackageAsset(dir, files, ["audio_demo", "demo_audio", "audio"], path.join("audio", "demo.ogg")),
+    json: resolvePackageAsset(dir, files, ["json"], "english-training.json"),
+    followup_drill_json: resolvePackageAsset(dir, files, ["followup_drill_json"], "followup-drill.json"),
+    followup_drill_md: resolvePackageAsset(dir, files, ["followup_drill_md"], "followup-drill.md"),
+    audio_queue: resolvePackageAsset(dir, files, ["audio_queue"], "audio-queue.json"),
+    validation_report: resolvePackageAsset(dir, files, ["validation_report"], "validation-report.json"),
     manifest: path.join(dir, "manifest.json"),
   };
+}
+
+function resolvePackageAsset(
+  packageDir: string,
+  manifestFiles: JsonObject,
+  keys: string[],
+  fallbackRelativePath: string,
+): string {
+  const fromManifest = keys
+    .map((key) => stringValue(manifestFiles[key]).trim())
+    .find(Boolean);
+  const candidate = fromManifest || fallbackRelativePath;
+  if (!candidate) {
+    return "";
+  }
+  if (isHttpUrl(candidate) || path.isAbsolute(candidate)) {
+    return candidate;
+  }
+  return path.join(packageDir, candidate);
 }
 
 function todayExampleText(training: JsonObject, next: JsonObject = {}): string {
@@ -782,7 +812,6 @@ async function apiKeyAvailability(context: vscode.ExtensionContext): Promise<Key
     mimo: Boolean(await context.secrets.get(secretKeys.mimo)),
     kimi: Boolean(await context.secrets.get(secretKeys.kimi)),
     deepseek: Boolean(await context.secrets.get(secretKeys.deepseek)),
-    azure: Boolean(await context.secrets.get(secretKeys.azure)),
   };
 }
 
@@ -798,25 +827,12 @@ async function configureApiKey(context: vscode.ExtensionContext, provider: Provi
     return;
   }
   await context.secrets.store(secretKeys[provider], value.trim());
-  if (provider === "azure") {
-    const settings = vscode.workspace.getConfiguration("englishTraining");
-    const currentRegion = (settings.get<string>("azureSpeechRegion") || "").trim() || "eastus";
-    const region = await vscode.window.showInputBox({
-      title: "Azure Speech Region",
-      prompt: "Enter your Azure Speech resource region (eastus, westus, southeastasia, ...).",
-      value: currentRegion,
-      ignoreFocusOut: true,
-    });
-    if (region && region.trim() && region.trim() !== currentRegion) {
-      await settings.update("azureSpeechRegion", region.trim(), vscode.ConfigurationTarget.Global);
-    }
-  }
   vscode.window.showInformationMessage(`${label} API key saved.`);
   await refreshAll();
 }
 
 async function pickAndConfigureProviderKey(context: vscode.ExtensionContext): Promise<void> {
-  const providers: ProviderName[] = ["gemini", "azure", "minimax", "mimo", "openai", "kimi", "deepseek"];
+  const providers: ProviderName[] = ["gemini", "openai", "minimax", "mimo", "kimi", "deepseek"];
   const availability = await apiKeyAvailability(context);
   const items: (vscode.QuickPickItem & { provider: ProviderName })[] = providers.map((provider) => ({
     provider,
@@ -836,13 +852,9 @@ async function pickAndConfigureProviderKey(context: vscode.ExtensionContext): Pr
 }
 
 async function configureCoreRouteKeys(context: vscode.ExtensionContext): Promise<void> {
-  let availability = await apiKeyAvailability(context);
+  const availability = await apiKeyAvailability(context);
   if (!availability.gemini) {
     await configureApiKey(context, "gemini");
-    availability = await apiKeyAvailability(context);
-  }
-  if (!availability.azure) {
-    await configureApiKey(context, "azure");
   }
 }
 
@@ -856,8 +868,6 @@ function isConfigSettingName(value: unknown): value is ConfigSettingName {
     value === "kimiCoachModel" ||
     value === "deepseekCoachModel" ||
     value === "geminiAudioUnderstandingModel" ||
-    value === "azureSpeechRegion" ||
-    value === "azureSpeechLocale" ||
     value === "minimaxTtsModel" ||
     value === "openaiTtsModel" ||
     value === "openaiTtsVoice" ||
@@ -926,8 +936,6 @@ function configSettingLabel(setting: ConfigSettingName): string {
     case "kimiCoachModel": return "Kimi coach model";
     case "deepseekCoachModel": return "DeepSeek coach model";
     case "geminiAudioUnderstandingModel": return "Gemini speech-input model";
-    case "azureSpeechRegion": return "Azure Speech region";
-    case "azureSpeechLocale": return "Azure Speech locale";
     case "minimaxTtsModel": return "MiniMax speech-output model";
     case "openaiTtsModel": return "OpenAI speech-output model";
     case "openaiTtsVoice": return "OpenAI voice";
@@ -938,8 +946,6 @@ function configSettingLabel(setting: ConfigSettingName): string {
 
 function configSettingPrompt(setting: ConfigSettingName): string {
   switch (setting) {
-    case "azureSpeechRegion": return "Azure Speech resource region, for example eastus or southeastasia.";
-    case "azureSpeechLocale": return "BCP-47 locale for recognition and pronunciation assessment, for example en-US or en-GB.";
     case "openaiRealtimeTranscriptionModel": return "OpenAI Realtime transcription model id.";
     case "openaiTtsVoice": return "OpenAI TTS voice name.";
     case "geminiTtsVoice": return "Gemini prebuilt voice name.";
@@ -957,8 +963,6 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
     case "kimiCoachModel": return ["kimi-for-coding"];
     case "deepseekCoachModel": return ["deepseek-v4-pro", "deepseek-v4-flash"];
     case "geminiAudioUnderstandingModel": return GEMINI_TEXT_MODEL_OPTIONS;
-    case "azureSpeechRegion": return ["eastus", "westus", "westus2", "southeastasia", "eastasia"];
-    case "azureSpeechLocale": return ["en-US", "en-GB", "en-AU", "en-CA", "en-IN"];
     case "minimaxTtsModel": return ["speech-2.8-hd", "speech-2.8-turbo"];
     case "openaiTtsModel": return ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"];
     case "openaiTtsVoice": return ["coral", "alloy", "ash", "ballad", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"];
@@ -969,7 +973,6 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
 
 function providerSetupHint(provider: ProviderName): string {
   switch (provider) {
-    case "azure": return "Azure Speech · speech input + Pronunciation Assessment";
     case "gemini": return "Gemini · default coach + native-version TTS";
     case "minimax": return "MiniMax · optional fallback coach + TTS";
     case "mimo": return "Xiaomi MiMo · alternate coach (Token Plan, Anthropic-compatible)";
@@ -1009,7 +1012,7 @@ async function configureLocalMaterialsRoot(): Promise<void> {
   await refreshAll();
 }
 
-async function setProviderSetting(setting: "coachProvider" | "audioUnderstandingProvider" | "ttsProvider", value: string): Promise<void> {
+async function setProviderSetting(setting: ProviderSettingName, value: string): Promise<void> {
   await vscode.workspace.getConfiguration("englishTraining").update(setting, value, vscode.ConfigurationTarget.Workspace);
   vscode.window.showInformationMessage(`English Training ${providerSettingLabel(setting)} provider set to ${value}.`);
   await refreshAll();
@@ -1027,9 +1030,9 @@ async function setGeminiOnlyProviders(): Promise<void> {
 async function setRecommendedHybridProviders(): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
   await settings.update("coachProvider", "gemini", vscode.ConfigurationTarget.Workspace);
-  await settings.update("audioUnderstandingProvider", "azure", vscode.ConfigurationTarget.Workspace);
+  await settings.update("audioUnderstandingProvider", "gemini", vscode.ConfigurationTarget.Workspace);
   await settings.update("ttsProvider", "gemini", vscode.ConfigurationTarget.Workspace);
-  vscode.window.showInformationMessage("English Training recommended route enabled: Gemini coach + Azure speech input/scoring + Gemini speech output.");
+  vscode.window.showInformationMessage("English Training recommended route enabled: Gemini coach + Gemini speech input + Gemini speech output.");
   await refreshAll();
 }
 
@@ -1057,7 +1060,7 @@ async function setMinimaxVoiceId(voiceId: string, pinTurbo: boolean): Promise<vo
   await refreshAll();
 }
 
-function providerSettingLabel(setting: "coachProvider" | "audioUnderstandingProvider" | "ttsProvider"): string {
+function providerSettingLabel(setting: ProviderSettingName): string {
   if (setting === "coachProvider") return "coach";
   if (setting === "audioUnderstandingProvider") return "speech input";
   return "speech output";
@@ -1936,6 +1939,70 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
     }
     .loop-actions button { min-height: 32px; }
     .loop-actions button.slow-read-btn { min-height: 22px; padding: 3px 9px; font-size: 11px; }
+    .fsi-choice-card {
+      border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--accent) 7%, var(--vscode-editor-background));
+      padding: 10px;
+      margin: 12px 0;
+    }
+    .fsi-choice-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .fsi-choice-head strong {
+      font-size: 12px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .fsi-choice-head span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .drill-example-list {
+      display: grid;
+      gap: 7px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .drill-example {
+      display: grid;
+      gap: 6px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: var(--vscode-editor-background);
+      padding: 8px;
+    }
+    .drill-example-label {
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .drill-example-text {
+      margin: 0;
+      line-height: 1.45;
+    }
+    .drill-example-reason {
+      margin: -2px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .drill-example-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .drill-example-actions button {
+      min-height: 25px;
+      padding: 2px 8px;
+      font-size: 11px;
+    }
     .result-details {
       margin: 10px 0;
       border-top: 1px dashed var(--border);
@@ -2157,6 +2224,125 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       vertical-align: 1px;
     }
     .field { margin-top: 10px; }
+    .reading-media {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .reading-media details {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--soft);
+      overflow: hidden;
+    }
+    .reading-media summary {
+      cursor: pointer;
+      padding: 7px 9px;
+      font-size: 11px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      user-select: none;
+    }
+    .reading-card-img {
+      display: block;
+      width: 100%;
+      max-height: 520px;
+      object-fit: contain;
+      border-top: 1px solid var(--border);
+      background: #fff;
+    }
+    .prosody-guide-grid {
+      display: grid;
+      gap: 7px;
+      margin-top: 8px;
+    }
+    .prosody-guide {
+      padding: 8px 9px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--soft);
+    }
+    .prosody-guide .label { margin-bottom: 4px; }
+    .prosody-guide p {
+      margin: 0;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .prosody-groups {
+      display: grid;
+      gap: 6px;
+    }
+    .prosody-group {
+      display: grid;
+      gap: 4px;
+      padding: 7px 8px;
+      border-left: 2px solid var(--accent);
+      background: var(--soft);
+    }
+    .prosody-group-text {
+      line-height: 1.45;
+    }
+    .prosody-group-meta {
+      color: var(--muted);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+    .prosody-word-rows {
+      display: grid;
+      gap: 10px;
+    }
+    .prosody-word-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      padding-bottom: 8px;
+      border-bottom: 1px dashed var(--border);
+    }
+    .prosody-word-row:last-child { border-bottom: 0; padding-bottom: 0; }
+    .prosody-row-label {
+      flex-basis: 100%;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 1px;
+    }
+    .prosody-word {
+      display: inline-grid;
+      grid-template-columns: auto auto;
+      align-items: baseline;
+      gap: 4px;
+      min-height: 27px;
+      padding: 3px 7px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--soft);
+      font-size: 12px;
+      line-height: 1.2;
+    }
+    .prosody-word.weak {
+      color: var(--muted);
+      background: color-mix(in srgb, var(--vscode-editor-foreground) 6%, transparent);
+    }
+    .prosody-word.support {
+      border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+      background: color-mix(in srgb, var(--accent) 14%, transparent);
+      color: var(--vscode-editor-foreground);
+    }
+    .prosody-word.nucleus {
+      border-color: color-mix(in srgb, var(--vscode-errorForeground, #e51400) 72%, var(--border));
+      background: color-mix(in srgb, var(--vscode-errorForeground, #e51400) 16%, transparent);
+      color: var(--vscode-editor-foreground);
+      font-weight: 650;
+    }
+    .prosody-mark {
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .04em;
+    }
+    .prosody-word.nucleus .prosody-mark {
+      color: var(--vscode-errorForeground, #e51400);
+    }
     .label {
       display: block;
       color: var(--muted);
@@ -2227,6 +2413,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
     <section class="panel onboarding-panel" id="onboarding" hidden></section>
     <section class="panel progress-panel" id="progress" hidden></section>
     <section class="panel" id="task"></section>
+    <section class="panel" id="readingCard" hidden></section>
     <section class="panel" id="diagnostics"></section>
     <section class="panel" id="learnerProfile"></section>
     <section class="panel" id="drill"></section>
@@ -2267,6 +2454,8 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
     let pendingPracticeTarget = null;
     let activeRecordingTarget = null;
     let currentExampleText = "";
+    let currentDrillSuggestions = [];
+    let pendingSlowReadHost = null;
     const STAGES = ["transcribe", "coach", "tts", "save"];
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -2395,10 +2584,10 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       const next = state.next || {};
       const training = state.training || {};
       const drill = state.drill || {};
-	      const settings = state.settings || {};
-	      const assets = next.assets || {};
-	      const todayAudioText = training.tts_example_text || training.clean_tts_text || training.audio_text || training.demo_line || "";
-	      currentExampleText = todayAudioText;
+      const settings = state.settings || {};
+      const assets = next.assets || {};
+      const todayAudioText = training.tts_example_text || training.clean_tts_text || training.audio_text || training.demo_line || "";
+      currentExampleText = todayAudioText;
       renderOnboarding(state);
       renderProgress(state.progress);
       renderSourceDiagnostics(state.sourceDiagnostics);
@@ -2412,7 +2601,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         <div class="chips">
           <span class="chip">\${esc(state.source || "local")} source</span>
           <span class="chip">\${esc(settings.coachProvider || "gemini")} coach</span>
-          <span class="chip">\${esc(settings.audioUnderstandingProvider || "azure")} speech in</span>
+          <span class="chip">\${esc(settings.audioUnderstandingProvider || "gemini")} speech in</span>
           <span class="chip">\${esc(settings.ttsProvider || "gemini")} speech out</span>
           <span class="chip">\${esc(next.training_type || "practice")}</span>
         </div>
@@ -2422,6 +2611,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         <div class="field"><span class="label">Example text</span><p class="text">\${esc(todayAudioText)}</p></div>
         <div class="field">
           <span class="label">Example audio</span>
+          \${prebuiltDemoAudio(assets)}
           <div class="row">
             <button class="secondary" data-action="today-tts" \${todayAudioText ? "" : "disabled"}>Generate Example</button>
             <span class="muted" id="todayTtsStatus">Reads example only, with \${esc(settings.ttsProvider || "gemini")}</span>
@@ -2429,6 +2619,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
           <audio id="todayAudio" controls hidden></audio>
         </div>
       \`;
+      renderReadingCard(training, assets);
       $("drill").innerHTML = \`
         <h3>Drill</h3>
         <div class="chips">
@@ -2519,8 +2710,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       openai: "OpenAI",
       gemini: "Gemini",
       kimi: "Kimi",
-      deepseek: "DeepSeek",
-      azure: "Azure"
+      deepseek: "DeepSeek"
     };
 
     const PROVIDER_ROUTES = {
@@ -2533,9 +2723,8 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         { value: "deepseek", label: "DeepSeek", note: "reasoning alternate", modelSetting: "deepseekCoachModel" },
       ],
       audioUnderstandingProvider: [
-        { value: "azure", label: "Azure", note: "scoring route", modelSetting: "azureSpeechRegion", extraSetting: "azureSpeechLocale", modelLabel: "Region" },
-        { value: "openai", label: "OpenAI Realtime", note: "live transcript", modelSetting: "openaiRealtimeTranscriptionModel" },
-        { value: "gemini", label: "Gemini", note: "audio understanding", modelSetting: "geminiAudioUnderstandingModel" },
+        { value: "gemini", label: "Gemini", note: "default STT match", modelSetting: "geminiAudioUnderstandingModel" },
+        { value: "openai", label: "OpenAI Realtime", note: "low-latency STT", modelSetting: "openaiRealtimeTranscriptionModel" },
       ],
       ttsProvider: [
         { value: "gemini", label: "Gemini", note: "default TTS", modelSetting: "geminiTtsModel", extraSetting: "geminiTtsVoice", extraLabel: "Voice" },
@@ -2550,9 +2739,6 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
 
     function providerModelSummary(setting, option, settings) {
       if (!settings) return "";
-      if (setting === "audioUnderstandingProvider" && option.value === "azure") {
-        return "Region: " + esc(settings.azureSpeechRegion || "eastus") + " · Locale: " + esc(settings.azureSpeechLocale || "en-US");
-      }
       if (!option.modelSetting) return "";
       const model = settings[option.modelSetting] || "";
       const extra = option.extraSetting ? settings[option.extraSetting] || "" : "";
@@ -2620,7 +2806,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
     }
 
     function keyStripHtml(keys) {
-      return '<div class="key-strip">' + ["gemini", "azure", "minimax", "mimo", "openai", "kimi", "deepseek"].map((name) => {
+      return '<div class="key-strip">' + ["gemini", "openai", "minimax", "mimo", "kimi", "deepseek"].map((name) => {
         const saved = keys && keys[name];
         return '<button class="key-pill ' + (saved ? "saved" : "") + '" data-key="' + esc(name) + '">' + esc(providerLabel(name)) + ': ' + (saved ? "saved" : "missing") + '</button>';
       }).join("") + '</div>';
@@ -2637,7 +2823,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
           routeSummaryHtml("Speech out", "ttsProvider", settings),
         '</div>',
         '<div class="provider-presets">',
-          '<button class="secondary" id="useRecommendedHybrid">Gemini + Azure</button>',
+          '<button class="secondary" id="useRecommendedHybrid">Gemini core</button>',
           '<button class="secondary" id="useGeminiOnly">Gemini only</button>',
         '</div>',
         providerRoleHtml("Coach", "coachProvider", settings, keys),
@@ -2719,7 +2905,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       const panel = $("onboarding");
       if (!panel) return;
       const keys = (currentState && currentState.keys) || {};
-      const coreKeysReady = Boolean(keys.gemini && keys.azure);
+      const coreKeysReady = Boolean(keys.gemini);
       const source = currentState && currentState.source;
       const sourceLabel = currentState && currentState.sourceLabel;
       const sourceConfigured = Boolean(sourceLabel) || source === "local";
@@ -2738,8 +2924,8 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         ? { state: "done", title: "Lesson library ready", hint: progress.total + " lesson" + (progress.total === 1 ? "" : "s") + " in prebuilt/", action: "" }
         : { state: "active", title: "Create your first lesson", hint: "Writes a starter prebuilt/<today>/english-training.json", action: '<button class="primary" data-onboard="create-sample">Create sample</button>' };
       const keyStep = coreKeysReady
-        ? { state: "done", title: "Gemini + Azure ready", hint: "Core practice route is fully configured", action: "" }
-        : { state: "active", title: "Connect Gemini + Azure", hint: "Gemini handles coach/TTS; Azure handles speech input and scoring", action: '<button class="primary" data-onboard="provider-key">Set up</button>' };
+        ? { state: "done", title: "Gemini ready", hint: "Core practice route is fully configured", action: "" }
+        : { state: "active", title: "Connect Gemini", hint: "Gemini handles coach, speech input, and speech output", action: '<button class="primary" data-onboard="provider-key">Set up</button>' };
       const steps = [sourceStep, lessonStep, keyStep].filter(Boolean);
       const renderedSteps = steps.map((step, idx) => {
         const mark = step.state === "done" ? "✓" : String(idx + 1);
@@ -2853,6 +3039,145 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       \`;
     }
 
+    function prebuiltDemoAudio(assets) {
+      const uri = assets && assets.demo_audio_uri;
+      if (!uri) return "";
+      return '<audio id="prebuiltDemoAudio" controls preload="metadata" src="' + esc(uri) + '"></audio>';
+    }
+
+    function renderReadingCard(training, assets) {
+      const panel = $("readingCard");
+      if (!panel) return;
+      const mediaHtml = readingCardMediaHtml(assets || {});
+      const guidesHtml = prosodyGuidesHtml(training || {});
+      const groupsHtml = prosodyGroupsHtml((training && training.word_level_prosody) || null);
+      const wordsHtml = prosodyWordsHtml((training && training.word_level_prosody) || null);
+      if (!mediaHtml && !guidesHtml && !groupsHtml && !wordsHtml) {
+        panel.hidden = true;
+        panel.innerHTML = "";
+        return;
+      }
+      panel.hidden = false;
+      panel.innerHTML = [
+        '<h3>Reading Card</h3>',
+        mediaHtml,
+        guidesHtml,
+        groupsHtml,
+        wordsHtml,
+      ].filter(Boolean).join("");
+    }
+
+    function readingCardMediaHtml(assets) {
+      const daily = readingImageDetails("Daily card", assets.daily_card_uri, true);
+      const detail = readingImageDetails("Prosody detail", assets.prosody_detail_uri, false);
+      if (!daily && !detail) return "";
+      return '<div class="reading-media">' + daily + detail + '</div>';
+    }
+
+    function readingImageDetails(label, uri, open) {
+      if (!uri) return "";
+      return '<details ' + (open ? "open" : "") + '><summary>' + esc(label) + '</summary>' +
+        '<img class="reading-card-img" loading="lazy" src="' + esc(uri) + '" alt="' + esc(label) + '">' +
+        '</details>';
+    }
+
+    function prosodyGuidesHtml(training) {
+      const stress = prosodyGuideBlock("Stress guide", training.stress_guide);
+      const intonation = prosodyGuideBlock("Intonation guide", training.intonation_guide);
+      if (!stress && !intonation) return "";
+      return '<div class="prosody-guide-grid">' + stress + intonation + '</div>';
+    }
+
+    function prosodyGuideBlock(label, value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      return '<div class="prosody-guide"><span class="label">' + esc(label) + '</span><p>' + esc(text) + '</p></div>';
+    }
+
+    function prosodyGroupsHtml(wordLevel) {
+      const groups = wordLevel && Array.isArray(wordLevel.groups) ? wordLevel.groups : [];
+      if (!groups.length) return "";
+      const items = groups.map((group, index) => {
+        const id = group && group.id != null ? group.id : index + 1;
+        const meta = [
+          group && group.function ? "Function: " + group.function : "",
+          group && group.nucleus ? "Nucleus: " + group.nucleus : "",
+          group && group.contour ? "Contour: " + group.contour : "",
+          group && group.pause_after ? "Pause: " + group.pause_after : "",
+        ].filter(Boolean).join(" | ");
+        return '<div class="prosody-group">' +
+          '<span class="prosody-row-label">Group ' + esc(id) + '</span>' +
+          '<span class="prosody-group-text">' + esc((group && group.text) || "") + '</span>' +
+          (meta ? '<span class="prosody-group-meta">' + esc(meta) + '</span>' : '') +
+          '</div>';
+      }).join("");
+      return '<div class="field"><span class="label">Thought groups</span><div class="prosody-groups">' + items + '</div></div>';
+    }
+
+    function prosodyWordsHtml(wordLevel) {
+      const words = wordLevel && Array.isArray(wordLevel.words) ? wordLevel.words : [];
+      if (!words.length) return "";
+      const groups = wordLevel && Array.isArray(wordLevel.groups) ? wordLevel.groups : [];
+      const byGroup = new Map();
+      const order = [];
+      for (const group of groups) {
+        const key = String(group && group.id != null ? group.id : "");
+        if (key && !byGroup.has(key)) {
+          byGroup.set(key, []);
+          order.push(key);
+        }
+      }
+      for (const word of words) {
+        const key = String(word && word.group != null ? word.group : "all");
+        if (!byGroup.has(key)) {
+          byGroup.set(key, []);
+          order.push(key);
+        }
+        byGroup.get(key).push(word);
+      }
+      const rows = order.map((key) => {
+        const group = groups.find((item) => String(item && item.id) === key) || {};
+        const label = key === "all" ? "Words" : "Group " + key;
+        const meta = group && group.contour ? " | Contour: " + group.contour : "";
+        const chips = (byGroup.get(key) || []).map(prosodyWordChip).join("");
+        return '<div class="prosody-word-row">' +
+          '<span class="prosody-row-label">' + esc(label + meta) + '</span>' +
+          chips +
+          '</div>';
+      }).join("");
+      return '<div class="field"><span class="label">Word-level prosody</span><div class="prosody-word-rows">' + rows + '</div></div>';
+    }
+
+    function prosodyWordChip(word) {
+      const stress = String((word && word.stress) || "").toLowerCase();
+      const cls = prosodyStressClass(stress);
+      const mark = prosodyWordMark(word, cls);
+      const title = [
+        word && word.stress ? "Stress: " + word.stress : "",
+        word && word.pitch_role ? "Pitch: " + word.pitch_role : "",
+        word && word.arrow ? "Arrow: " + word.arrow : "",
+      ].filter(Boolean).join(" | ");
+      return '<span class="prosody-word ' + cls + '" title="' + esc(title) + '">' +
+        '<span>' + esc((word && word.text) || "") + '</span>' +
+        '<span class="prosody-mark">' + esc(mark) + '</span>' +
+        '</span>';
+    }
+
+    function prosodyStressClass(stress) {
+      if (stress.includes("nucleus")) return "nucleus";
+      if (stress.includes("support")) return "support";
+      if (stress.includes("weak") || stress.includes("unstress")) return "weak";
+      return "neutral";
+    }
+
+    function prosodyWordMark(word, cls) {
+      const arrow = String((word && word.arrow) || "").trim();
+      if (cls === "nucleus") return arrow ? "N " + arrow : "N";
+      if (cls === "support") return arrow ? "S " + arrow : "S";
+      if (cls === "weak") return arrow ? "W " + arrow : "W";
+      return arrow || String((word && word.stress) || "").trim();
+    }
+
     function frames(value) {
       if (!Array.isArray(value) || value.length === 0) return '<p class="muted">No frames.</p>';
       return '<ol>' + value.map((item) => '<li>' + esc((item && item.text) || item) + '</li>').join("") + '</ol>';
@@ -2867,11 +3192,16 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       if (!Array.isArray(value) || value.length === 0) return '<p class="muted">No drill rounds.</p>';
       return value.map((round) => {
         const examples = Array.isArray(round.examples) ? round.examples : [];
+        const roundLabel = round.label || round.id || "Round";
         return \`
           <div class="field">
-            <strong>\${esc(round.label || round.id || "Round")}</strong>
+            <strong>\${esc(roundLabel)}</strong>
             \${round.base_frame ? '<p class="text">' + esc(round.base_frame) + '</p>' : ''}
-            \${examples.length ? '<ol>' + examples.map((item) => '<li><span class="muted">' + esc(item.cue || item.label || "") + '</span> ' + esc(item.text || item) + '</li>').join("") + '</ol>' : ''}
+            \${examples.length ? '<ol class="drill-example-list">' + examples.map((item) => {
+              const text = typeof item === "string" ? item : (item.text || "");
+              const label = (typeof item === "object" && item ? (item.cue || item.label) : "") || roundLabel;
+              return drillExampleHtml({ label, text, source: "prebuilt" }, {});
+            }).join("") + '</ol>' : ''}
           </div>
         \`;
       }).join("");
@@ -3085,6 +3415,10 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       return String(word || "").toLowerCase().replace(/[^a-z0-9']/gi, "");
     }
 
+    function normalizeComparable(text) {
+      return String(text || "").toLowerCase().replace(/[^a-z0-9']+/gi, " ").trim();
+    }
+
     function wordDiff(left, right) {
       const a = (String(left || "").match(/\\S+/g)) || [];
       const b = (String(right || "").match(/\\S+/g)) || [];
@@ -3133,6 +3467,101 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         if (mark === "added") return '<span class="diff-added">' + safe + '</span>';
         return safe;
       }).join(" ");
+    }
+
+    function pushDrillExample(list, item, fallbackLabel, source) {
+      if (!item) return;
+      const text = typeof item === "string" ? item : (item.text || "");
+      const cleanText = String(text || "").replace(/\\s+/g, " ").trim();
+      if (!cleanText) return;
+      const label = typeof item === "object"
+        ? String(item.label || item.cue || item.id || fallbackLabel || "FSI drill").trim()
+        : String(fallbackLabel || "FSI drill");
+      const reason = typeof item === "object" ? String(item.reason || item.note || "").trim() : "";
+      list.push({ label, text: cleanText, reason, source: source || (item.source || "") });
+    }
+
+    function collectDrillExamples(result) {
+      const list = [];
+      if (Array.isArray(result && result.drillExamples)) {
+        result.drillExamples.forEach((item, idx) => pushDrillExample(list, item, item.label || "Coach drill " + (idx + 1), item.source || "coach"));
+      }
+      const drill = (state && state.drill) || {};
+      const rounds = Array.isArray(drill.rounds) ? drill.rounds : [];
+      rounds.forEach((round) => {
+        const roundLabel = String((round && (round.label || round.id)) || "FSI drill");
+        const examples = Array.isArray(round && round.examples) ? round.examples : [];
+        examples.forEach((item) => pushDrillExample(list, item, roundLabel, "prebuilt"));
+      });
+      const chunks = drill && drill.shadowing_loop && Array.isArray(drill.shadowing_loop.chunks)
+        ? drill.shadowing_loop.chunks
+        : [];
+      chunks.forEach((item, idx) => pushDrillExample(list, item, "Shadowing chunk " + (idx + 1), "prebuilt"));
+
+      const blocked = new Set([
+        normalizeComparable(result && result.nativeVersion),
+        normalizeComparable(result && result.referenceText),
+        normalizeComparable(result && result.transcript),
+      ].filter(Boolean));
+      const seen = new Set();
+      return list.filter((item) => {
+        const key = normalizeComparable(item.text);
+        if (!key || seen.has(key) || blocked.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, 5);
+    }
+
+    function drillChoiceHtml(examples) {
+      if (!Array.isArray(examples) || !examples.length) return "";
+      const items = examples.map((example, index) => drillExampleHtml(example, { index })).join("");
+      return '<div class="fsi-choice-card">' +
+        '<div class="fsi-choice-head"><strong>FSI next lines</strong><span>choose practice or skip</span></div>' +
+        '<ol class="drill-example-list">' + items + '</ol>' +
+        '<div class="loop-actions"><button class="secondary" data-drill-skip="1">Skip drill</button></div>' +
+      '</div>';
+    }
+
+    function drillExampleHtml(example, options) {
+      const indexAttr = options && options.index != null ? ' data-drill-index="' + esc(options.index) + '"' : '';
+      const textAttr = indexAttr ? '' : ' data-drill-text="' + esc(example.text || "") + '" data-drill-label="' + esc(example.label || "FSI drill") + '"';
+      return '<li class="drill-example">' +
+        '<span class="drill-example-label">' + esc(example.label || "FSI drill") + '</span>' +
+        '<p class="drill-example-text">' + esc(example.text || "") + '</p>' +
+        (example.reason ? '<p class="drill-example-reason">' + esc(example.reason) + '</p>' : '') +
+        '<div class="drill-example-actions">' +
+          '<button class="secondary" data-drill-listen="1"' + indexAttr + textAttr + '>Listen</button>' +
+          '<button data-drill-practice="1"' + indexAttr + textAttr + '>Practice</button>' +
+        '</div>' +
+      '</li>';
+    }
+
+    function drillExampleFromTrigger(trigger) {
+      const idx = Number(trigger.dataset.drillIndex);
+      if (Number.isFinite(idx) && idx >= 0 && currentDrillSuggestions[idx]) {
+        return currentDrillSuggestions[idx];
+      }
+      const text = String(trigger.dataset.drillText || "").trim();
+      if (!text) return null;
+      return {
+        label: String(trigger.dataset.drillLabel || "FSI drill").trim(),
+        text,
+      };
+    }
+
+    function startDrillPractice(example) {
+      if (!example || !String(example.text || "").trim()) return;
+      pendingReplyContext = null;
+      pendingPracticeTarget = practiceTarget(example.text, example.label || "FSI drill", "");
+      vscode.postMessage({ type: "clearReplyContext" });
+      setStatus("FSI drill ready: " + (example.label || "next line"));
+      const cta = $("record");
+      if (cta && typeof cta.scrollIntoView === "function") {
+        cta.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      if (!isRecording()) {
+        startRecording().catch((error) => setStatus(error.message || String(error), "error"));
+      }
     }
 
     function followUpCardHtml(result, followUpAudioSrc) {
@@ -3223,6 +3652,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
 	      const isShadow = result && result.mode === "shadow";
 	      const nativeLabel = isShadow ? (result.referenceLabel || "Reference") : "Native says";
 	      const heading = isShadow ? "Shadowing check" : "Coaching";
+      currentDrillSuggestions = collectDrillExamples(result || {});
       const tagsHtml = Array.isArray(result.errorTags) && result.errorTags.length
         ? '<div class="chips">' + result.errorTags.map((tag) => '<span class="chip">' + esc(tag) + '</span>').join("") + '</div>'
         : '<p class="muted">No tags.</p>';
@@ -3261,6 +3691,7 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         <div class="loop-actions">
           <button class="secondary" data-loop-action="imitate">Imitate native</button>
         </div>
+        \${drillChoiceHtml(currentDrillSuggestions)}
         <details class="result-details">
           <summary>More details</summary>
           <div class="field"><span class="label">Problems</span>\${problemsHtml}</div>
@@ -3311,6 +3742,31 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
       const breadcrumbTrigger = event.target.closest && event.target.closest("[data-turn-index]");
       if (breadcrumbTrigger) {
         if (focusTurnChip(breadcrumbTrigger)) return;
+      }
+      const drillListenTrigger = event.target.closest && event.target.closest("[data-drill-listen]");
+      if (drillListenTrigger) {
+        const example = drillExampleFromTrigger(drillListenTrigger);
+        if (!example || !String(example.text || "").trim()) return;
+        pendingSlowReadHost = drillListenTrigger.closest(".drill-example");
+        drillListenTrigger.disabled = true;
+        drillListenTrigger.dataset.busy = "1";
+        drillListenTrigger.textContent = "Listening…";
+        vscode.postMessage({ type: "slowRead", text: example.text, target: "drill", speed: 0.85 });
+        return;
+      }
+      const drillPracticeTrigger = event.target.closest && event.target.closest("[data-drill-practice]");
+      if (drillPracticeTrigger) {
+        const example = drillExampleFromTrigger(drillPracticeTrigger);
+        startDrillPractice(example);
+        return;
+      }
+      const drillSkipTrigger = event.target.closest && event.target.closest("[data-drill-skip]");
+      if (drillSkipTrigger) {
+        const card = drillSkipTrigger.closest(".fsi-choice-card");
+        if (card) card.hidden = true;
+        currentDrillSuggestions = [];
+        setStatus("FSI drill skipped. Ready for free practice.");
+        return;
       }
       const slowTrigger = event.target.closest && event.target.closest("[data-slow-read]");
       if (slowTrigger) {
@@ -3483,6 +3939,13 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
             btn.textContent = btn.dataset.slowRead === "followUp" ? "🐢 Slow read" : "🐢 Slow";
           }
         });
+        document.querySelectorAll('[data-drill-listen]').forEach((btn) => {
+          if (btn.dataset.busy === "1") {
+            btn.disabled = false;
+            delete btn.dataset.busy;
+            btn.textContent = "Listen";
+          }
+        });
         if (message.error) {
           setStatus("Slow read failed: " + message.error, "error");
           return;
@@ -3499,7 +3962,9 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
           }
           const followUpCard = document.querySelector(".follow-up-card");
           const nativeSide = document.querySelector('.ab-side audio#nativeAudio');
-          const host = message.target === "followUp" && followUpCard
+          const host = message.target === "drill" && pendingSlowReadHost
+            ? pendingSlowReadHost
+            : message.target === "followUp" && followUpCard
             ? followUpCard
             : (nativeSide ? nativeSide.parentNode : null);
           if (host && player.parentNode !== host) {
@@ -3508,6 +3973,9 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
           player.src = message.result.audioDataUri;
           player.hidden = false;
           player.play().catch(() => {});
+          if (message.target === "drill") {
+            pendingSlowReadHost = null;
+          }
         }
       }
       if (message.type === "todayTtsResult") {
@@ -4015,7 +4483,8 @@ async function createSamplePackage(context: vscode.ExtensionContext): Promise<vo
   }
   fs.mkdirSync(packageDir, { recursive: true });
   writeJson(targetFile, sampleTrainingPackage(targetDate));
-  vscode.window.showInformationMessage(`Sample lesson written to prebuilt/${targetDate}/english-training.json. Edit it and refresh the sidebar.`);
+  writeJson(path.join(packageDir, "followup-drill.json"), sampleFollowupDrillPackage(targetDate));
+  vscode.window.showInformationMessage(`Sample lesson and FSI drill written to prebuilt/${targetDate}. Edit them and refresh the sidebar.`);
   await vscode.window.showTextDocument(vscode.Uri.file(targetFile));
   await refreshAll();
 }
@@ -4083,11 +4552,109 @@ function sampleTrainingPackage(date: string): JsonObject {
       "I work on legal issues around AI and platforms. Right now I'm especially focused on user-authorized agents. More broadly, I'm interested in how law should respond when technology changes who acts and who controls.",
     clean_tts_text:
       "I work on legal issues around AI and platforms. Right now I'm especially focused on user-authorized agents. More broadly, I'm interested in how law should respond when technology changes who acts and who controls.",
+    stress_guide:
+      "I ˈWORK on ˈLEGAL ˈISSUES around ˈAI and ˈPLATFORMS. ˈRIGHT ˈNOW I'm ˈESPECIALLY ˈFOCUSED on ˈUSER-AUTHORIZED ˈAGENTS. ˈMORE ˈBROADLY, I'm ˈINTERESTED in how ˈLAW should ˈRESPOND when ˈTECHNOLOGY ˈCHANGES who ˈACTS and who ˈCONTROLS.",
+    intonation_guide:
+      "I work on legal issues around AI and platforms. → | Right now I'm especially focused on user-authorized agents. → | More broadly, I'm interested in how law should respond when technology changes who acts and who controls. ↘",
+    word_level_prosody: {
+      groups: [
+        {
+          id: 1,
+          text: "I work on legal issues around AI and platforms.",
+          function: "statement",
+          nucleus: "platforms.",
+          contour: "→",
+          pause_after: "short",
+        },
+        {
+          id: 2,
+          text: "Right now I'm especially focused on user-authorized agents.",
+          function: "statement",
+          nucleus: "agents.",
+          contour: "→",
+          pause_after: "short",
+        },
+        {
+          id: 3,
+          text: "More broadly, I'm interested in how law should respond when technology changes who acts and who controls.",
+          function: "statement",
+          nucleus: "controls.",
+          contour: "↘",
+          pause_after: "final",
+        },
+      ],
+      words: [
+        { text: "I", stress: "weak", pitch_role: "unstressed", arrow: "", group: 1 },
+        { text: "work", stress: "support", pitch_role: "support beat", arrow: "", group: 1 },
+        { text: "legal", stress: "support", pitch_role: "support beat", arrow: "", group: 1 },
+        { text: "AI", stress: "support", pitch_role: "support beat", arrow: "", group: 1 },
+        { text: "platforms.", stress: "nucleus", pitch_role: "level continuation", arrow: "→", group: 1 },
+        { text: "Right", stress: "support", pitch_role: "support beat", arrow: "", group: 2 },
+        { text: "focused", stress: "support", pitch_role: "support beat", arrow: "", group: 2 },
+        { text: "agents.", stress: "nucleus", pitch_role: "level continuation", arrow: "→", group: 2 },
+        { text: "More", stress: "support", pitch_role: "support beat", arrow: "", group: 3 },
+        { text: "law", stress: "support", pitch_role: "support beat", arrow: "", group: 3 },
+        { text: "respond", stress: "support", pitch_role: "support beat", arrow: "", group: 3 },
+        { text: "controls.", stress: "nucleus", pitch_role: "falling target", arrow: "↘", group: 3 },
+      ],
+    },
     notes: [
       "This is a starter sample. Edit scenario, goal, frames, and clean_tts_text for your own lesson.",
       "Add stress_guide, intonation_guide, or word_level_prosody for richer prosody coaching.",
       "Use the Example audio button in the sidebar to generate reference TTS from the example only.",
     ],
+  };
+}
+
+function sampleFollowupDrillPackage(date: string): JsonObject {
+  return {
+    schema_version: 1,
+    date,
+    title: `Post-practice Speaking Drill - ${date}`,
+    method: "FSI-style substitution + shadowing",
+    source_principles: [
+      "Stable base sentence plus fast slot replacement.",
+      "Full-sentence output for each cue; do not answer with fragments.",
+      "Shadow the audio with 0.5-1 second delay, then say selected lines from memory.",
+    ],
+    routine_zh: [
+      "先看例句，不分析语法。",
+      "听一遍，只抓节奏和停顿。",
+      "点击 Practice 后完整跟读目标句。",
+      "最后任选两句，不看文本直接说出来。",
+    ],
+    rounds: [
+      {
+        id: "A",
+        label: "Substitution: role and project",
+        base_frame: "I work on legal issues around AI and platforms.",
+        slot: "topic / project",
+        examples: [
+          { cue: "topic", text: "I work on legal issues around AI and platforms." },
+          { cue: "current project", text: "Right now I'm especially focused on user-authorized agents." },
+          { cue: "broader question", text: "More broadly, I'm interested in how law should respond when technology changes who acts and who controls." },
+        ],
+      },
+      {
+        id: "B",
+        label: "Substitution: claim and example",
+        base_frame: "My claim is that authorization should matter when platforms decide whether to block an agent.",
+        slot: "claim / example",
+        examples: [
+          { cue: "claim", text: "My claim is that authorization should matter when platforms decide whether to block an agent." },
+          { cue: "example", text: "A concrete example is when a useful agent gets blocked because the platform treats it like abuse." },
+          { cue: "repair", text: "Let me put the point more narrowly." },
+        ],
+      },
+    ],
+    shadowing_loop: {
+      chunks: [
+        "I work on legal issues around AI and platforms.",
+        "Right now I'm especially focused on user-authorized agents.",
+        "My claim is that authorization should matter when platforms decide whether to block an agent.",
+      ],
+      instruction_zh: "每个 chunk 跟读两遍；卡住的 chunk 单独循环三遍。",
+    },
   };
 }
 
@@ -4104,6 +4671,10 @@ const MATERIALS_GUIDE_MD = [
   "├── prebuilt/",
   "│   ├── 2026-05-10/",
   "│   │   ├── english-training.json   # required",
+  "│   │   ├── manifest.json           # optional, declares generated assets",
+  "│   │   ├── daily-card.png          # optional reading card image",
+  "│   │   ├── prosody-detail.png      # optional stress/intonation card image",
+  "│   │   └── audio/demo.ogg          # optional prebuilt reference audio",
   "│   ├── 2026-05-11/",
   "│   │   └── english-training.json",
   "│   └── ...",
@@ -4149,6 +4720,69 @@ const MATERIALS_GUIDE_MD = [
   "",
   "Useful optional fields: `training_type`, `primary_tags`, `demo_line`,",
   "`audio_text`, `stress_guide`, `intonation_guide`, `word_level_prosody`.",
+  "",
+  "## FSI drill package",
+  "",
+  "Add `followup-drill.json` beside `english-training.json` when the day should",
+  "continue beyond one fixed sentence. The sidebar reads `rounds[].examples[]`",
+  "and turns them into Listen / Practice / Skip choices.",
+  "",
+  "```json",
+  "{",
+  "  \"method\": \"FSI-style substitution + shadowing\",",
+  "  \"rounds\": [",
+  "    {",
+  "      \"label\": \"Substitution: claim and example\",",
+  "      \"base_frame\": \"My claim is that authorization should matter.\",",
+  "      \"slot\": \"claim / example\",",
+  "      \"examples\": [",
+  "        { \"cue\": \"claim\", \"text\": \"My claim is that authorization should matter.\" },",
+  "        { \"cue\": \"example\", \"text\": \"A concrete example is when a useful agent gets blocked.\" }",
+  "      ]",
+  "    }",
+  "  ]",
+  "}",
+  "```",
+  "",
+  "Coach responses may also include `drill_examples[]`; those generated examples",
+  "are shown together with the prebuilt FSI lines after each practice result.",
+  "",
+  "## Reading-card and prosody contract",
+  "",
+  "When present, the Practice sidebar displays the generated reading cards and",
+  "the structured prosody data for the current package.",
+  "",
+  "Default asset paths inside each package:",
+  "",
+  "| Asset | Default path | Manifest key |",
+  "|-------|--------------|--------------|",
+  "| Daily reading card | `daily-card.png` | `files.daily_card` |",
+  "| Prosody detail card | `prosody-detail.png` | `files.prosody_detail` |",
+  "| Prebuilt demo audio | `audio/demo.ogg` | `files.audio_demo` |",
+  "| Audio generation queue | `audio-queue.json` | `files.audio_queue` |",
+  "| Telegram card | `telegram-task-card.md` | `files.telegram_task_card` |",
+  "",
+  "Asset paths in `manifest.json` may be relative to the package folder or",
+  "absolute paths. If `manifest.json` is missing, the sidebar falls back to the",
+  "default paths above.",
+  "",
+  "Prosody fields expected by the sidebar:",
+  "",
+  "```json",
+  "{",
+  "  \"stress_guide\": \"The ˈBROADER ˈSIGNIFICANCE ...\",",
+  "  \"intonation_guide\": \"Opening thought group. → | Final group. ↘\",",
+  "  \"word_level_prosody\": {",
+  "    \"groups\": [",
+  "      { \"id\": 1, \"text\": \"Opening thought group.\", \"function\": \"statement\", \"nucleus\": \"group.\", \"contour\": \"→\", \"pause_after\": \"short\" }",
+  "    ],",
+  "    \"words\": [",
+  "      { \"text\": \"Opening\", \"stress\": \"support\", \"pitch_role\": \"support beat\", \"arrow\": \"\", \"group\": 1 },",
+  "      { \"text\": \"group.\", \"stress\": \"nucleus\", \"pitch_role\": \"falling target\", \"arrow\": \"↘\", \"group\": 1 }",
+  "    ]",
+  "  }",
+  "}",
+  "```",
   "",
   "## Quick start",
   "",
@@ -4230,7 +4864,6 @@ class StatusProvider implements vscode.TreeDataProvider<StatusItem> {
         new StatusItem("Gemini Key", vscode.TreeItemCollapsibleState.None, state.keys.gemini ? "saved" : "missing", { command: "englishTraining.configureGeminiKey", title: "Configure Gemini" }),
         new StatusItem("Kimi Key", vscode.TreeItemCollapsibleState.None, state.keys.kimi ? "saved" : "missing", { command: "englishTraining.configureKimiKey", title: "Configure Kimi" }),
         new StatusItem("DeepSeek Key", vscode.TreeItemCollapsibleState.None, state.keys.deepseek ? "saved" : "missing", { command: "englishTraining.configureDeepSeekKey", title: "Configure DeepSeek" }),
-        new StatusItem("Azure Speech Key", vscode.TreeItemCollapsibleState.None, state.keys.azure ? "saved" : "missing", { command: "englishTraining.configureAzureSpeechKey", title: "Configure Azure Speech" }),
         new StatusItem("Open Task Card", vscode.TreeItemCollapsibleState.None, "markdown", { command: "englishTraining.openTaskCard", title: "Open Task Card" }),
       ];
     } catch (error) {
