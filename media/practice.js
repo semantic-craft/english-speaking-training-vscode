@@ -3,6 +3,12 @@
     let stream = null;
     let chunks = [];
     let recorderMode = null;
+    // True from posting startNativeRecording until the extension confirms
+    // ffmpeg is actually up (nativeRecordingStarted) or fails (error). A stop
+    // tap in this ~1s window would otherwise tear down a recorder that has
+    // not started, yielding "did not produce a usable audio file" + "exited
+    // before it could start" double errors and a lost take.
+    let nativeStarting = false;
     let state = null;
     let audioCtx = null;
     let analyser = null;
@@ -21,6 +27,12 @@
     let drillGenerating = false;
     let pendingSlowReadHost = null;
     let localAudioObjectUrl = null;
+    // Start pessimistic: the scaffold ships the record button disabled with a
+    // neutral "Checking setup…" status, and applySetupGate flips this the
+    // first time real state arrives. This closes the pre-first-state window
+    // where the button looked pressable and falsely said "Ready to record".
+    let recordingBlockedBySetup = true;
+    let currentLessonKey = null;
     const STAGES = ["transcribe", "coach", "tts", "save"];
 
     // Each webview-recorder turn used to mint a fresh object URL for the
@@ -159,6 +171,86 @@
       return target;
     }
 
+    // First-run guard. The red button looks pressable from the very first
+    // render, but a recording made before a Gemini key + a lesson both exist
+    // is wasted work — the pipeline only fails *afterwards* with a raw
+    // "Missing API key" error. Gate the button on the same readiness signal
+    // the onboarding panel uses, and only touch status/button on the
+    // not-ready boundary so a normal "Ready ✓"/result/error status produced
+    // during a real turn is never clobbered by a coincidental re-render.
+    // Single source of truth for "is the practice loop usable yet": a Gemini
+    // key plus at least one lesson. Both the record button and the drill
+    // generator gate on this so a control can never look pressable while a
+    // click would only fail later with a raw "Missing API key" error.
+    function setupReady(currentState) {
+      const keys = (currentState && currentState.keys) || {};
+      const progress = currentState && currentState.progress;
+      const coreKeysReady = Boolean(keys.gemini);
+      const hasLessons = Boolean(progress && progress.total && progress.total > 0);
+      return { ready: coreKeysReady && hasLessons, coreKeysReady, hasLessons };
+    }
+
+    function applySetupGate(currentState) {
+      // A re-render can land mid-recording (an unrelated refreshAll). Never
+      // disable the button or clobber "Listening…" while a take is live —
+      // the user still needs to press stop, and a half-finished recording
+      // would otherwise be silently abandoned.
+      if (isRecording()) return;
+      const { ready, coreKeysReady } = setupReady(currentState);
+      const btn = $("record");
+      if (!ready) {
+        recordingBlockedBySetup = true;
+        if (btn) btn.disabled = true;
+        // Keep a real, actionable error visible if one is already showing;
+        // otherwise replace the misleading hardcoded "Ready to record".
+        const statusEl = $("status");
+        if (!(statusEl && statusEl.classList.contains("error"))) {
+          setStatus(
+            !coreKeysReady
+              ? "Add a Gemini API key in Quick setup above to start recording."
+              : "Create your first lesson in Quick setup above to start recording.",
+          );
+        }
+        return;
+      }
+      if (recordingBlockedBySetup) {
+        recordingBlockedBySetup = false;
+        // setBusy() owns the button while a turn is processing; only the
+        // setup gate could have disabled it on this path, so it is safe to
+        // release here unless a pipeline is mid-flight.
+        if (btn && !btn.classList.contains("busy")) btn.disabled = false;
+        setStatus("Ready to record");
+      }
+    }
+
+    // After "Complete" advances to the next package, the previous lesson's
+    // conversation, generated drills and attempt counts are stale: the loop
+    // buttons would otherwise record against old material and the drill
+    // workbench would mix yesterday's AI lines into today's set. Reset that
+    // session state when (and only when) the package actually changes. The
+    // first render just adopts the key — a fresh webview already starts clean,
+    // and an in-lesson refresh (e.g. after a turn) keeps the same key so the
+    // history the user just built is preserved.
+    function applyLessonReset(nextInfo) {
+      const key = String((nextInfo && nextInfo.package_date) || "");
+      if (currentLessonKey === null) {
+        currentLessonKey = key;
+        return;
+      }
+      if (key === currentLessonKey) return;
+      currentLessonKey = key;
+      turnHistory = [];
+      lastTurn = null;
+      pendingReplyContext = null;
+      pendingPracticeTarget = null;
+      drillGeneratedLines = [];
+      drillAttempts = {};
+      vscode.postMessage({ type: "clearReplyContext" });
+      const resultPanel = $("result");
+      if (resultPanel) resultPanel.hidden = true;
+      renderTurnHistory();
+    }
+
     function renderState(nextState) {
       state = nextState;
       const next = state.next || {};
@@ -169,6 +261,8 @@
       const todayAudioText = training.tts_example_text || training.clean_tts_text || training.audio_text || training.demo_line || "";
       currentExampleText = todayAudioText;
       renderOnboarding(state);
+      applySetupGate(state);
+      applyLessonReset(next);
       renderDayStrip({ progress: state.progress, next });
       renderProgress(state.progress);
       renderSourceDiagnostics(state.sourceDiagnostics);
@@ -368,8 +462,7 @@
           routeSummaryHtml("Speech out", "ttsProvider", settings),
         '</div>',
         '<div class="provider-presets">',
-          '<button class="secondary" id="useRecommendedHybrid">Gemini core</button>',
-          '<button class="secondary" id="useGeminiOnly">Gemini only</button>',
+          '<button class="secondary" id="useGeminiOnly" title="Set coach, speech input, and speech output all to Gemini">Reset to all-Gemini route</button>',
         '</div>',
         providerRoleHtml("Coach", "coachProvider", settings, keys),
         providerRoleHtml("Speech in", "audioUnderstandingProvider", settings, keys),
@@ -1049,7 +1142,10 @@
     function setBusy(active, label) {
       const btn = $("record");
       btn.classList.toggle("busy", active);
-      btn.disabled = active;
+      // Don't let an unrelated path (e.g. a failed example-audio request)
+      // re-enable the record button while setup is still incomplete — that
+      // briefly reopens the wasted-recording trap until the next re-render.
+      btn.disabled = active || recordingBlockedBySetup;
       if (label) setStatus(label, active ? "busy" : undefined);
     }
 
@@ -1174,6 +1270,12 @@
 
     function stopRecording() {
       if (recorderMode === "native") {
+        if (nativeStarting) {
+          // The recorder is still spinning up. Don't tear it down half-born;
+          // tell the user it's coming. They can stop once it's listening.
+          setStatus("Starting recorder — one moment, then it will listen.");
+          return;
+        }
         vscode.postMessage({ type: "stopNativeRecording" });
         setRecording(false);
         stopTimer();
@@ -1187,17 +1289,25 @@
       }
     }
 
+    let recordTransition = false;
     function toggleRecording() {
+      if (recordTransition) return;
       if (isRecording()) {
         stopRecording();
-      } else {
-        startRecording().catch((error) => setStatus(error.message || String(error), "error"));
+        return;
       }
+      // Block a second tap during the async getUserMedia/permission window so
+      // we never open two microphone streams or fire two pipelines at once.
+      recordTransition = true;
+      startRecording()
+        .catch((error) => setStatus(error.message || String(error), "error"))
+        .finally(() => { recordTransition = false; });
     }
 
     function startNativeRecording(reason) {
       clearProcessingWatchdog();
       recorderMode = "native";
+      nativeStarting = true;
       setRecording(true);
       setStatus((reason ? reason + " " : "") + "Using Mac local recorder…");
       startTimer();
@@ -1370,6 +1480,16 @@
       const host = $("drill");
       if (!host) return;
       const drill = (state && state.drill) || {};
+      // Same gate as the record button: generating lines calls the coach, so
+      // before a key + lesson exist the button must not invite a click that
+      // only fails after a round trip with a raw "Missing API key" error.
+      const gate = setupReady(state);
+      const generateDisabled = drillGenerating || !gate.ready;
+      const generateHint = !gate.ready
+        ? (!gate.coreKeysReady
+          ? "Add a Gemini API key in Quick setup to generate lines"
+          : "Create your first lesson in Quick setup to generate lines")
+        : (drillGenerating ? "Generating new lines…" : "Fresh FSI substitutions from your coach model");
       drillLibrary = collectDrillLibrary();
       const tags = Array.isArray(drill.primary_tags) ? drill.primary_tags : [];
       const items = drillLibrary.map((example, index) => drillExampleHtml(example, {
@@ -1400,8 +1520,8 @@
         </div>
         ${listHtml}
         <div class="loop-actions drill-generate-row">
-          <button class="secondary" data-drill-generate="5" ${drillGenerating ? "disabled" : ""}>＋ Generate 5 more lines</button>
-          <span class="muted" id="drillGenStatus">${drillGenerating ? "Generating new lines…" : "Fresh FSI substitutions from your coach model"}</span>
+          <button class="secondary" data-drill-generate="5" ${generateDisabled ? "disabled" : ""}>＋ Generate 5 more lines</button>
+          <span class="muted" id="drillGenStatus">${esc(generateHint)}</span>
         </div>
         ${planHtml}
       `;
@@ -1455,19 +1575,32 @@
       };
     }
 
+    // Bring the record button into view and tell the user to start when ready.
+    // Auto-starting recording from "Practice"/"Imitate"/"Reply" clipped the
+    // opening words of every rep (the user is still reading the line). Recording
+    // now always begins on an explicit tap of the red button, which consumes
+    // the pendingPracticeTarget / reply context set just before this call.
+    function cueRecording(label) {
+      const cta = $("record");
+      if (cta) {
+        if (typeof cta.scrollIntoView === "function") {
+          cta.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        if (typeof cta.focus === "function") {
+          cta.focus({ preventScroll: true });
+        }
+      }
+      setStatus(label
+        ? "Ready — press the red button when you want to record: " + label
+        : "Ready — press the red button to record.");
+    }
+
     function startDrillPractice(example) {
       if (!example || !String(example.text || "").trim()) return;
       pendingReplyContext = null;
       pendingPracticeTarget = practiceTarget(example.text, example.label || "FSI drill", "");
       vscode.postMessage({ type: "clearReplyContext" });
-      setStatus("FSI drill ready: " + (example.label || "next line"));
-      const cta = $("record");
-      if (cta && typeof cta.scrollIntoView === "function") {
-        cta.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-      if (!isRecording()) {
-        startRecording().catch((error) => setStatus(error.message || String(error), "error"));
-      }
+      cueRecording(example.label || "this line");
     }
 
     function followUpCardHtml(result, followUpAudioSrc) {
@@ -1538,7 +1671,24 @@
         '<ol class="turn-history">' + items + '</ol>';
       const reset = $("resetTurns");
       if (reset) {
+        let resetArmed = false;
+        let resetArmTimer = null;
         reset.addEventListener("click", () => {
+          // A multi-turn conversation is real practice work; one stray click on
+          // a ghost button must not wipe it silently. Require a confirm click,
+          // auto-disarming after a few seconds.
+          if (!resetArmed) {
+            resetArmed = true;
+            reset.textContent = "Reset? click again";
+            reset.setAttribute("title", "Click again to clear this conversation");
+            resetArmTimer = setTimeout(() => {
+              resetArmed = false;
+              reset.textContent = "Reset";
+              reset.setAttribute("title", "Start a new conversation");
+            }, 4000);
+            return;
+          }
+          if (resetArmTimer) clearTimeout(resetArmTimer);
           turnHistory = [];
           lastTurn = null;
           pendingReplyContext = null;
@@ -1595,7 +1745,7 @@
         ${result.quickFix ? '<div class="quick-fix-card"><span class="label">Quick fix</span><p>' + esc(result.quickFix) + '</p></div>' : ''}
         ${followUpCardHtml(result, followUpAudioSrc)}
         <div class="loop-actions">
-          <button class="secondary" data-loop-action="imitate">Imitate native</button>
+          <button class="secondary" data-loop-action="imitate">${isShadow ? "Practice " + esc(nativeLabel) + " again" : "Imitate native"}</button>
         </div>
         ${drillChoiceHtml(currentDrillSuggestions)}
         <details class="result-details">
@@ -1692,6 +1842,9 @@
       const drillGenerateTrigger = event.target.closest && event.target.closest("[data-drill-generate]");
       if (drillGenerateTrigger) {
         if (drillGenerating) return;
+        // Defense in depth: the button is rendered disabled before setup, but
+        // never let a stray click run the coach into a guaranteed key error.
+        if (!setupReady(state).ready) return;
         const count = Number(drillGenerateTrigger.dataset.drillGenerate) || 5;
         drillGenerating = true;
         drillGenerateTrigger.disabled = true;
@@ -1734,6 +1887,9 @@
       if (!trigger) return;
       const action = trigger.dataset.loopAction;
       if (action !== "imitate" && action !== "reply") return;
+      const imitateLabel = lastTurn && lastTurn.mode === "shadow"
+        ? (lastTurn.referenceLabel || "the reference line")
+        : "the native version";
       if (action === "reply" && lastTurn && lastTurn.followUpQuestion) {
         pendingReplyContext = {
           nativeVersion: lastTurn.nativeVersion || "",
@@ -1746,7 +1902,7 @@
         pendingReplyContext = null;
         pendingPracticeTarget = practiceTarget(
           lastTurn.nativeVersion,
-          "Native version",
+          lastTurn.mode === "shadow" ? (lastTurn.referenceLabel || "Reference") : "Native version",
           lastTurn.followUpQuestion || "",
         );
         vscode.postMessage({ type: "clearReplyContext" });
@@ -1755,13 +1911,7 @@
         pendingPracticeTarget = null;
         vscode.postMessage({ type: "clearReplyContext" });
       }
-      const cta = $("record");
-      if (cta && typeof cta.scrollIntoView === "function") {
-        cta.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-      if (!isRecording()) {
-        startRecording().catch((error) => setStatus(error.message || String(error), "error"));
-      }
+      cueRecording(action === "imitate" ? imitateLabel : "your reply to the follow-up");
     });
     document.addEventListener("click", (event) => {
       const actionTrigger = event.target.closest && event.target.closest("[data-action]");
@@ -1769,12 +1919,19 @@
         const status = $("todayTtsStatus");
         if (status) status.textContent = "Generating example…";
         actionTrigger.disabled = true;
+        actionTrigger.dataset.busy = "1";
         vscode.postMessage({ type: "todayTts" });
-        return;
-      }
-      const hybridTrigger = event.target.closest && event.target.closest("#useRecommendedHybrid");
-      if (hybridTrigger) {
-        vscode.postMessage({ type: "useRecommendedHybrid" });
+        // Self-heal: if a TTS provider hangs without ever returning a result
+        // or error, don't leave this button dead with no way back.
+        const ttsBtn = actionTrigger;
+        setTimeout(() => {
+          if (ttsBtn && ttsBtn.dataset.busy === "1") {
+            ttsBtn.disabled = false;
+            delete ttsBtn.dataset.busy;
+            const s = $("todayTtsStatus");
+            if (s) s.textContent = "Example audio took too long — press 🔊 to try again.";
+          }
+        }, 25000);
         return;
       }
       const geminiTrigger = event.target.closest && event.target.closest("#useGeminiOnly");
@@ -1828,6 +1985,7 @@
       if (message.type === "state") renderState(message.state);
       if (message.type === "busy") setStatus(message.message || "Working…", "busy");
       if (message.type === "nativeRecordingStarted") {
+        nativeStarting = false;
         setStatus("Listening… speak now.");
       }
       if (message.type === "stage") {
@@ -1836,6 +1994,7 @@
       }
       if (message.type === "practiceResult") {
         clearProcessingWatchdog();
+        nativeStarting = false;
         markAllStagesDone();
         setBusy(false);
 	        setStatus("Ready ✓");
@@ -1905,6 +2064,9 @@
           }
         });
         if (message.error) {
+          // Clear the drill host too, or a later non-drill slow read would
+          // append its player into this stale, now-irrelevant drill card.
+          pendingSlowReadHost = null;
           setStatus("Slow read failed: " + message.error, "error");
           return;
         }
@@ -1944,18 +2106,32 @@
           audio.hidden = false;
           audio.play().catch(() => {});
         }
+        let armedShadow = false;
         if (message.result && message.result.text) {
           pendingPracticeTarget = practiceTarget(message.result.text, "Example text", "");
+          armedShadow = true;
         } else if (currentExampleText) {
           pendingPracticeTarget = practiceTarget(currentExampleText, "Example text", "");
+          armedShadow = true;
         }
         if (status) {
           status.textContent = message.result && message.result.provider
             ? "Example generated with " + message.result.provider + " · next recording shadows this text"
             : "Example generated";
         }
+        // #todayTtsStatus lives inside #task and is wiped by the next
+        // renderTodayHero, but the shadow target stays armed — so without a
+        // cue on the persistent #status the user silently records in shadow
+        // mode after any refresh. setStatus writes to #status, which no
+        // re-render regenerates, so this survives until the next action.
+        if (armedShadow) {
+          setStatus("Example ready — your next recording will shadow it. Press the red button when you're ready.");
+        }
         const button = document.querySelector('[data-action="today-tts"]');
-        if (button) button.disabled = false;
+        if (button) {
+          button.disabled = false;
+          delete button.dataset.busy;
+        }
       }
       if (message.type === "drillLinesStatus") {
         const status = $("drillGenStatus");
@@ -1998,6 +2174,7 @@
       }
       if (message.type === "error") {
         clearProcessingWatchdog();
+        nativeStarting = false;
         if (recorderMode === "native") {
           recorderMode = null;
           setRecording(false);
@@ -2006,7 +2183,10 @@
         stopTimer();
         setBusy(false);
         const todayButton = document.querySelector('[data-action="today-tts"]');
-        if (todayButton) todayButton.disabled = false;
+        if (todayButton) {
+          todayButton.disabled = false;
+          delete todayButton.dataset.busy;
+        }
         showStages(false);
         setStatus(message.message || "Error.", "error");
       }

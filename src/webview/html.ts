@@ -28,11 +28,11 @@ export function buildPracticeHtml(webview: vscode.Webview, extensionUri: vscode.
     <section class="panel record-panel">
       <div class="flow-label">● Record &amp; analyze</div>
       <div class="record-row">
-        <button id="record" class="record-cta" aria-label="Start recording" title="Start recording">
+        <button id="record" class="record-cta" aria-label="Start recording" title="Start recording" disabled>
           <span class="record-cta-icon"></span>
         </button>
         <div class="record-meta">
-          <div class="record-status" id="status" role="status" aria-live="polite">Ready to record</div>
+          <div class="record-status" id="status" role="status" aria-live="polite">Checking setup…</div>
           <div class="record-meter">
             <span id="timer">00:00</span>
             <canvas id="vu" width="100" height="14" aria-hidden="true"></canvas>

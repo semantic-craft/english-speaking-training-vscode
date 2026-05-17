@@ -87,8 +87,15 @@ export async function processPracticeFile(
   const outputAudio = path.join(sessionDir, speechOutputFileName(ttsProvider));
   let audioFile: string | undefined;
   if (nativeVersion.trim()) {
-    audioFile = (await synthesizeWithConfiguredTts(context, nativeVersion, outputAudio, ttsProvider))
-      .filePath;
+    // A speech-output hiccup (missing/invalid TTS key, provider 5xx) must not
+    // discard an already-successful transcribe + coach turn. Degrade like the
+    // follow-up TTS below: keep the coaching result, just skip the playback.
+    try {
+      audioFile = (await synthesizeWithConfiguredTts(context, nativeVersion, outputAudio, ttsProvider))
+        .filePath;
+    } catch (error) {
+      appendOutput(`Native-version TTS failed: ${errorMessage(error)}`);
+    }
   }
   let followUpAudioFile: string | undefined;
   if (followUpQuestion.trim()) {

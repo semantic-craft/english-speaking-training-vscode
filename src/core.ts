@@ -79,9 +79,25 @@ export async function getRequiredKey(
 ): Promise<string> {
   const key = await context.secrets.get(secretKeys[provider]);
   if (!key) {
-    throw new Error(`Missing ${providerLabel(provider)} API key. Run the configure command first.`);
+    throw new Error(
+      `Missing ${providerLabel(provider)} API key. Open the Command Palette and run “${providerKeyCommandTitle(provider)}”.`,
+    );
   }
   return key;
+}
+
+// Exact Command Palette titles from package.json `contributes.commands`.
+// "Run the configure command first" sent users hunting through five
+// near-identical commands; naming the precise one makes the error actionable.
+export function providerKeyCommandTitle(provider: ProviderName): string {
+  const titles: Record<ProviderName, string> = {
+    openai: "English Training: Configure OpenAI API Key",
+    gemini: "English Training: Configure Gemini API Key",
+    minimax: "English Training: Configure MiniMax API Key",
+    mimo: "English Training: Configure Xiaomi MiMo API Key",
+    deepseek: "English Training: Configure DeepSeek API Key",
+  };
+  return titles[provider];
 }
 
 export function providerLabel(provider: ProviderName): string {
