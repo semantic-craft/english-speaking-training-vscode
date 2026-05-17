@@ -7,6 +7,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.36] — 2026-05-17
+
+A record-start latency pass: pressing record is now fast and *legible*
+instead of a multi-second frozen stall with one unchanging status line.
+
+### Fixed
+- **Pressing record stalled for seconds with zero feedback.** Every press
+  paid an unconditional ~0.9 s sleep plus, when a previous recorder was
+  still around, up to ~1.7 s of reclaim — and the device enumeration ran
+  via `spawnSync`, which froze the single-threaded extension host so the
+  webview could not even repaint. On machines with an iPhone/Continuity
+  camera in range the enumeration alone added several more seconds. The
+  press path now: (a) replaces the fixed 0.9 s sleep with an adaptive
+  readiness poll that returns as soon as `ffmpeg` has actually opened the
+  device and written the WAV header (typically well under the old floor,
+  while still surfacing the old "exited before it could start" error);
+  (b) reclaims a stale recorder with `SIGKILL` and a 0.6 s cap instead of
+  `SIGTERM` + 1.5 s; (c) enumerates devices with async `spawn` instead of
+  `spawnSync`, so the host stays responsive and progress can paint; and
+  (d) memoizes the resolved audio device per session so repeated presses
+  skip enumeration entirely (cache invalidated on failure or settings
+  change).
+- **The session timer counted microphone warm-up.** It started the moment
+  you pressed record — i.e. during reclaim/enumeration/arming — so a turn
+  read several seconds longer than you actually spoke. The timer now
+  starts only when the recorder is genuinely listening.
+
+### Changed
+- **Record-start is now a visible, staged process.** Instead of one frozen
+  "Using Mac local recorder…" line, the host streams the real phase it is
+  in — *Resetting the previous recorder…* → *Preparing microphone…* →
+  *Starting recorder…* → *Listening… speak now.* — so the wait is legible
+  and obviously progressing rather than hung.
+
 ## [0.1.35] — 2026-05-17
 
 A runtime-stability pass: every place the practice flow could hang, lose a

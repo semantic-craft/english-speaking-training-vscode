@@ -121,9 +121,11 @@ import {
 } from "./runtime/state.js";
 import {
   chooseLocalAvfoundationAudioDevice,
+  invalidateResolvedAudioDevice,
   killActiveNativeRecording,
   listAvfoundationAudioDevices,
   parseAvfoundationAudioDevices,
+  resolveNativeFfmpegAudioDevice,
   startNativeFfmpegRecording,
   stopNativeFfmpegRecording,
 } from "./audio/native-recording.js";
@@ -284,6 +286,7 @@ export const __test__ = {
   dateRangeLabel,
   drillExamplesFromState,
   extensionFromMime,
+  invalidateResolvedAudioDevice,
   listAvfoundationAudioDevices,
   looksLikeTrainingRoot,
   mimeTypeForAudioPath,
@@ -295,6 +298,7 @@ export const __test__ = {
   parseAvfoundationAudioDevices,
   parseLooseJson,
   readJsonDiagnosed,
+  resolveNativeFfmpegAudioDevice,
   speechOutputExtension,
   todayExampleText,
   toWebviewState,
