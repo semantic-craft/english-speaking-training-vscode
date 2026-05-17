@@ -15,6 +15,10 @@
     let activeRecordingTarget = null;
     let currentExampleText = "";
     let currentDrillSuggestions = [];
+    let drillLibrary = [];
+    let drillGeneratedLines = [];
+    let drillAttempts = {};
+    let drillGenerating = false;
     let pendingSlowReadHost = null;
     const STAGES = ["transcribe", "coach", "tts", "save"];
     const $ = (id) => document.getElementById(id);
@@ -180,18 +184,7 @@
         </div>
       `;
       renderReadingCard(training, assets);
-      $("drill").innerHTML = `
-        <h3>Drill</h3>
-        <div class="chips">
-          <span class="chip">${esc(drill.method || "FSI-style drill")}</span>
-          ${(drill.primary_tags || []).map((tag) => '<span class="chip">' + esc(tag) + '</span>').join("")}
-          ${drill.required_frames ? '<span class="chip">use ' + esc(drill.required_frames) + ' frames</span>' : ''}
-        </div>
-        <div class="field"><span class="label">Routine</span>${simpleList(drill.routine_zh)}</div>
-        <div class="field"><span class="label">Rounds</span>${drillRounds(drill.rounds)}</div>
-        <div class="field"><span class="label">Shadowing</span>${shadowing(drill.shadowing_loop)}</div>
-        <div class="field"><span class="label">Repair focus</span>${simpleList(drill.repair_drills)}</div>
-      `;
+      renderDrillPanel();
       $("sessionLog").innerHTML = `
         <h3>Session Log</h3>
         ${recentSessions(state.recentSessions || [])}
@@ -1069,7 +1062,98 @@
         if (!key || seen.has(key) || blocked.has(key)) return false;
         seen.add(key);
         return true;
-      }).slice(0, 5);
+      });
+    }
+
+    function collectDrillLibrary() {
+      const list = [];
+      const drill = (state && state.drill) || {};
+      const rounds = Array.isArray(drill.rounds) ? drill.rounds : [];
+      rounds.forEach((round) => {
+        const roundLabel = String((round && (round.label || round.id)) || "FSI drill");
+        const examples = Array.isArray(round && round.examples) ? round.examples : [];
+        examples.forEach((item) => pushDrillExample(list, item, roundLabel, "prebuilt"));
+      });
+      const chunks = drill && drill.shadowing_loop && Array.isArray(drill.shadowing_loop.chunks)
+        ? drill.shadowing_loop.chunks
+        : [];
+      chunks.forEach((item, idx) => pushDrillExample(list, item, "Shadowing chunk " + (idx + 1), "prebuilt"));
+      drillGeneratedLines.forEach((item) => pushDrillExample(list, item, item.label || "AI drill", "coach"));
+
+      const seen = new Set();
+      return list.filter((item) => {
+        const key = normalizeComparable(item.text);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    function drillAttemptKey(text) {
+      return normalizeComparable(text);
+    }
+
+    function drillAttemptCount(text) {
+      const key = drillAttemptKey(text);
+      return key ? (drillAttempts[key] || 0) : 0;
+    }
+
+    function bumpDrillAttempt(text) {
+      const key = drillAttemptKey(text);
+      if (!key) return 0;
+      drillAttempts[key] = (drillAttempts[key] || 0) + 1;
+      return drillAttempts[key];
+    }
+
+    function updateDrillAttemptBadge(key, count) {
+      if (!key) return;
+      const safeKey = (window.CSS && CSS.escape) ? CSS.escape(key) : key.replace(/"/g, '\\"');
+      const badge = document.querySelector('[data-drill-attempt-badge][data-drill-attempt-key="' + safeKey + '"]');
+      if (!badge) return;
+      const counter = badge.querySelector('[data-drill-attempt-count]');
+      if (counter) counter.textContent = String(count);
+      badge.hidden = count <= 0;
+    }
+
+    function renderDrillPanel() {
+      const host = $("drill");
+      if (!host) return;
+      const drill = (state && state.drill) || {};
+      drillLibrary = collectDrillLibrary();
+      const tags = Array.isArray(drill.primary_tags) ? drill.primary_tags : [];
+      const items = drillLibrary.map((example, index) => drillExampleHtml(example, {
+        persistent: true,
+        attemptKey: drillAttemptKey(example.text),
+        attempts: drillAttemptCount(example.text),
+        libIndex: index,
+      })).join("");
+      const listHtml = drillLibrary.length
+        ? '<ol class="drill-example-list">' + items + '</ol>'
+        : '<p class="muted">No drill lines yet. Generate a few below.</p>';
+      const planHtml = `
+        <details class="result-details drill-plan">
+          <summary>Drill plan</summary>
+          <div class="field"><span class="label">Routine</span>${simpleList(drill.routine_zh)}</div>
+          <div class="field"><span class="label">Shadowing</span>${shadowing(drill.shadowing_loop)}</div>
+          <div class="field"><span class="label">Repair focus</span>${simpleList(drill.repair_drills)}</div>
+        </details>`;
+      host.innerHTML = `
+        <div class="drill-head">
+          <h3>Drill workbench</h3>
+          <span class="muted">${drillLibrary.length} line${drillLibrary.length === 1 ? "" : "s"} · practice as many times as you like</span>
+        </div>
+        <div class="chips">
+          <span class="chip">${esc(drill.method || "FSI-style drill")}</span>
+          ${tags.map((tag) => '<span class="chip">' + esc(tag) + '</span>').join("")}
+          ${drill.required_frames ? '<span class="chip">use ' + esc(drill.required_frames) + ' frames</span>' : ''}
+        </div>
+        ${listHtml}
+        <div class="loop-actions drill-generate-row">
+          <button class="secondary" data-drill-generate="5" ${drillGenerating ? "disabled" : ""}>＋ Generate 5 more lines</button>
+          <span class="muted" id="drillGenStatus">${drillGenerating ? "Generating new lines…" : "Fresh FSI substitutions from your coach model"}</span>
+        </div>
+        ${planHtml}
+      `;
     }
 
     function drillChoiceHtml(examples) {
@@ -1083,15 +1167,26 @@
     }
 
     function drillExampleHtml(example, options) {
-      const indexAttr = options && options.index != null ? ' data-drill-index="' + esc(options.index) + '"' : '';
+      const opts = options || {};
+      const indexAttr = opts.index != null ? ' data-drill-index="' + esc(opts.index) + '"' : '';
       const textAttr = indexAttr ? '' : ' data-drill-text="' + esc(example.text || "") + '" data-drill-label="' + esc(example.label || "FSI drill") + '"';
-      return '<li class="drill-example">' +
-        '<span class="drill-example-label">' + esc(example.label || "FSI drill") + '</span>' +
+      const persistent = Boolean(opts.persistent);
+      const attempts = Number(opts.attempts) || 0;
+      const keyAttr = opts.attemptKey ? ' data-drill-attempt-key="' + esc(opts.attemptKey) + '"' : '';
+      const badge = persistent
+        ? '<span class="drill-attempt-badge" data-drill-attempt-badge="1"' + keyAttr + (attempts ? '' : ' hidden') + '>⟳ <span data-drill-attempt-count="1">' + esc(attempts) + '</span></span>'
+        : '';
+      const practiceLabel = persistent ? (attempts ? "Practice again" : "Practice") : "Practice";
+      const sourceTag = persistent && example.source === "coach"
+        ? '<span class="drill-example-source">AI</span>'
+        : '';
+      return '<li class="drill-example"' + keyAttr + '>' +
+        '<span class="drill-example-label">' + esc(example.label || "FSI drill") + sourceTag + badge + '</span>' +
         '<p class="drill-example-text">' + esc(example.text || "") + '</p>' +
         (example.reason ? '<p class="drill-example-reason">' + esc(example.reason) + '</p>' : '') +
         '<div class="drill-example-actions">' +
           '<button class="secondary" data-drill-listen="1"' + indexAttr + textAttr + '>Listen</button>' +
-          '<button data-drill-practice="1"' + indexAttr + textAttr + '>Practice</button>' +
+          '<button data-drill-practice="1"' + indexAttr + textAttr + keyAttr + '>' + practiceLabel + '</button>' +
         '</div>' +
       '</li>';
     }
@@ -1317,7 +1412,24 @@
       const drillPracticeTrigger = event.target.closest && event.target.closest("[data-drill-practice]");
       if (drillPracticeTrigger) {
         const example = drillExampleFromTrigger(drillPracticeTrigger);
+        if (drillPracticeTrigger.dataset.drillAttemptKey && example && example.text) {
+          const count = bumpDrillAttempt(example.text);
+          updateDrillAttemptBadge(drillPracticeTrigger.dataset.drillAttemptKey, count);
+          drillPracticeTrigger.textContent = "Practice again";
+        }
         startDrillPractice(example);
+        return;
+      }
+      const drillGenerateTrigger = event.target.closest && event.target.closest("[data-drill-generate]");
+      if (drillGenerateTrigger) {
+        if (drillGenerating) return;
+        const count = Number(drillGenerateTrigger.dataset.drillGenerate) || 5;
+        drillGenerating = true;
+        drillGenerateTrigger.disabled = true;
+        const status = $("drillGenStatus");
+        if (status) status.textContent = "Generating new lines…";
+        const existing = drillLibrary.map((item) => item.text);
+        vscode.postMessage({ type: "generateDrillLines", count, existing });
         return;
       }
       const drillSkipTrigger = event.target.closest && event.target.closest("[data-drill-skip]");
@@ -1558,6 +1670,45 @@
         }
         const button = document.querySelector('[data-action="today-tts"]');
         if (button) button.disabled = false;
+      }
+      if (message.type === "drillLinesStatus") {
+        const status = $("drillGenStatus");
+        if (status) status.textContent = message.message || "Generating new lines…";
+      }
+      if (message.type === "drillLinesResult") {
+        drillGenerating = false;
+        if (message.error) {
+          const status = $("drillGenStatus");
+          if (status) status.textContent = "Generation failed: " + message.error;
+          const button = document.querySelector("[data-drill-generate]");
+          if (button) button.disabled = false;
+          setStatus("Drill generation failed: " + message.error, "error");
+          return;
+        }
+        const incoming = Array.isArray(message.lines) ? message.lines : [];
+        const known = new Set(drillLibrary.map((item) => normalizeComparable(item.text)));
+        let added = 0;
+        incoming.forEach((item) => {
+          const text = String((item && item.text) || "").replace(/\s+/g, " ").trim();
+          const key = normalizeComparable(text);
+          if (!text || !key || known.has(key)) return;
+          known.add(key);
+          added += 1;
+          drillGeneratedLines.push({
+            label: String((item && item.label) || "AI drill").trim() || "AI drill",
+            text,
+            reason: String((item && item.reason) || "").trim(),
+            source: "coach",
+          });
+        });
+        renderDrillPanel();
+        const status = $("drillGenStatus");
+        if (status) {
+          status.textContent = added
+            ? "Added " + added + " new line" + (added === 1 ? "" : "s") + " · practice them above"
+            : "No new lines this time — try again";
+        }
+        setStatus(added ? "Added " + added + " fresh FSI line" + (added === 1 ? "" : "s") : "No new drill lines generated");
       }
       if (message.type === "error") {
         if (recorderMode === "native") {

@@ -64,6 +64,7 @@ import {
   readRecentSessionLog,
   splitPracticeText,
 } from "./practice/pipeline.js";
+import { generateDrillLines as coachGenerateDrillLines } from "./practice/coach.js";
 import { buildPracticeHtml } from "./webview/html.js";
 import { openMaterialsGuide } from "./materials-guide.js";
 
@@ -1227,6 +1228,14 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         await this.generateTodayTts();
         return;
       }
+      if (payload.type === "generateDrillLines") {
+        const count = Number(payload.count);
+        const existing = Array.isArray(payload.existing)
+          ? payload.existing.map((item) => stringValue(item)).filter(Boolean)
+          : [];
+        await this.generateDrillLines(Number.isFinite(count) && count > 0 ? count : 5, existing);
+        return;
+      }
     } catch (error) {
       this.view.webview.postMessage({ type: "error", message: errorMessage(error) });
     }
@@ -1239,6 +1248,20 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
     this.view.webview.postMessage({ type: "todayTtsStatus", message: "Generating example audio…" });
     const result = await synthesizeTodayAudio(this.context);
     this.view.webview.postMessage({ type: "todayTtsResult", result });
+  }
+
+  private async generateDrillLines(count: number, existing: string[]): Promise<void> {
+    if (!this.view) {
+      return;
+    }
+    this.view.webview.postMessage({ type: "drillLinesStatus", message: "Generating new lines…" });
+    try {
+      const state = await loadState(this.context);
+      const lines = await coachGenerateDrillLines(this.context, state, count, existing);
+      this.view.webview.postMessage({ type: "drillLinesResult", lines });
+    } catch (error) {
+      this.view.webview.postMessage({ type: "drillLinesResult", error: errorMessage(error) });
+    }
   }
 
   private async slowReadText(text: string, target: string, speed: number): Promise<void> {
