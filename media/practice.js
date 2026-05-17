@@ -499,6 +499,10 @@
         <div class="kv-list">
           ${rows.map(([label, text]) => diagnosticRow(label, text)).join("")}
         </div>
+        <div class="materials-actions">
+          <button class="secondary" data-onboard="generate-next">＋ Generate next package</button>
+          <button class="secondary" data-onboard="materials-guide">Materials guide</button>
+        </div>
       `;
     }
 
@@ -1697,6 +1701,8 @@
         vscode.postMessage({ type: "command", command: "setupProviderKey" });
       } else if (action === "create-sample") {
         vscode.postMessage({ type: "command", command: "createSamplePackage" });
+      } else if (action === "generate-next") {
+        vscode.postMessage({ type: "command", command: "generateNextPackage" });
       } else if (action === "materials-guide") {
         vscode.postMessage({ type: "command", command: "openMaterialsGuide" });
       }

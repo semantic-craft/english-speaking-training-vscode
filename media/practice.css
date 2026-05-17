@@ -1214,3 +1214,10 @@
     .prosody-legend .lg-support { background: color-mix(in srgb, var(--accent) 45%, transparent); }
     .prosody-legend .lg-weak { background: color-mix(in srgb, var(--vscode-editor-foreground) 14%, transparent); }
     .prosody-legend .lg-arrow { font-weight: 700; }
+    .materials-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .materials-actions button { min-height: 30px; }

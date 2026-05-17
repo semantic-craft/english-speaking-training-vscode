@@ -67,6 +67,13 @@ import {
 import { generateDrillLines as coachGenerateDrillLines } from "./practice/coach.js";
 import { buildPracticeHtml } from "./webview/html.js";
 import { openMaterialsGuide } from "./materials-guide.js";
+import {
+  blankFollowupDrillPackage,
+  blankTrainingPackage,
+  buildGenerationPrompt,
+  CARD_SCHEMA_VERSION,
+  cardSchemaContractJson,
+} from "./card-schema.js";
 
 let statusProvider: StatusProvider;
 let practiceProvider: PracticeViewProvider;
@@ -198,6 +205,9 @@ export function activate(context: vscode.ExtensionContext): void {
   register("englishTraining.createSamplePackage", async () => {
     await createSamplePackage(context);
   });
+  register("englishTraining.generateNextPackage", async () => {
+    await generateNextPackage(context);
+  });
   register("englishTraining.openMaterialsGuide", async () => {
     await openMaterialsGuide();
   });
@@ -213,7 +223,12 @@ export function deactivate(): void {
 }
 
 export const __test__ = {
+  blankFollowupDrillPackage,
+  blankTrainingPackage,
+  buildGenerationPrompt,
   buildProgressSnapshot,
+  CARD_SCHEMA_VERSION,
+  cardSchemaContractJson,
   chooseLocalAvfoundationAudioDevice,
   dateRangeLabel,
   drillExamplesFromState,
@@ -1207,6 +1222,9 @@ class PracticeViewProvider implements vscode.WebviewViewProvider {
         if (payload.command === "createSamplePackage") {
           await createSamplePackage(this.context);
         }
+        if (payload.command === "generateNextPackage") {
+          await generateNextPackage(this.context);
+        }
         if (payload.command === "openMaterialsGuide") {
           await openMaterialsGuide();
         }
@@ -1838,6 +1856,77 @@ async function createSamplePackage(context: vscode.ExtensionContext): Promise<vo
   writeJson(path.join(packageDir, "followup-drill.json"), sampleFollowupDrillPackage(targetDate));
   vscode.window.showInformationMessage(`Sample lesson and FSI drill written to prebuilt/${targetDate}. Edit them and refresh the sidebar.`);
   await vscode.window.showTextDocument(vscode.Uri.file(targetFile));
+  await refreshAll();
+}
+
+function nextPackageDate(root: string): string {
+  const today = todayInConfiguredTimezone();
+  let latest = "";
+  try {
+    const { dates } = readLocalInventory(root);
+    latest = dates.length ? dates[dates.length - 1] : "";
+  } catch {
+    latest = "";
+  }
+  const base = latest && latest >= today ? latest : "";
+  if (!base) {
+    return today;
+  }
+  const next = new Date(`${base}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString().slice(0, 10);
+}
+
+async function generateNextPackage(context: vscode.ExtensionContext): Promise<void> {
+  const root = await resolveOrBootstrapLocalRoot();
+  if (!root) {
+    return;
+  }
+  const suggested = nextPackageDate(root);
+  const dateInput = await vscode.window.showInputBox({
+    title: "Generate Next Package",
+    prompt: "Lesson date (YYYY-MM-DD). Defaults to the day after your latest lesson.",
+    value: suggested,
+    ignoreFocusOut: true,
+    validateInput: (value) => (/^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? null : "Use YYYY-MM-DD format."),
+  });
+  if (!dateInput) {
+    return;
+  }
+  const targetDate = dateInput.trim();
+  const brief = await vscode.window.showInputBox({
+    title: "Generate Next Package — Learner Brief",
+    prompt: "Optional: topic / material / situation to practice. Leave blank to fill in the prompt later.",
+    ignoreFocusOut: true,
+  });
+  const packageDir = path.join(root, "prebuilt", targetDate);
+  const targetFile = path.join(packageDir, "english-training.json");
+  if (fs.existsSync(targetFile)) {
+    const overwrite = await vscode.window.showWarningMessage(
+      `${targetDate}/english-training.json already exists. Overwrite with a blank skeleton?`,
+      { modal: true },
+      "Overwrite",
+    );
+    if (overwrite !== "Overwrite") {
+      return;
+    }
+  }
+  fs.mkdirSync(packageDir, { recursive: true });
+  writeJson(targetFile, blankTrainingPackage(targetDate));
+  writeJson(path.join(packageDir, "followup-drill.json"), blankFollowupDrillPackage(targetDate));
+  const prompt = buildGenerationPrompt({
+    date: targetDate,
+    brief: brief ?? "",
+    sampleTraining: sampleTrainingPackage(targetDate),
+    sampleDrill: sampleFollowupDrillPackage(targetDate),
+  });
+  const promptDoc = await vscode.workspace.openTextDocument({ language: "markdown", content: prompt });
+  await vscode.window.showTextDocument(promptDoc, { preview: false });
+  await vscode.window.showTextDocument(vscode.Uri.file(targetFile), { preview: false });
+  vscode.window.showInformationMessage(
+    `Blank skeleton written to prebuilt/${targetDate}. Feed the generation prompt to any LLM ` +
+      "(MiniMax / Gemini / Kimi / ...), paste its two JSON blocks back into the skeleton files, then Refresh.",
+  );
   await refreshAll();
 }
 
