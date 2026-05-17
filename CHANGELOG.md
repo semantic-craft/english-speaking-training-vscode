@@ -7,7 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.30] — 2026-05-17
+## [0.1.31] — 2026-05-17
+
+Supersedes the 0.1.30 Marketplace build, which was published from an
+incomplete state and is missing the changes below.
 
 ### Added
 - Added a Reading Card panel that displays prebuilt `daily-card.png`,
