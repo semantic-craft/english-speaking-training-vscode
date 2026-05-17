@@ -410,9 +410,36 @@ test("parses and chooses AVFoundation microphones without selecting blocked cont
   configValues.preferredMicrophoneName = "";
 });
 
-test("native recorder reports missing ffmpeg as ffmpeg, not as missing microphone", () => {
-  assert.throws(
-    () => api.listAvfoundationAudioDevices("/definitely/not/a/real/ffmpeg"),
+test("native recorder reports missing ffmpeg as ffmpeg, not as missing microphone", async () => {
+  // listAvfoundationAudioDevices is async now (cp.spawn, not the host-freezing
+  // cp.spawnSync) — a bad ffmpeg path must still surface as an ffmpeg error.
+  await assert.rejects(
+    api.listAvfoundationAudioDevices("/definitely/not/a/real/ffmpeg"),
     /Could not run ffmpeg/,
   );
+});
+
+test("device resolution: explicit device skips enumeration; auto enumerates", async () => {
+  api.invalidateResolvedAudioDevice();
+
+  // An explicit configured device must resolve WITHOUT invoking ffmpeg even
+  // when the binary path is bogus — this is the per-take hot path that
+  // P-CACHE keeps off the slow enumeration. The second call exercises the
+  // cache-hit branch (a broken cache key/return would surface here).
+  configValues.nativeRecorderFfmpegAudioDevice = "3";
+  assert.equal(await api.resolveNativeFfmpegAudioDevice("/definitely/not/a/real/ffmpeg"), "3");
+  assert.equal(await api.resolveNativeFfmpegAudioDevice("/definitely/not/a/real/ffmpeg"), "3");
+
+  // "auto" must actually enumerate, so a bogus ffmpeg surfaces as an ffmpeg
+  // error — and asynchronously (rejects, never a sync throw that would have
+  // frozen the host the way the old cp.spawnSync did).
+  api.invalidateResolvedAudioDevice();
+  configValues.nativeRecorderFfmpegAudioDevice = "auto";
+  await assert.rejects(
+    api.resolveNativeFfmpegAudioDevice("/definitely/not/a/real/ffmpeg"),
+    /Could not run ffmpeg/,
+  );
+
+  delete configValues.nativeRecorderFfmpegAudioDevice;
+  api.invalidateResolvedAudioDevice();
 });

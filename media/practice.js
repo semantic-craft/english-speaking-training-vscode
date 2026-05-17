@@ -1404,8 +1404,12 @@
       recorderMode = "native";
       nativeStarting = true;
       setRecording(true);
-      setStatus((reason ? reason + " " : "") + "Using Mac local recorder…");
-      startTimer();
+      // Acknowledge the press instantly with a moving prep status, but DON'T
+      // start the elapsed timer yet: it must count actual speakable recording
+      // time, not microphone warm-up. The host streams nativeRecordingPreparing
+      // phases; the timer starts when nativeRecordingStarted arrives.
+      setStatus((reason ? reason + " " : "") + "Preparing microphone…", "busy");
+      $("timer").textContent = "00:00";
       const practiceTarget = activeRecordingTarget || consumePracticeTarget();
       activeRecordingTarget = practiceTarget;
       vscode.postMessage({ type: "startNativeRecording", practiceTarget });
@@ -2096,9 +2100,23 @@
       const message = event.data || {};
       if (message.type === "state") renderState(message.state);
       if (message.type === "busy") setStatus(message.message || "Working…", "busy");
+      if (message.type === "nativeRecordingPreparing") {
+        // Live, moving feedback for the otherwise-opaque warm-up gap.
+        const prepLabels = {
+          reclaim: "Resetting the previous recorder…",
+          mic: "Preparing microphone…",
+          arming: "Starting recorder…",
+        };
+        if (nativeStarting) {
+          setStatus(prepLabels[message.phase] || "Preparing microphone…", "busy");
+        }
+      }
       if (message.type === "nativeRecordingStarted") {
         clearNativeStartWatchdog();
         nativeStarting = false;
+        // Now actually capturing — start the elapsed timer here so it
+        // reflects real recording time, not microphone warm-up.
+        startTimer();
         setStatus("Listening… speak now.");
       }
       if (message.type === "stage") {

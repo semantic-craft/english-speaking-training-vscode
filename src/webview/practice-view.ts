@@ -324,8 +324,14 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     if (!this.view) {
       return;
     }
-    const session = await startNativeFfmpegRecording(this.context, practiceTarget);
-    this.view.webview.postMessage({
+    const view = this.view;
+    // Stream the prep phases so "press record → can speak" is a visible,
+    // moving progression instead of one frozen line. Now that device
+    // enumeration is async (no spawnSync host freeze), these flush live.
+    const session = await startNativeFfmpegRecording(this.context, practiceTarget, (phase) => {
+      view.webview.postMessage({ type: "nativeRecordingPreparing", phase });
+    });
+    view.webview.postMessage({
       type: "nativeRecordingStarted",
       sessionDir: session.sessionDir,
     });
