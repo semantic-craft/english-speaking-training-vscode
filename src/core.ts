@@ -16,7 +16,6 @@ export const secretKeys: Record<ProviderName, string> = {
   mimo: "englishTraining.mimoKey",
   kimi: "englishTraining.kimiKey",
   deepseek: "englishTraining.deepSeekKey",
-  azure: "englishTraining.azureSpeechKey",
 };
 
 let _output: vscode.OutputChannel | undefined;
@@ -91,7 +90,6 @@ export function providerLabel(provider: ProviderName): string {
   if (provider === "minimax") return "MiniMax";
   if (provider === "mimo") return "MiMo";
   if (provider === "kimi") return "Kimi";
-  if (provider === "azure") return "Azure Speech";
   return "DeepSeek";
 }
 
@@ -102,8 +100,7 @@ export function isProviderName(value: unknown): value is ProviderName {
     value === "minimax" ||
     value === "mimo" ||
     value === "kimi" ||
-    value === "deepseek" ||
-    value === "azure"
+    value === "deepseek"
   );
 }
 
@@ -119,7 +116,7 @@ export function isCoachProvider(value: unknown): value is ProviderName {
 }
 
 export function isAudioUnderstandingProvider(value: unknown): value is ProviderName {
-  return value === "azure" || value === "gemini" || value === "openai";
+  return value === "gemini" || value === "openai";
 }
 
 export function isTtsProvider(value: unknown): value is ProviderName {

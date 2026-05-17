@@ -7,8 +7,7 @@ export type ProviderName =
   | "minimax"
   | "mimo"
   | "kimi"
-  | "deepseek"
-  | "azure";
+  | "deepseek";
 export type ActiveMaterialsSource = "local";
 export type KeyAvailability = Record<ProviderName, boolean>;
 
@@ -122,11 +121,19 @@ export interface PracticeResult {
   shadowingInstruction: string;
   errorTags: string[];
   nextDrill: string;
+  drillExamples?: DrillExample[];
   scores: JsonObject;
   audioFile?: string;
   followUpAudioFile?: string;
   sessionDir: string;
   packageDate: string;
+}
+
+export interface DrillExample {
+  label: string;
+  text: string;
+  reason?: string;
+  source?: string;
 }
 
 export interface WebviewAudioMessage {

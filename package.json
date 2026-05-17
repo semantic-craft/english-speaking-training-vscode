@@ -2,7 +2,7 @@
   "name": "english-speaking-training-vscode",
   "displayName": "English Speaking Training",
   "description": "Standalone VS Code speaking-practice cockpit for local EnglishSpeakingTraining files.",
-  "version": "0.1.29",
+  "version": "0.1.30",
   "publisher": "xianwei-zhang",
   "license": "MIT",
   "repository": {
@@ -82,11 +82,6 @@
         "category": "English Training"
       },
       {
-        "command": "englishTraining.configureAzureSpeechKey",
-        "title": "English Training: Configure Azure Speech Key",
-        "category": "English Training"
-      },
-      {
         "command": "englishTraining.useOpenAICoach",
         "title": "English Training: Use OpenAI Coach",
         "category": "English Training"
@@ -117,11 +112,6 @@
         "category": "English Training"
       },
       {
-        "command": "englishTraining.useAzureAudioUnderstanding",
-        "title": "English Training: Use Azure Speech Input",
-        "category": "English Training"
-      },
-      {
         "command": "englishTraining.useOpenAIRealtimeAudioUnderstanding",
         "title": "English Training: Use OpenAI Realtime Speech Input",
         "category": "English Training"
@@ -148,7 +138,7 @@
       },
       {
         "command": "englishTraining.useRecommendedHybrid",
-        "title": "English Training: Use Gemini + Azure Route",
+        "title": "English Training: Use Gemini Core Route",
         "category": "English Training"
       },
       {
@@ -233,27 +223,16 @@
             "kimi",
             "deepseek"
           ],
-          "description": "Language-model provider used for transcript correction and follow-up generation. Default routes through Gemini so the full core loop only needs Gemini + Azure keys; MiniMax, MiMo, OpenAI, Kimi, and DeepSeek are optional fallbacks."
+          "description": "Language-model provider used for transcript correction and follow-up generation. Default routes through Gemini so the full core loop only needs a Gemini key; MiniMax, MiMo, OpenAI, Kimi, and DeepSeek are optional fallbacks."
         },
         "englishTraining.audioUnderstandingProvider": {
           "type": "string",
-          "default": "azure",
+          "default": "gemini",
           "enum": [
-            "azure",
-            "openai",
-            "gemini"
+            "gemini",
+            "openai"
           ],
-          "description": "Speech input provider. Azure Speech remains the precise scoring route; OpenAI Realtime provides low-latency transcript deltas through gpt-realtime-whisper; Gemini can replace Azure for general audio understanding/transcription."
-        },
-        "englishTraining.azureSpeechRegion": {
-          "type": "string",
-          "default": "eastus",
-          "description": "Azure Speech resource region (for example eastus, westus, southeastasia). Used for both Fast Transcription and Pronunciation Assessment endpoints."
-        },
-        "englishTraining.azureSpeechLocale": {
-          "type": "string",
-          "default": "en-US",
-          "description": "BCP-47 locale used for Azure speech recognition and pronunciation assessment (en-US, en-GB, en-IN, etc.)."
+          "description": "Speech input provider. Gemini is the default STT-matching route; OpenAI Realtime provides lower-latency transcript deltas through gpt-realtime-whisper."
         },
         "englishTraining.ttsProvider": {
           "type": "string",
@@ -263,7 +242,7 @@
             "minimax",
             "openai"
           ],
-          "description": "Speech output provider used to generate the native-version follow-along audio. Default uses Gemini TTS so the full core loop only needs Gemini + Azure keys; MiniMax and OpenAI are optional fallbacks."
+          "description": "Speech output provider used to generate the native-version follow-along audio. Default uses Gemini TTS so the full core loop only needs a Gemini key; MiniMax and OpenAI are optional fallbacks."
         },
         "englishTraining.openaiCoachModel": {
           "type": "string",

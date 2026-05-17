@@ -110,7 +110,7 @@ test("activates without a workspace and registers the command surface", async ()
 
   extension.activate(context);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(registered.length, 30);
+  assert.equal(registered.length, 28);
   assert.ok(registered.includes("englishTraining.openPractice"));
   assert.ok(registered.includes("englishTraining.createSamplePackage"));
   extension.deactivate();
@@ -127,6 +127,52 @@ test("accepts a bring-your-own-materials root that only has prebuilt", () => {
   assert.equal(api.looksLikeTrainingRoot(notRoot), false);
 });
 
+test("resolves prebuilt reading-card assets from manifest paths", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "english-training-assets-"));
+  const packageDir = path.join(root, "prebuilt", "2026-05-17");
+  fs.mkdirSync(path.join(packageDir, "cards"), { recursive: true });
+  fs.mkdirSync(path.join(packageDir, "speech"), { recursive: true });
+  fs.writeFileSync(path.join(packageDir, "manifest.json"), JSON.stringify({
+    files: {
+      daily_card: "cards/daily.png",
+      prosody_detail: "cards/prosody.png",
+      audio_demo: "speech/demo.ogg",
+      telegram_task_card: "card.md",
+    },
+  }));
+
+  const assets = api.packageAssets(root, "2026-05-17");
+  assert.equal(assets.daily_card, path.join(packageDir, "cards", "daily.png"));
+  assert.equal(assets.prosody_detail, path.join(packageDir, "cards", "prosody.png"));
+  assert.equal(assets.demo_audio, path.join(packageDir, "speech", "demo.ogg"));
+  assert.equal(assets.task_card, path.join(packageDir, "card.md"));
+  assert.equal(assets.audio_queue, path.join(packageDir, "audio-queue.json"));
+});
+
+test("converts local reading-card assets to webview URIs", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "english-training-webview-assets-"));
+  const packageDir = path.join(root, "prebuilt", "2026-05-17");
+  fs.mkdirSync(path.join(packageDir, "audio"), { recursive: true });
+  fs.writeFileSync(path.join(packageDir, "daily-card.png"), "png");
+  fs.writeFileSync(path.join(packageDir, "prosody-detail.png"), "png");
+  fs.writeFileSync(path.join(packageDir, "audio", "demo.ogg"), "ogg");
+  const assets = api.packageAssets(root, "2026-05-17");
+  const webview = {
+    asWebviewUri(uri) {
+      return {
+        toString() {
+          return `webview:${uri.fsPath}`;
+        },
+      };
+    },
+  };
+
+  const nextState = api.toWebviewState(webview, { next: { assets } });
+  assert.equal(nextState.next.assets.daily_card_uri, `webview:${path.join(packageDir, "daily-card.png")}`);
+  assert.equal(nextState.next.assets.prosody_detail_uri, `webview:${path.join(packageDir, "prosody-detail.png")}`);
+  assert.equal(nextState.next.assets.demo_audio_uri, `webview:${path.join(packageDir, "audio", "demo.ogg")}`);
+});
+
 test("normalizes dirty TTS speeds before provider calls or UI state", () => {
   assert.equal(api.normalizeTtsSpeed(undefined), 0.9);
   assert.equal(api.normalizeTtsSpeed("1.234"), 1.23);
@@ -134,6 +180,14 @@ test("normalizes dirty TTS speeds before provider calls or UI state", () => {
   assert.equal(api.normalizeTtsSpeed(0), 0.9);
   assert.equal(api.normalizeTtsSpeed(99), 1.5);
   assert.equal(api.normalizeTtsSpeed(0.1), 0.5);
+});
+
+test("normalizes old Azure speech-input settings to Gemini", () => {
+  configValues.audioUnderstandingProvider = "azure";
+  assert.equal(api.normalizedSpeechInputProvider(), "gemini");
+  configValues.audioUnderstandingProvider = "openai";
+  assert.equal(api.normalizedSpeechInputProvider(), "openai");
+  configValues.audioUnderstandingProvider = "gemini";
 });
 
 test("repairs common malformed coaching JSON responses", () => {
@@ -185,6 +239,61 @@ test("normalizes shadow-practice target payloads defensively", () => {
     referenceLabel: "Reference",
     followUpQuestion: "Then answer.",
   });
+});
+
+test("collects FSI drill examples from prebuilt rounds and shadowing chunks", () => {
+  const state = {
+    drill: {
+      rounds: [
+        {
+          label: "Substitution",
+          examples: [
+            { cue: "base", text: "Repeat the base sentence." },
+            { cue: "slot", text: "Replace the claim slot." },
+          ],
+        },
+      ],
+      shadowing_loop: {
+        chunks: [
+          "Repeat the base sentence.",
+          "Close with a cleaner claim.",
+        ],
+      },
+    },
+  };
+
+  assert.deepEqual(api.drillExamplesFromState(state, "Repeat the base sentence."), [
+    {
+      label: "Substitution: slot",
+      text: "Replace the claim slot.",
+      source: "prebuilt",
+    },
+    {
+      label: "Shadowing chunk 2",
+      text: "Close with a cleaner claim.",
+      source: "prebuilt",
+    },
+  ]);
+});
+
+test("normalizes coach-generated drill examples into practice targets", () => {
+  assert.deepEqual(api.normalizeDrillExamples([
+    "A plain extra sentence.",
+    { label: "claim", text: "My claim is narrower.", reason: "替换 claim slot" },
+    { label: "empty", text: "   " },
+  ]), [
+    {
+      label: "Example 1",
+      text: "A plain extra sentence.",
+      source: "coach",
+    },
+    {
+      label: "claim",
+      text: "My claim is narrower.",
+      reason: "替换 claim slot",
+      source: "coach",
+    },
+  ]);
 });
 
 test("maps audio MIME types to stable file extensions and output MIME types", () => {

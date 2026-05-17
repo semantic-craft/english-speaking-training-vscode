@@ -13,6 +13,7 @@ import {
 } from "../core.js";
 import type {
   CoachPriorTurn,
+  DrillExample,
   JsonObject,
   PracticeTarget,
   PracticeResult,
@@ -45,7 +46,9 @@ export async function processPracticeFile(
   progress?.("transcribe", "done");
 
   progress?.("coach", "active");
-  const coaching = await coachTranscript(context, state, transcript, priorTurn, target);
+  const coaching = target
+    ? shadowCheckCoaching(state, transcript, target)
+    : await coachTranscript(context, state, transcript, priorTurn, target);
   const nativeVersion =
     target?.referenceText ||
     stringValue(coaching.native_version) ||
@@ -71,6 +74,11 @@ export async function processPracticeFile(
     stringValue(coaching.next_drill) ||
     stringValue(coaching.nextDrill) ||
     nextDrillFromState(state, errorTags);
+  const drillExamples = normalizeDrillExamples(coaching.drill_examples ?? coaching.drillExamples)
+    .concat(drillExamplesFromState(state, nativeVersion))
+    .filter(uniqueDrillExample())
+    .filter((example) => normalizeComparableText(example.text) !== normalizeComparableText(transcript))
+    .slice(0, 6);
   const scores = ((coaching.scores as JsonObject | undefined) ?? {}) as JsonObject;
   progress?.("coach", "done");
 
@@ -111,6 +119,7 @@ export async function processPracticeFile(
     shadowingInstruction,
     errorTags,
     nextDrill,
+    drillExamples,
     scores,
     audioFile,
     followUpAudioFile,
@@ -172,6 +181,7 @@ export function appendSessionLog(
     follow_up_question: result.followUpQuestion,
     shadowing_instruction: result.shadowingInstruction,
     next_drill: result.nextDrill,
+    drill_examples: result.drillExamples ?? [],
     mode: result.mode,
     reference_text: result.referenceText,
     reference_label: result.referenceLabel,
@@ -198,6 +208,40 @@ function normalizePracticeTarget(target: PracticeTarget | undefined): PracticeTa
   };
 }
 
+function shadowCheckCoaching(
+  state: TrainingState,
+  transcript: string,
+  target: PracticeTarget,
+): JsonObject {
+  const matched = normalizeComparableText(transcript) === normalizeComparableText(target.referenceText);
+  return {
+    native_version: target.referenceText,
+    problems: shadowProblems(transcript, target.referenceText, matched),
+    error_tags: matched ? [] : ["[PROS]"],
+    scores: {
+      recognition_match: matched ? 1 : 0,
+    },
+    quick_fix: matched
+      ? "识别文本和目标句基本一致。这一轮先算通过；下一轮重点放在重音、停顿和语调。"
+      : "系统没有稳定识别出目标句。先不要复杂评分，直接重读差异词，尤其是被漏掉、替换或误识别的单词。",
+    shadowing_instruction: `Repeat the reference once: ${target.referenceText}`,
+    follow_up_question: target.followUpQuestion,
+    next_drill: nextDrillFromState(state, matched ? [] : ["[PROS]"]),
+    drill_examples: drillExamplesFromState(state, target.referenceText),
+  };
+}
+
+function shadowProblems(transcript: string, reference: string, matched: boolean): string[] {
+  if (matched) {
+    return ["识别文本和目标句基本一致，说明这句的单词清晰度已经够用。"];
+  }
+  return [
+    `目标句：${reference}`,
+    `系统识别：${transcript || "（空）"}`,
+    "这轮先按 STT 匹配处理：识别不出来或识别错的词，就是下一次要重读的发音重点。",
+  ];
+}
+
 function normalizeProblems(
   transcript: string,
   nativeVersion: string,
@@ -208,15 +252,10 @@ function normalizeProblems(
   if (!target) {
     return coached;
   }
-  if (coached.length) {
-    return coached;
-  }
   if (normalizeComparableText(transcript) === normalizeComparableText(nativeVersion)) {
     return ["跟读文本与目标句基本一致。下一轮可以把重音和连读做得更自然。"];
   }
-  return [
-    "这轮是跟读检查：右侧 Reference 是标准文本，左侧转写可能混入语音识别误差。请优先对照高亮差异重读目标句。",
-  ];
+  return coached.length ? coached : shadowProblems(transcript, nativeVersion, false);
 }
 
 function normalizeComparableText(text: string): string {
@@ -293,6 +332,90 @@ export function nextDrillFromState(state: TrainingState, errorTags: string[]): s
     : `Do one FSI substitution loop${tagText}: keep the sentence frame stable and replace one slot quickly.`;
 }
 
+export function normalizeDrillExamples(value: unknown): DrillExample[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item, index): DrillExample | undefined => {
+      if (typeof item === "string") {
+        const text = item.replace(/\s+/g, " ").trim();
+        return text ? { label: `Example ${index + 1}`, text, source: "coach" } : undefined;
+      }
+      if (!item || typeof item !== "object") {
+        return undefined;
+      }
+      const obj = item as JsonObject;
+      const text = stringValue(obj.text).replace(/\s+/g, " ").trim();
+      if (!text) {
+        return undefined;
+      }
+      return {
+        label: stringValue(obj.label || obj.cue || obj.id).trim() || `Example ${index + 1}`,
+        text,
+        reason: stringValue(obj.reason || obj.note).trim(),
+        source: stringValue(obj.source).trim() || "coach",
+      };
+    })
+    .filter((item): item is DrillExample => Boolean(item));
+}
+
+export function drillExamplesFromState(state: TrainingState, currentText = ""): DrillExample[] {
+  const examples: DrillExample[] = [];
+  const current = normalizeComparableText(currentText);
+  const rounds = Array.isArray(state.drill.rounds) ? state.drill.rounds : [];
+  for (const round of rounds) {
+    if (!round || typeof round !== "object") {
+      continue;
+    }
+    const roundObj = round as JsonObject;
+    const roundLabel = stringValue(roundObj.label || roundObj.id).trim() || "FSI drill";
+    const roundExamples = Array.isArray(roundObj.examples) ? roundObj.examples : [];
+    for (const item of roundExamples) {
+      const itemObj = (item && typeof item === "object" ? item : {}) as JsonObject;
+      const text = (typeof item === "string" ? item : stringValue(itemObj.text)).replace(/\s+/g, " ").trim();
+      if (!text || normalizeComparableText(text) === current) {
+        continue;
+      }
+      const cue = stringValue(itemObj.cue || itemObj.label).trim();
+      examples.push({
+        label: cue ? `${roundLabel}: ${cue}` : roundLabel,
+        text,
+        source: "prebuilt",
+      });
+    }
+  }
+
+  const chunks = (state.drill.shadowing_loop as JsonObject | undefined)?.chunks;
+  if (Array.isArray(chunks)) {
+    for (const [index, chunk] of chunks.entries()) {
+      const text = stringValue(chunk).replace(/\s+/g, " ").trim();
+      if (!text || normalizeComparableText(text) === current) {
+        continue;
+      }
+      examples.push({
+        label: `Shadowing chunk ${index + 1}`,
+        text,
+        source: "prebuilt",
+      });
+    }
+  }
+
+  return examples.filter(uniqueDrillExample());
+}
+
+function uniqueDrillExample(): (example: DrillExample) => boolean {
+  const seen = new Set<string>();
+  return (example) => {
+    const key = normalizeComparableText(example.text);
+    if (!key || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  };
+}
+
 export function splitPracticeText(text: string): string[] {
   return text
     .replace(/<#\d+(?:\.\d+)?#>/g, " ")
@@ -348,6 +471,12 @@ export function writeSessionMarkdown(
     `## Next Drill`,
     ``,
     result.nextDrill,
+    ``,
+    `## Drill Examples`,
+    ``,
+    ...((result.drillExamples ?? []).length
+      ? (result.drillExamples ?? []).map((item) => `- ${item.label}: ${item.text}`)
+      : ["- none"]),
     ``,
     `## Follow-up`,
     ``,
