@@ -7,7 +7,6 @@ import type { JsonObject, ProviderName } from "./types.js";
 export const MINIMAX_ANTHROPIC_BASE_URL = "https://api.minimaxi.com/anthropic";
 export const MIMO_ANTHROPIC_BASE_URL = "https://token-plan-cn.xiaomimimo.com/anthropic";
 export const MIMO_OPENAI_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1";
-export const DEEPSEEK_ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic";
 export const MINIMAX_TTS_BASE_URL = "https://api.minimaxi.com/v1/t2a_v2";
 
 export const secretKeys: Record<ProviderName, string> = {
@@ -15,7 +14,6 @@ export const secretKeys: Record<ProviderName, string> = {
   gemini: "englishTraining.geminiKey",
   minimax: "englishTraining.minimaxKey",
   mimo: "englishTraining.mimoKey",
-  deepseek: "englishTraining.deepSeekKey",
 };
 
 let _output: vscode.OutputChannel | undefined;
@@ -47,11 +45,65 @@ export function stamp(): string {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 }
 
+/**
+ * A bounded fetch. Node's global fetch has no default timeout, so a stalled
+ * network (captive portal, dead VPN tunnel, a provider edge holding the
+ * socket) makes `await fetch()` — or a stalled `await response.text()` —
+ * never resolve and never reject, wedging the whole practice turn with no
+ * self-recovery. AbortSignal.timeout stays armed through the body read too
+ * (unlike a manually-cleared timer) and self-cleans, so the deadline covers
+ * the entire request. 90s is well beyond any healthy LLM/STT/TTS response
+ * but finite, so a true hang surfaces a clear, retryable error instead.
+ */
+export const HTTP_REQUEST_TIMEOUT_MS = 90_000;
+
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs: number = HTTP_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw new Error(
+        `Request timed out after ${Math.round(timeoutMs / 1000)}s — the network or provider ` +
+          `did not respond. Check your connection and press ↻ to retry.`,
+      );
+    }
+    throw error;
+  }
+}
+
 export function readJson(filePath: string): JsonObject | undefined {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8")) as JsonObject;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Like readJson, but distinguishes "file is absent" (legitimately empty,
+ * fall back silently) from "file exists but is malformed JSON" (the user
+ * has materials and made a typo — must NOT degrade silently). The plain
+ * readJson swallows both as undefined; for the core lesson package that
+ * conflation shows an enabled record button over a totally empty lesson
+ * with no hint that a trailing comma / markdown fence broke the JSON.
+ */
+export function readJsonDiagnosed(
+  filePath: string,
+): { data: JsonObject | undefined; parseError?: string } {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return { data: undefined };
+  }
+  try {
+    return { data: JSON.parse(raw) as JsonObject };
+  } catch (error) {
+    return { data: undefined, parseError: errorMessage(error) };
   }
 }
 
@@ -95,7 +147,6 @@ export function providerKeyCommandTitle(provider: ProviderName): string {
     gemini: "English Training: Configure Gemini API Key",
     minimax: "English Training: Configure MiniMax API Key",
     mimo: "English Training: Configure Xiaomi MiMo API Key",
-    deepseek: "English Training: Configure DeepSeek API Key",
   };
   return titles[provider];
 }
@@ -104,8 +155,7 @@ export function providerLabel(provider: ProviderName): string {
   if (provider === "openai") return "OpenAI";
   if (provider === "gemini") return "Gemini";
   if (provider === "minimax") return "MiniMax";
-  if (provider === "mimo") return "MiMo";
-  return "DeepSeek";
+  return "MiMo";
 }
 
 export function isProviderName(value: unknown): value is ProviderName {
@@ -113,8 +163,7 @@ export function isProviderName(value: unknown): value is ProviderName {
     value === "openai" ||
     value === "gemini" ||
     value === "minimax" ||
-    value === "mimo" ||
-    value === "deepseek"
+    value === "mimo"
   );
 }
 
@@ -122,7 +171,7 @@ export function isCoachProvider(value: unknown): value is ProviderName {
   return (
     value === "gemini" ||
     value === "mimo" ||
-    value === "deepseek"
+    value === "openai"
   );
 }
 

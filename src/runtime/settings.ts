@@ -1,6 +1,5 @@
 import {
   config,
-  DEEPSEEK_ANTHROPIC_BASE_URL,
   MIMO_ANTHROPIC_BASE_URL,
   MIMO_OPENAI_BASE_URL,
   normalizeTtsSpeed,
@@ -13,8 +12,8 @@ export type ProviderSettingName = "coachProvider" | "audioUnderstandingProvider"
 export type ConfigSettingName =
   | "mimoCoachModel"
   | "openaiRealtimeTranscriptionModel"
+  | "openaiCoachModel"
   | "geminiCoachModel"
-  | "deepseekCoachModel"
   | "geminiAudioUnderstandingModel"
   | "minimaxTtsModel"
   | "openaiTtsModel"
@@ -33,6 +32,7 @@ export function trainingSettings(): TrainingState["settings"] {
     audioUnderstandingProvider: normalizedSpeechInputProvider(),
     ttsProvider: config<string>("ttsProvider") || "gemini",
     openaiRealtimeTranscriptionModel: config<string>("openaiRealtimeTranscriptionModel") || "gpt-realtime-whisper",
+    openaiCoachModel: config<string>("openaiCoachModel") || "gpt-4o",
     geminiCoachModel: config<string>("geminiCoachModel") || "gemini-3-flash-preview",
     geminiTtsModel: config<string>("geminiTtsModel") || "gemini-3.1-flash-tts-preview",
     geminiTtsVoice: config<string>("geminiTtsVoice") || "Kore",
@@ -44,8 +44,6 @@ export function trainingSettings(): TrainingState["settings"] {
     mimoTtsBaseUrl: config<string>("mimoTtsBaseUrl") || MIMO_OPENAI_BASE_URL,
     mimoTtsModel: config<string>("mimoTtsModel") || "mimo-v2.5-tts",
     mimoTtsVoice: config<string>("mimoTtsVoice") || "Mia",
-    deepseekAnthropicBaseUrl: config<string>("deepseekAnthropicBaseUrl") || DEEPSEEK_ANTHROPIC_BASE_URL,
-    deepseekCoachModel: config<string>("deepseekCoachModel") || "deepseek-v4-pro",
     minimaxTtsModel: config<string>("minimaxTtsModel") || "speech-2.8-hd",
     minimaxTtsVoiceId: config<string>("minimaxTtsVoiceId") || "English_expressive_narrator",
     ttsSpeed: normalizeTtsSpeed(config<unknown>("ttsSpeed"), 0.9),
@@ -66,8 +64,8 @@ export function isConfigSettingName(value: unknown): value is ConfigSettingName 
   return (
     value === "mimoCoachModel" ||
     value === "openaiRealtimeTranscriptionModel" ||
+    value === "openaiCoachModel" ||
     value === "geminiCoachModel" ||
-    value === "deepseekCoachModel" ||
     value === "geminiAudioUnderstandingModel" ||
     value === "minimaxTtsModel" ||
     value === "openaiTtsModel" ||

@@ -9,6 +9,14 @@
     // not started, yielding "did not produce a usable audio file" + "exited
     // before it could start" double errors and a lost take.
     let nativeStarting = false;
+    // Bounds the startNativeRecording -> (nativeRecordingStarted | error)
+    // window. macLocal is the DEFAULT recorder, so if the host never replies
+    // (swallowed rejection, host crash/disconnect, ffmpeg spawn that neither
+    // confirms nor errors) the user is otherwise trapped forever: timer
+    // running, record button locked, stop tap inert (stopRecording bails
+    // while nativeStarting). This self-heals that into a clear, retryable
+    // state. Cleared the moment the start resolves either way.
+    let nativeStartWatchdog = null;
     let state = null;
     let audioCtx = null;
     let analyser = null;
@@ -114,6 +122,11 @@
     }
 
     function startTimer() {
+      // Idempotent: the webview-recorder fallback can reach startTimer twice
+      // (success path at mediaRecorder.start, then again via the catch ->
+      // startNativeRecording) without a stopTimer between. Without this the
+      // first interval is orphaned and repaints #timer at 4 Hz forever.
+      if (timerHandle) clearInterval(timerHandle);
       recordingStartedAt = Date.now();
       $("timer").textContent = "00:00";
       timerHandle = setInterval(() => {
@@ -196,8 +209,24 @@
       // the user still needs to press stop, and a half-finished recording
       // would otherwise be silently abandoned.
       if (isRecording()) return;
-      const { ready, coreKeysReady } = setupReady(currentState);
       const btn = $("record");
+      // A corrupt current-package JSON otherwise reads as an enabled record
+      // button over a totally empty lesson with no hint why. The lesson
+      // directory still counts toward setupReady's lesson tally, so this
+      // must be gated explicitly and ahead of the generic readiness check.
+      const diag = (currentState && currentState.sourceDiagnostics) || {};
+      if (diag.packageJsonError) {
+        recordingBlockedBySetup = true;
+        if (btn) btn.disabled = true;
+        setStatus(
+          "Today's lesson file (prebuilt/" + (diag.currentPackageDate || "?")
+            + "/english-training.json) has a JSON syntax error: " + diag.packageJsonError
+            + " — fix the JSON and press ↻.",
+          "error",
+        );
+        return;
+      }
+      const { ready, coreKeysReady } = setupReady(currentState);
       if (!ready) {
         recordingBlockedBySetup = true;
         if (btn) btn.disabled = true;
@@ -349,15 +378,14 @@
       minimax: "MiniMax",
       mimo: "MiMo",
       openai: "OpenAI",
-      gemini: "Gemini",
-      deepseek: "DeepSeek"
+      gemini: "Gemini"
     };
 
     const PROVIDER_ROUTES = {
       coachProvider: [
         { value: "gemini", label: "Gemini", note: "default coach", modelSetting: "geminiCoachModel" },
         { value: "mimo", label: "MiMo", note: "Xiaomi Token Plan", modelSetting: "mimoCoachModel" },
-        { value: "deepseek", label: "DeepSeek", note: "reasoning alternate", modelSetting: "deepseekCoachModel" },
+        { value: "openai", label: "OpenAI", note: "chat-completions alternate", modelSetting: "openaiCoachModel" },
       ],
       audioUnderstandingProvider: [
         { value: "gemini", label: "Gemini", note: "default STT match", modelSetting: "geminiAudioUnderstandingModel" },
@@ -445,7 +473,7 @@
     }
 
     function keyStripHtml(keys) {
-      return '<div class="key-strip">' + ["gemini", "openai", "minimax", "mimo", "deepseek"].map((name) => {
+      return '<div class="key-strip">' + ["gemini", "openai", "minimax", "mimo"].map((name) => {
         const saved = keys && keys[name];
         return '<button class="key-pill ' + (saved ? "saved" : "") + '" data-key="' + esc(name) + '">' + esc(providerLabel(name)) + ': ' + (saved ? "saved" : "missing") + '</button>';
       }).join("") + '</div>';
@@ -598,8 +626,17 @@
         ["Current JSON", value.currentJson || ""],
         ["Package folder", value.packageDir || ""],
       ].filter((row) => row[1]);
+      const errorBanner = value.packageJsonError
+        ? `<div role="alert" style="margin:6px 0;padding:8px 10px;border-radius:4px;`
+            + `background:var(--vscode-inputValidation-errorBackground,rgba(229,20,0,0.15));`
+            + `border:1px solid var(--vscode-inputValidation-errorBorder,var(--vscode-errorForeground,#e51400));`
+            + `color:var(--vscode-errorForeground,#e51400);font-size:12px;line-height:1.5;">`
+            + `⚠ This package's <code>english-training.json</code> failed to parse, so the lesson is empty. `
+            + `Fix the JSON syntax and press ↻ to reload.<br><strong>${esc(value.packageJsonError)}</strong></div>`
+        : "";
       panel.innerHTML = `
         <h3>Source Diagnostics</h3>
+        ${errorBanner}
         <div class="chips">
           <span class="chip">${esc(value.mode || "unknown")} source</span>
           <span class="chip">${esc(lessonText)}</span>
@@ -1335,6 +1372,33 @@
         .finally(() => { recordTransition = false; });
     }
 
+    function clearNativeStartWatchdog() {
+      if (nativeStartWatchdog) {
+        clearTimeout(nativeStartWatchdog);
+        nativeStartWatchdog = null;
+      }
+    }
+
+    // Tear down a live webview MediaRecorder + mic stream WITHOUT firing its
+    // onstop pipeline. Calling mediaRecorder.stop() here would post a second
+    // practiceAudio for audio the user never chose to submit, racing a turn
+    // on top of whatever error we are handling, and would leave the OS mic
+    // indicator lit. Mirrors the onstop finally cleanup minus the post.
+    function abortWebviewRecorder() {
+      if (mediaRecorder) {
+        mediaRecorder.onstop = null;
+        try {
+          if (mediaRecorder.state !== "inactive") mediaRecorder.stop();
+        } catch (_) {
+          /* already inactive — nothing to do */
+        }
+      }
+      if (stream) stream.getTracks().forEach((track) => track.stop());
+      stream = null;
+      mediaRecorder = null;
+      chunks = [];
+    }
+
     function startNativeRecording(reason) {
       clearProcessingWatchdog();
       recorderMode = "native";
@@ -1345,6 +1409,23 @@
       const practiceTarget = activeRecordingTarget || consumePracticeTarget();
       activeRecordingTarget = practiceTarget;
       vscode.postMessage({ type: "startNativeRecording", practiceTarget });
+      // Generous: host-side ffmpeg spawn + a ~900ms readiness probe; a healthy
+      // start confirms well within this. If nothing comes back, unwind the
+      // stuck state instead of leaving the user trapped.
+      clearNativeStartWatchdog();
+      nativeStartWatchdog = setTimeout(() => {
+        nativeStartWatchdog = null;
+        if (!nativeStarting) return; // start already resolved — nothing to do
+        nativeStarting = false;
+        recorderMode = null;
+        setRecording(false);
+        stopTimer();
+        setBusy(false);
+        setStatus(
+          "The Mac local recorder did not start. Check microphone permission and that ffmpeg is installed, then press record to try again.",
+          "error",
+        );
+      }, 15000);
     }
 
     function blobToBase64(blob) {
@@ -2016,6 +2097,7 @@
       if (message.type === "state") renderState(message.state);
       if (message.type === "busy") setStatus(message.message || "Working…", "busy");
       if (message.type === "nativeRecordingStarted") {
+        clearNativeStartWatchdog();
         nativeStarting = false;
         setStatus("Listening… speak now.");
       }
@@ -2205,11 +2287,14 @@
       }
       if (message.type === "error") {
         clearProcessingWatchdog();
+        clearNativeStartWatchdog();
         nativeStarting = false;
-        if (recorderMode === "native") {
-          recorderMode = null;
-          setRecording(false);
-        }
+        // Reset the recorder regardless of mode: a webview recorder must be
+        // torn down here too (hot mic + zombie recorder otherwise), and a
+        // native one cleared. abortWebviewRecorder is a no-op when idle.
+        abortWebviewRecorder();
+        recorderMode = null;
+        setRecording(false);
         stopVuMeter();
         stopTimer();
         setBusy(false);

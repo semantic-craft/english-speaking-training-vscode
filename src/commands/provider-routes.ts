@@ -10,8 +10,10 @@ import type { ProviderSettingName } from "../runtime/settings.js";
 export async function migrateGeminiModelDefaults(): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
   await migrateProviderSetting(settings, "coachProvider", "minimax", "gemini");
-  await migrateProviderSetting(settings, "coachProvider", "openai", "gemini");
   await migrateProviderSetting(settings, "coachProvider", "kimi", "gemini");
+  // DeepSeek was removed as a coach provider; fall existing users back to
+  // the default so a now-unrouteable value can't wedge the coach step.
+  await migrateProviderSetting(settings, "coachProvider", "deepseek", "gemini");
   await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "gemini");
   // NOTE: do not migrate `ttsProvider: minimax`. MiniMax is a currently
   // supported, UI-selectable speech-output provider. Migrating it here ran on
@@ -64,7 +66,6 @@ export async function apiKeyAvailability(context: vscode.ExtensionContext): Prom
     gemini: Boolean(await context.secrets.get(secretKeys.gemini)),
     minimax: Boolean(await context.secrets.get(secretKeys.minimax)),
     mimo: Boolean(await context.secrets.get(secretKeys.mimo)),
-    deepseek: Boolean(await context.secrets.get(secretKeys.deepseek)),
   };
 }
 
@@ -85,7 +86,7 @@ export async function configureApiKey(context: vscode.ExtensionContext, provider
 }
 
 export async function pickAndConfigureProviderKey(context: vscode.ExtensionContext): Promise<void> {
-  const providers: ProviderName[] = ["gemini", "openai", "minimax", "mimo", "deepseek"];
+  const providers: ProviderName[] = ["gemini", "openai", "minimax", "mimo"];
   const availability = await apiKeyAvailability(context);
   const items: (vscode.QuickPickItem & { provider: ProviderName })[] = providers.map((provider) => ({
     provider,

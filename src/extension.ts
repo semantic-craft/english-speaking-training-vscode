@@ -30,7 +30,6 @@ import {
   arrayOfStrings,
   config,
   errorMessage,
-  DEEPSEEK_ANTHROPIC_BASE_URL,
   isAudioUnderstandingProvider,
   isCoachProvider,
   isProviderName,
@@ -42,6 +41,7 @@ import {
   parseFirstJson,
   providerLabel,
   readJson,
+  readJsonDiagnosed,
   resolveFfmpegPath,
   secretKeys,
   setOutputChannel,
@@ -169,7 +169,20 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(output);
   context.subscriptions.push(vscode.window.registerTreeDataProvider("englishTraining.status", statusProvider));
-  context.subscriptions.push(vscode.window.registerWebviewViewProvider("englishTraining.practice", practiceProvider));
+  // retainContextWhenHidden: the practice cockpit holds the whole live
+  // session in webview JS memory (turn history, last coaching, generated
+  // drill lines, armed reply/shadow context) and persists none of it via
+  // vscode.setState. Without this, collapsing the view or clicking another
+  // sidebar item tears the webview down and silently wipes an in-progress
+  // session; it also strands a running native ffmpeg recorder whose only
+  // stop hook is onDidDispose (which does not fire on hide), bricking the
+  // recorder ("already running") on return. Keeping the context costs some
+  // memory while hidden — the right trade for a practice session.
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider("englishTraining.practice", practiceProvider, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
 
   const register = (command: string, callback: (...args: unknown[]) => unknown) => {
     context.subscriptions.push(vscode.commands.registerCommand(command, callback));
@@ -197,9 +210,6 @@ export function activate(context: vscode.ExtensionContext): void {
   register("englishTraining.configureMimoKey", async () => {
     await configureApiKey(context, "mimo");
   });
-  register("englishTraining.configureDeepSeekKey", async () => {
-    await configureApiKey(context, "deepseek");
-  });
   register("englishTraining.clearApiKeys", async () => {
     await clearApiKeys(context);
   });
@@ -209,8 +219,8 @@ export function activate(context: vscode.ExtensionContext): void {
   register("englishTraining.useMimoCoach", async () => {
     await setProviderSetting("coachProvider", "mimo");
   });
-  register("englishTraining.useDeepSeekCoach", async () => {
-    await setProviderSetting("coachProvider", "deepseek");
+  register("englishTraining.useOpenAICoach", async () => {
+    await setProviderSetting("coachProvider", "openai");
   });
   register("englishTraining.useOpenAIRealtimeAudioUnderstanding", async () => {
     await setProviderSetting("audioUnderstandingProvider", "openai");
@@ -284,6 +294,7 @@ export const __test__ = {
   packageAssets,
   parseAvfoundationAudioDevices,
   parseLooseJson,
+  readJsonDiagnosed,
   speechOutputExtension,
   todayExampleText,
   toWebviewState,
@@ -343,8 +354,8 @@ function configSettingLabel(setting: ConfigSettingName): string {
   switch (setting) {
     case "mimoCoachModel": return "MiMo coach model";
     case "openaiRealtimeTranscriptionModel": return "OpenAI Realtime speech-input model";
+    case "openaiCoachModel": return "OpenAI coach model";
     case "geminiCoachModel": return "Gemini coach model";
-    case "deepseekCoachModel": return "DeepSeek coach model";
     case "geminiAudioUnderstandingModel": return "Gemini speech-input model";
     case "minimaxTtsModel": return "MiniMax speech-output model";
     case "openaiTtsModel": return "OpenAI speech-output model";
@@ -367,8 +378,8 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
   switch (setting) {
     case "mimoCoachModel": return ["mimo-v2.5-pro", "mimo-v2.5-flash"];
     case "openaiRealtimeTranscriptionModel": return ["gpt-realtime-whisper"];
+    case "openaiCoachModel": return ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"];
     case "geminiCoachModel": return GEMINI_TEXT_MODEL_OPTIONS;
-    case "deepseekCoachModel": return ["deepseek-v4-pro", "deepseek-v4-flash"];
     case "geminiAudioUnderstandingModel": return GEMINI_TEXT_MODEL_OPTIONS;
     case "minimaxTtsModel": return ["speech-2.8-hd", "speech-2.8-turbo"];
     case "openaiTtsModel": return ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"];
@@ -383,7 +394,6 @@ function providerSetupHint(provider: ProviderName): string {
     case "gemini": return "Gemini · default coach + speech input + native-version TTS";
     case "minimax": return "MiniMax · speech-output (TTS) provider";
     case "mimo": return "Xiaomi MiMo · coach + speech input + speech-output (Token Plan)";
-    case "openai": return "OpenAI · Realtime speech input + TTS";
-    case "deepseek": return "DeepSeek · alternate coach (Anthropic-compatible)";
+    case "openai": return "OpenAI · coach + Realtime speech input + TTS";
   }
 }

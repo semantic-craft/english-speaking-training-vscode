@@ -2,8 +2,8 @@ import * as vscode from "vscode";
 
 import {
   config,
-  DEEPSEEK_ANTHROPIC_BASE_URL,
   extractGeminiText,
+  fetchWithTimeout,
   getRequiredKey,
   MIMO_ANTHROPIC_BASE_URL,
   parseLooseJson,
@@ -328,14 +328,9 @@ async function requestProviderJson(
       model: config<string>("mimoCoachModel") || "mimo-v2.5-pro",
     });
   }
-  if (provider === "deepseek") {
-    const apiKey = await getRequiredKey(context, "deepseek");
-    return callAnthropicJson(system, user, {
-      provider: "DeepSeek",
-      apiKey,
-      baseUrl: config<string>("deepseekAnthropicBaseUrl") || DEEPSEEK_ANTHROPIC_BASE_URL,
-      model: config<string>("deepseekCoachModel") || "deepseek-v4-pro",
-    });
+  if (provider === "openai") {
+    const apiKey = await getRequiredKey(context, "openai");
+    return callOpenAIJson(apiKey, config<string>("openaiCoachModel") || "gpt-4o", system, user);
   }
   // Gemini is the default coach and the safety net for any stale/removed value.
   const apiKey = await getRequiredKey(context, "gemini");
@@ -353,7 +348,7 @@ async function callAnthropicJson(
   },
 ): Promise<JsonObject> {
   const baseUrl = options.baseUrl.trim().replace(/\/+$/, "");
-  const response = await fetch(`${baseUrl}/v1/messages`, {
+  const response = await fetchWithTimeout(`${baseUrl}/v1/messages`, {
     method: "POST",
     headers: {
       "X-Api-Key": options.apiKey,
@@ -387,7 +382,7 @@ async function callGeminiJson(
   system: string,
   user: string,
 ): Promise<JsonObject> {
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
       method: "POST",
@@ -414,6 +409,39 @@ async function callGeminiJson(
   }
   const parsed = JSON.parse(body) as JsonObject;
   return parseLooseJson(extractGeminiText(parsed));
+}
+
+async function callOpenAIJson(
+  apiKey: string,
+  model: string,
+  system: string,
+  user: string,
+): Promise<JsonObject> {
+  const response = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`OpenAI request failed (${response.status}): ${body.slice(0, 1200)}`);
+  }
+  const parsed = JSON.parse(body) as JsonObject;
+  const choices = parsed.choices;
+  const message = Array.isArray(choices) && choices.length
+    ? ((choices[0] as JsonObject).message as JsonObject | undefined)
+    : undefined;
+  return parseLooseJson(stringValue(message?.content));
 }
 
 function extractAnthropicText(parsed: JsonObject): string {

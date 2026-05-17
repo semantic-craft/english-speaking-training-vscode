@@ -110,10 +110,15 @@ test("activates without a workspace and registers the command surface", async ()
 
   extension.activate(context);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(registered.length, 26);
+  assert.equal(registered.length, 25);
   assert.ok(registered.includes("englishTraining.openPractice"));
   assert.ok(registered.includes("englishTraining.createSamplePackage"));
   assert.ok(registered.includes("englishTraining.generateNextPackage"));
+  // DeepSeek coach was fully removed in favor of OpenAI; guard the rename so
+  // the dead configure-key command can't silently reappear.
+  assert.ok(registered.includes("englishTraining.useOpenAICoach"));
+  assert.ok(!registered.includes("englishTraining.useDeepSeekCoach"));
+  assert.ok(!registered.includes("englishTraining.configureDeepSeekKey"));
   extension.deactivate();
   mockVscode.commands.registerCommand = previousRegisterCommand;
 });
@@ -250,6 +255,27 @@ test("repairs common malformed coaching JSON responses", () => {
   assert.deepEqual(api.parseLooseJson('prefix {"native_version":"Hello"} suffix'), {
     native_version: "Hello",
   });
+});
+
+test("distinguishes a missing package file from a corrupt one", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "est-readjson-"));
+
+  const missing = api.readJsonDiagnosed(path.join(dir, "nope.json"));
+  assert.equal(missing.data, undefined);
+  assert.equal(missing.parseError, undefined);
+
+  const badPath = path.join(dir, "bad.json");
+  fs.writeFileSync(badPath, '{"goal":"Speak",}\n', "utf8");
+  const bad = api.readJsonDiagnosed(badPath);
+  assert.equal(bad.data, undefined);
+  assert.equal(typeof bad.parseError, "string");
+  assert.ok(bad.parseError.length > 0);
+
+  const goodPath = path.join(dir, "good.json");
+  fs.writeFileSync(goodPath, '{"goal":"Speak"}\n', "utf8");
+  const good = api.readJsonDiagnosed(goodPath);
+  assert.deepEqual(good.data, { goal: "Speak" });
+  assert.equal(good.parseError, undefined);
 });
 
 test("selects example text from explicit fields before frame fallback", () => {

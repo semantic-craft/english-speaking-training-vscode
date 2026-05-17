@@ -6,6 +6,7 @@ import {
   arrayOfStrings,
   parseFirstJson,
   readJson,
+  readJsonDiagnosed,
   stringValue,
 } from "../core.js";
 import type {
@@ -42,14 +43,23 @@ export async function loadLocalState(
   const root = await findTrainingRoot();
   const next = await resolveNextPackage(root, today);
   const packageDate = stringValue(next.package_date);
-  const training = packageDate ? readJson(path.join(root, "prebuilt", packageDate, "english-training.json")) ?? {} : {};
+  const trainingRead = packageDate
+    ? readJsonDiagnosed(path.join(root, "prebuilt", packageDate, "english-training.json"))
+    : { data: undefined as JsonObject | undefined };
+  const training = trainingRead.data ?? {};
   const drill = packageDate ? buildDrillPlan(root, packageDate, training) : {};
   const trainingForState = packageDate
     ? { ...training, tts_example_text: todayExampleText(training, next) }
     : training;
   const inventory = readLocalInventory(root);
   const progress = buildProgressSnapshot(inventory.dates, inventory.completed, today, packageDate);
-  const sourceDiagnostics = buildLocalSourceDiagnostics(root, settings, inventory, packageDate);
+  const sourceDiagnostics = buildLocalSourceDiagnostics(
+    root,
+    settings,
+    inventory,
+    packageDate,
+    trainingRead.parseError,
+  );
 
   return {
     root,
@@ -74,6 +84,7 @@ export function buildLocalSourceDiagnostics(
   settings: TrainingState["settings"],
   inventory: { dates: string[]; completed: Set<string> },
   packageDate: string,
+  packageJsonError?: string,
 ): SourceDiagnostics {
   return {
     mode: "local",
@@ -85,6 +96,7 @@ export function buildLocalSourceDiagnostics(
     lessonCount: inventory.dates.length,
     completedCount: inventory.completed.size,
     dateRange: dateRangeLabel(inventory.dates),
+    ...(packageJsonError ? { packageJsonError } : {}),
   };
 }
 
