@@ -1151,6 +1151,13 @@
       box-shadow: inset 0 -2px 0 var(--vscode-errorForeground, #e51400);
       font-weight: 700;
     }
+    /* Syllable-level stress: only the primary syllable carries the prominence
+       colour, the rest of the word is dimmed, so the stressed syllable is
+       unmistakable instead of the whole word reading as one flat block. */
+    .pw-syllabified { background: none; font-weight: 600; }
+    .pw-syl { border-radius: 3px; padding: 0 1px; }
+    .pw-syl-weak { color: var(--muted); font-weight: 400; }
+    .pw-syl-sep { color: var(--muted); opacity: 0.5; margin: 0 1px; font-weight: 400; }
     .pg-break {
       display: inline-flex;
       align-items: center;

@@ -12,7 +12,7 @@ import type { JsonObject } from "./types.js";
  * with the enumerations declared below.
  */
 
-export const CARD_SCHEMA_VERSION = "1.0";
+export const CARD_SCHEMA_VERSION = "1.1";
 
 /** Glyphs the renderer understands for intonation contours. */
 export const CONTOUR_GLYPHS = ["→", "↘", "↗", "↑", "↓"] as const;
@@ -90,20 +90,29 @@ export const CARD_SCHEMA: JsonObject = {
       },
       words: {
         type:
-          "SPARSE array — include ONLY notable words (every stressed beat + every nucleus). " +
-          "Do NOT list every word; unlisted words render as plain unstressed text.",
+          "SPARSE array — include ONLY genuinely prominent words: exactly one nucleus per group, " +
+          "plus the few real rhythmic beats (a typical thought group has 1-3 'support' beats, NOT every " +
+          "content word). Unlisted words render as plain unstressed text. Over-listing every content " +
+          "word as 'support' makes the stress card uniform and useless — keep it sparse on purpose.",
         item: {
           text:
             "string. The token exactly as it appears in its group's text (case + trailing punctuation included). " +
             "The renderer matches it case-insensitively to one token in groups[group].text.",
           stress: `string, one of ${JSON.stringify(STRESS_LEVELS)}. 'nucleus' = boxed/underlined main stress; 'support' = secondary beat; 'weak' = de-emphasized.`,
+          syllables:
+            "string, RECOMMENDED for every multi-syllable listed word. The word split into syllables by " +
+            "'·' (U+00B7 middle dot), with the PRIMARY-stressed syllable in ALL-CAPS and the rest lowercase; " +
+            "keep any trailing punctuation on its syllable. Examples: 'accountability' -> 'ac·COUNT·a·bil·i·ty', " +
+            "'platforms.' -> 'PLAT·forms.', 'respond' -> 're·SPOND'. Omit for monosyllabic words and " +
+            "initialisms (they render whole). This is what lets the card show WHICH syllable carries the stress.",
           pitch_role: "string. Free-text label e.g. 'support beat' | 'falling target' | 'level continuation'.",
           arrow: `string, '' or one of ${JSON.stringify(CONTOUR_GLYPHS)}. Normally '' except the nucleus word, which carries its group's contour.`,
           group: "integer. The id of the groups[] entry this word belongs to.",
         },
         rule:
           "Each group MUST have exactly one word with stress:'nucleus' whose text equals that group's nucleus and " +
-          "whose arrow equals that group's contour.",
+          "whose arrow equals that group's contour. Every multi-syllable listed word SHOULD carry 'syllables' " +
+          "with exactly one ALL-CAPS (primary-stress) syllable so the renderer can mark the stressed syllable.",
       },
     },
   },
@@ -142,7 +151,8 @@ export const CARD_SCHEMA: JsonObject = {
     "groups[].nucleus must be a verbatim token inside that group's text.",
     `contour and words[].arrow values must come from ${JSON.stringify(CONTOUR_GLYPHS)} (use '' for non-nucleus arrows).`,
     `pause_after must be one of ${JSON.stringify(PAUSE_VALUES)}; stress must be one of ${JSON.stringify(STRESS_LEVELS)}.`,
-    "words[] is sparse: list only stressed beats and nuclei, not every word.",
+    "words[] is sparse: exactly ONE nucleus per group plus only the 1-3 real rhythmic beats; never tag every content word as 'support'.",
+    "Every multi-syllable word listed in words[] MUST include 'syllables' with exactly one ALL-CAPS primary-stress syllable, split by '·'.",
     "Every drill example.text and shadowing chunk must be a complete, speakable sentence.",
     "Never invent file paths the generator cannot create; omit assets/manifest unless images are actually produced.",
   ],
@@ -197,10 +207,10 @@ export function blankTrainingPackage(date: string): JsonObject {
         },
       ],
       words: [
-        { text: placeholder("stressed support word"), stress: "support", pitch_role: "support beat", arrow: "", group: 1 },
-        { text: placeholder("group 1 nucleus token"), stress: "nucleus", pitch_role: "level continuation", arrow: "→", group: 1 },
-        { text: placeholder("stressed support word"), stress: "support", pitch_role: "support beat", arrow: "", group: 2 },
-        { text: placeholder("group 2 nucleus token"), stress: "nucleus", pitch_role: "falling target", arrow: "↘", group: 2 },
+        { text: placeholder("one real support beat in group 1"), stress: "support", syllables: placeholder("sup·PORT·beat"), pitch_role: "support beat", arrow: "", group: 1 },
+        { text: placeholder("group 1 nucleus token"), stress: "nucleus", syllables: placeholder("NU·cle·us"), pitch_role: "level continuation", arrow: "→", group: 1 },
+        { text: placeholder("one real support beat in group 2"), stress: "support", syllables: placeholder("sup·PORT·beat"), pitch_role: "support beat", arrow: "", group: 2 },
+        { text: placeholder("group 2 nucleus token"), stress: "nucleus", syllables: placeholder("NU·cle·us"), pitch_role: "falling target", arrow: "↘", group: 2 },
       ],
     },
     notes: [

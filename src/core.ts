@@ -6,6 +6,7 @@ import type { JsonObject, ProviderName } from "./types.js";
 
 export const MINIMAX_ANTHROPIC_BASE_URL = "https://api.minimaxi.com/anthropic";
 export const MIMO_ANTHROPIC_BASE_URL = "https://token-plan-cn.xiaomimimo.com/anthropic";
+export const MIMO_OPENAI_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1";
 export const DEEPSEEK_ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic";
 export const MINIMAX_TTS_BASE_URL = "https://api.minimaxi.com/v1/t2a_v2";
 
@@ -14,7 +15,6 @@ export const secretKeys: Record<ProviderName, string> = {
   gemini: "englishTraining.geminiKey",
   minimax: "englishTraining.minimaxKey",
   mimo: "englishTraining.mimoKey",
-  kimi: "englishTraining.kimiKey",
   deepseek: "englishTraining.deepSeekKey",
 };
 
@@ -89,7 +89,6 @@ export function providerLabel(provider: ProviderName): string {
   if (provider === "gemini") return "Gemini";
   if (provider === "minimax") return "MiniMax";
   if (provider === "mimo") return "MiMo";
-  if (provider === "kimi") return "Kimi";
   return "DeepSeek";
 }
 
@@ -99,28 +98,26 @@ export function isProviderName(value: unknown): value is ProviderName {
     value === "gemini" ||
     value === "minimax" ||
     value === "mimo" ||
-    value === "kimi" ||
     value === "deepseek"
   );
 }
 
 export function isCoachProvider(value: unknown): value is ProviderName {
   return (
-    value === "minimax" ||
-    value === "mimo" ||
     value === "gemini" ||
-    value === "kimi" ||
-    value === "deepseek" ||
-    value === "openai"
+    value === "mimo" ||
+    value === "deepseek"
   );
 }
 
 export function isAudioUnderstandingProvider(value: unknown): value is ProviderName {
-  return value === "gemini" || value === "openai";
+  return value === "gemini" || value === "openai" || value === "mimo";
 }
 
 export function isTtsProvider(value: unknown): value is ProviderName {
-  return value === "minimax" || value === "gemini" || value === "openai";
+  return (
+    value === "minimax" || value === "gemini" || value === "openai" || value === "mimo"
+  );
 }
 
 export function chatCompletionsUrl(baseUrl: string): string {

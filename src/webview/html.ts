@@ -81,6 +81,14 @@ export function buildPracticeHtml(webview: vscode.Webview, extensionUri: vscode.
             <button class="secondary" id="openFolder">Sessions</button>
           </div>
         </section>
+        <section class="panel">
+          <h3>Generate training material</h3>
+          <p class="muted">Type a topic. The configured Coach model expands it into a tailored brief, then writes one ready-to-paste generation prompt to a folder you pick. Paste that prompt into any LLM to get a schema-correct lesson package.</p>
+          <div class="row">
+            <button class="secondary" data-onboard="compose-material">Compose prompt with Coach</button>
+            <button class="secondary" data-onboard="materials-guide">Materials guide</button>
+          </div>
+        </section>
       </div>
     </details>
   </div>

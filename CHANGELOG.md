@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.30] — 2026-05-17
 
 ### Added
 - Added a Reading Card panel that displays prebuilt `daily-card.png`,
@@ -18,6 +18,15 @@ and this project adheres to
   Code surface.
 - Added interactive FSI drill choices after a practice result, with Listen,
   Practice, and Skip actions for generated or prebuilt substitution examples.
+- Added Xiaomi MiMo as a speech-input (audio understanding) provider and as a
+  speech-output (TTS) provider, both reusing the existing MiMo API key over the
+  OpenAI-compatible endpoint.
+- Added `English Training: Compose Material Prompt with Coach`: type a topic and
+  a lesson date, the configured Coach model expands it into a tailored brief,
+  and the extension writes one schema-conformant `material-generation-prompt.md`
+  you can paste into any LLM. Surfaced as a "Generate training material" panel
+  at the bottom of the Practice sidebar and documented in the README and
+  Materials Guide.
 
 ### Changed
 - Removed Azure from the active speech-input route. Gemini is now the default
@@ -25,6 +34,10 @@ and this project adheres to
   STT route.
 - Shadowing checks now use simple transcript-vs-reference matching instead of
   Azure-style pronunciation scoring.
+- Consolidated coach providers to Gemini, Xiaomi MiMo, and DeepSeek. Removed
+  Kimi entirely; OpenAI and MiniMax remain available for speech input/output
+  only. Stale `kimi`, `openai`, or `minimax` coach settings now migrate to
+  Gemini automatically.
 
 ## [0.1.29] — 2026-05-14
 

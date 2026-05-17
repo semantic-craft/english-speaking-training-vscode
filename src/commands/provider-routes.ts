@@ -10,6 +10,8 @@ import type { ProviderSettingName } from "../runtime/settings.js";
 export async function migrateGeminiModelDefaults(): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
   await migrateProviderSetting(settings, "coachProvider", "minimax", "gemini");
+  await migrateProviderSetting(settings, "coachProvider", "openai", "gemini");
+  await migrateProviderSetting(settings, "coachProvider", "kimi", "gemini");
   await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "gemini");
   await migrateProviderSetting(settings, "ttsProvider", "minimax", "gemini");
   await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-flash", "gemini-3-flash-preview");
@@ -59,7 +61,6 @@ export async function apiKeyAvailability(context: vscode.ExtensionContext): Prom
     gemini: Boolean(await context.secrets.get(secretKeys.gemini)),
     minimax: Boolean(await context.secrets.get(secretKeys.minimax)),
     mimo: Boolean(await context.secrets.get(secretKeys.mimo)),
-    kimi: Boolean(await context.secrets.get(secretKeys.kimi)),
     deepseek: Boolean(await context.secrets.get(secretKeys.deepseek)),
   };
 }
@@ -81,7 +82,7 @@ export async function configureApiKey(context: vscode.ExtensionContext, provider
 }
 
 export async function pickAndConfigureProviderKey(context: vscode.ExtensionContext): Promise<void> {
-  const providers: ProviderName[] = ["gemini", "openai", "minimax", "mimo", "kimi", "deepseek"];
+  const providers: ProviderName[] = ["gemini", "openai", "minimax", "mimo", "deepseek"];
   const availability = await apiKeyAvailability(context);
   const items: (vscode.QuickPickItem & { provider: ProviderName })[] = providers.map((provider) => ({
     provider,

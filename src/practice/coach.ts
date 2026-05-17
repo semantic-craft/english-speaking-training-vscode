@@ -1,15 +1,11 @@
 import * as vscode from "vscode";
 
 import {
-  appendOutput,
-  chatCompletionsUrl,
   config,
   DEEPSEEK_ANTHROPIC_BASE_URL,
   extractGeminiText,
-  extractOpenAIText,
   getRequiredKey,
   MIMO_ANTHROPIC_BASE_URL,
-  MINIMAX_ANTHROPIC_BASE_URL,
   parseLooseJson,
   stringValue,
 } from "../core.js";
@@ -237,29 +233,92 @@ export function drillGenUserPrompt(state: TrainingState, count: number, existing
   return JSON.stringify(payload, null, 2);
 }
 
+export async function composeMaterialBrief(
+  context: vscode.ExtensionContext,
+  topic: string,
+): Promise<string> {
+  const parsed = await requestProviderJson(
+    context,
+    composeMaterialBriefSystemPrompt(),
+    composeMaterialBriefUserPrompt(topic),
+  );
+  return formatMaterialBrief(parsed);
+}
+
+export function composeMaterialBriefSystemPrompt(): string {
+  return [
+    "You are an instructional designer for an English speaking-training tool used by an academic.",
+    "The learner gives you a terse topic; you turn it into a precise brief for generating ONE daily",
+    "spoken-English lesson (a 20-40s spoken answer the learner shadows and adapts).",
+    "Return strict JSON only with these keys: scenario, interlocutor, goal, register, key_expressions,",
+    "difficulty, success_sounds_like, prosody_focus, chinese_setup.",
+    "scenario/goal/success_sounds_like/register/prosody_focus are short English strings;",
+    "interlocutor is who the learner is speaking to; key_expressions is an array of 4-8 natural",
+    "academic-spoken phrases or collocations; difficulty is one of beginner|intermediate|advanced;",
+    "chinese_setup is a one-sentence Chinese task instruction for the learner.",
+    "Stay in the learner's own domain inferred from the topic; do not invent unrelated content.",
+    "Do not wrap the JSON in Markdown fences, comments, explanations, or trailing text.",
+  ].join(" ");
+}
+
+export function composeMaterialBriefUserPrompt(topic: string): string {
+  const payload: JsonObject = {
+    topic: topic.trim(),
+    request: {
+      instruction:
+        "Expand this topic into a brief for ONE daily speaking lesson. Keep it concrete and speakable; " +
+        "the brief will be embedded into a package-generation prompt, not shown raw to the learner.",
+    },
+    output_shape: {
+      scenario: "one line: who the learner talks to and what was asked",
+      interlocutor: "who the learner is addressing",
+      goal: "what a strong spoken answer accomplishes",
+      register: "tone/formality the answer should hit",
+      key_expressions: ["natural academic-spoken phrase", "another phrase"],
+      difficulty: "beginner | intermediate | advanced",
+      success_sounds_like: "what a good 20-40s answer sounds like",
+      prosody_focus: "the stress/intonation skill worth drilling here",
+      chinese_setup: "中文一句话任务说明",
+    },
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+function formatMaterialBrief(parsed: JsonObject): string {
+  const keyExpressions = Array.isArray(parsed.key_expressions)
+    ? parsed.key_expressions.map((item) => stringValue(item).trim()).filter(Boolean)
+    : [];
+  const lines: string[] = [];
+  const push = (label: string, value: string): void => {
+    const text = value.trim();
+    if (text) {
+      lines.push(`- **${label}:** ${text}`);
+    }
+  };
+  push("Scenario", stringValue(parsed.scenario));
+  push("Speaking to", stringValue(parsed.interlocutor));
+  push("Goal", stringValue(parsed.goal));
+  push("Register", stringValue(parsed.register));
+  push("Difficulty", stringValue(parsed.difficulty));
+  push("A strong answer sounds like", stringValue(parsed.success_sounds_like));
+  push("Prosody focus", stringValue(parsed.prosody_focus));
+  push("Chinese setup", stringValue(parsed.chinese_setup));
+  if (keyExpressions.length) {
+    lines.push(`- **Key expressions:** ${keyExpressions.join("; ")}`);
+  }
+  const brief = lines.join("\n").trim();
+  if (!brief) {
+    throw new Error("Coach returned an empty material brief.");
+  }
+  return brief;
+}
+
 async function requestProviderJson(
   context: vscode.ExtensionContext,
   system: string,
   user: string,
 ): Promise<JsonObject> {
   const provider = config<string>("coachProvider") || "gemini";
-  if (provider === "gemini") {
-    const apiKey = await getRequiredKey(context, "gemini");
-    return callGeminiJson(apiKey, config<string>("geminiCoachModel") || "gemini-3-flash-preview", system, user);
-  }
-  if (provider === "openai") {
-    const apiKey = await getRequiredKey(context, "openai");
-    return callOpenAIJson(apiKey, config<string>("openaiCoachModel") || "gpt-4o-mini", system, user);
-  }
-  if (provider === "kimi") {
-    const apiKey = await getRequiredKey(context, "kimi");
-    return callOpenAICompatibleJson(system, user, {
-      provider: "Kimi",
-      baseUrl: config<string>("kimiChatBaseUrl") || "https://api.kimi.com/coding/v1",
-      model: config<string>("kimiCoachModel") || "kimi-for-coding",
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-  }
   if (provider === "mimo") {
     const apiKey = await getRequiredKey(context, "mimo");
     return callAnthropicJson(system, user, {
@@ -278,52 +337,9 @@ async function requestProviderJson(
       model: config<string>("deepseekCoachModel") || "deepseek-v4-pro",
     });
   }
-  const apiKey = await getRequiredKey(context, "minimax");
-  return callAnthropicJson(system, user, {
-    provider: "MiniMax",
-    apiKey,
-    baseUrl: config<string>("minimaxAnthropicBaseUrl") || MINIMAX_ANTHROPIC_BASE_URL,
-    model: config<string>("minimaxCoachModel") || "MiniMax-M2.7",
-  });
-}
-
-async function callOpenAIJson(
-  apiKey: string,
-  model: string,
-  system: string,
-  user: string,
-): Promise<JsonObject> {
-  const input = [
-    { role: "system", content: system },
-    { role: "user", content: user },
-  ];
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model, input, text: { format: { type: "json_object" } } }),
-  });
-  const body = await response.text();
-  if (response.ok) {
-    return parseLooseJson(extractOpenAIText(JSON.parse(body) as JsonObject));
-  }
-
-  appendOutput(`OpenAI Responses API failed, falling back to chat completions: ${body.slice(0, 600)}`);
-  const fallback = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model, messages: input, response_format: { type: "json_object" } }),
-  });
-  const fallbackBody = await fallback.text();
-  if (!fallback.ok) {
-    throw new Error(`OpenAI request failed (${fallback.status}): ${fallbackBody.slice(0, 1200)}`);
-  }
-  return parseLooseJson(extractOpenAIText(JSON.parse(fallbackBody) as JsonObject));
+  // Gemini is the default coach and the safety net for any stale/removed value.
+  const apiKey = await getRequiredKey(context, "gemini");
+  return callGeminiJson(apiKey, config<string>("geminiCoachModel") || "gemini-3-flash-preview", system, user);
 }
 
 async function callAnthropicJson(
@@ -363,46 +379,6 @@ async function callAnthropicJson(
   const parsed = JSON.parse(body) as JsonObject;
   const text = extractAnthropicText(parsed);
   return parseLooseJson(stripThinkBlocks(text));
-}
-
-async function callOpenAICompatibleJson(
-  system: string,
-  user: string,
-  options: {
-    provider: string;
-    baseUrl: string;
-    model: string;
-    headers: Record<string, string>;
-    responseFormat?: JsonObject;
-  },
-): Promise<JsonObject> {
-  const requestBody: JsonObject = {
-    model: options.model,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    stream: false,
-  };
-  if (options.provider !== "Kimi") {
-    requestBody.temperature = 0.2;
-  }
-  if (options.responseFormat) {
-    requestBody.response_format = options.responseFormat;
-  }
-  const response = await fetch(chatCompletionsUrl(options.baseUrl), {
-    method: "POST",
-    headers: {
-      ...options.headers,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(requestBody),
-  });
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(`${options.provider} request failed (${response.status}): ${body.slice(0, 1200)}`);
-  }
-  return parseLooseJson(stripThinkBlocks(extractOpenAIText(JSON.parse(body) as JsonObject)));
 }
 
 async function callGeminiJson(

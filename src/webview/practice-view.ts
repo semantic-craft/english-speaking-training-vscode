@@ -42,6 +42,7 @@ import {
   openSessionFolder,
 } from "../commands/local-actions.js";
 import { createSamplePackage, generateNextPackage } from "../materials/scaffold.js";
+import { composeMaterialPrompt } from "../materials/prompt-composer.js";
 import { expandHome } from "../runtime/training-root.js";
 import { loadState, toWebviewState } from "../runtime/state.js";
 import {
@@ -199,6 +200,9 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
         }
         if (payload.command === "generateNextPackage") {
           await generateNextPackage(this.context);
+        }
+        if (payload.command === "composeMaterialPrompt") {
+          await composeMaterialPrompt(this.context);
         }
         if (payload.command === "openMaterialsGuide") {
           await openMaterialsGuide();

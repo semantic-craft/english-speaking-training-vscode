@@ -72,18 +72,8 @@
         "category": "English Training"
       },
       {
-        "command": "englishTraining.configureKimiKey",
-        "title": "English Training: Configure Kimi API Key",
-        "category": "English Training"
-      },
-      {
         "command": "englishTraining.configureDeepSeekKey",
         "title": "English Training: Configure DeepSeek API Key",
-        "category": "English Training"
-      },
-      {
-        "command": "englishTraining.useOpenAICoach",
-        "title": "English Training: Use OpenAI Coach",
         "category": "English Training"
       },
       {
@@ -92,18 +82,8 @@
         "category": "English Training"
       },
       {
-        "command": "englishTraining.useMiniMaxCoach",
-        "title": "English Training: Use MiniMax Coach",
-        "category": "English Training"
-      },
-      {
         "command": "englishTraining.useMimoCoach",
         "title": "English Training: Use Xiaomi MiMo Coach",
-        "category": "English Training"
-      },
-      {
-        "command": "englishTraining.useKimiCoach",
-        "title": "English Training: Use Kimi Coach",
         "category": "English Training"
       },
       {
@@ -172,6 +152,11 @@
         "category": "English Training"
       },
       {
+        "command": "englishTraining.composeMaterialPrompt",
+        "title": "English Training: Compose Material Prompt with Coach",
+        "category": "English Training"
+      },
+      {
         "command": "englishTraining.openMaterialsGuide",
         "title": "English Training: Open Materials Guide",
         "category": "English Training"
@@ -222,22 +207,20 @@
           "default": "gemini",
           "enum": [
             "gemini",
-            "minimax",
             "mimo",
-            "openai",
-            "kimi",
             "deepseek"
           ],
-          "description": "Language-model provider used for transcript correction and follow-up generation. Default routes through Gemini so the full core loop only needs a Gemini key; MiniMax, MiMo, OpenAI, Kimi, and DeepSeek are optional fallbacks."
+          "description": "Language-model provider used for transcript correction and follow-up generation. Default routes through Gemini so the full core loop only needs a Gemini key; Xiaomi MiMo and DeepSeek are optional fallbacks."
         },
         "englishTraining.audioUnderstandingProvider": {
           "type": "string",
           "default": "gemini",
           "enum": [
             "gemini",
-            "openai"
+            "openai",
+            "mimo"
           ],
-          "description": "Speech input provider. Gemini is the default STT-matching route; OpenAI Realtime provides lower-latency transcript deltas through gpt-realtime-whisper."
+          "description": "Speech input provider. Gemini is the default STT-matching route; OpenAI Realtime provides lower-latency transcript deltas through gpt-realtime-whisper; Xiaomi MiMo transcribes via its OpenAI-compatible audio-understanding endpoint."
         },
         "englishTraining.ttsProvider": {
           "type": "string",
@@ -245,14 +228,10 @@
           "enum": [
             "gemini",
             "minimax",
-            "openai"
+            "openai",
+            "mimo"
           ],
-          "description": "Speech output provider used to generate the native-version follow-along audio. Default uses Gemini TTS so the full core loop only needs a Gemini key; MiniMax and OpenAI are optional fallbacks."
-        },
-        "englishTraining.openaiCoachModel": {
-          "type": "string",
-          "default": "gpt-4o-mini",
-          "description": "OpenAI model used for correction and follow-up coaching."
+          "description": "Speech output provider used to generate the native-version follow-along audio. Default uses Gemini TTS so the full core loop only needs a Gemini key; MiniMax, OpenAI, and Xiaomi MiMo are optional fallbacks."
         },
         "englishTraining.openaiRealtimeTranscriptionModel": {
           "type": "string",
@@ -307,21 +286,6 @@
           "default": "Kore",
           "description": "Gemini prebuilt voice name for native-version audio."
         },
-        "englishTraining.minimaxAnthropicBaseUrl": {
-          "type": "string",
-          "default": "https://api.minimaxi.com/anthropic",
-          "description": "MiniMax Token Plan Anthropic-compatible base URL. Used for the M2.7 coach via /v1/messages."
-        },
-        "englishTraining.minimaxCoachModel": {
-          "type": "string",
-          "default": "MiniMax-M2.7",
-          "enum": [
-            "MiniMax-M2.7",
-            "MiniMax-M2.7-highspeed",
-            "MiniMax-M2.5"
-          ],
-          "description": "MiniMax model used for correction and follow-up coaching. Token Plan exposes MiniMax-M2.7, MiniMax-M2.7-highspeed, and MiniMax-M2.5 via the Anthropic-compatible endpoint."
-        },
         "englishTraining.mimoAnthropicBaseUrl": {
           "type": "string",
           "default": "https://token-plan-cn.xiaomimimo.com/anthropic",
@@ -335,6 +299,45 @@
             "mimo-v2.5-flash"
           ],
           "description": "Xiaomi MiMo model used for correction and follow-up coaching via Anthropic-compatible endpoint."
+        },
+        "englishTraining.mimoAudioBaseUrl": {
+          "type": "string",
+          "default": "https://token-plan-cn.xiaomimimo.com/v1",
+          "description": "Xiaomi MiMo OpenAI-compatible base URL used for speech-input (audio understanding) when speech in is set to MiMo. The endpoint posts to <base>/chat/completions."
+        },
+        "englishTraining.mimoAudioUnderstandingModel": {
+          "type": "string",
+          "default": "mimo-v2.5",
+          "enum": [
+            "mimo-v2.5",
+            "mimo-v2-omni"
+          ],
+          "description": "Xiaomi MiMo multimodal model used to transcribe spoken English when speech in is set to MiMo."
+        },
+        "englishTraining.mimoTtsBaseUrl": {
+          "type": "string",
+          "default": "https://token-plan-cn.xiaomimimo.com/v1",
+          "description": "Xiaomi MiMo OpenAI-compatible base URL used for speech-output (TTS) when speech out is set to MiMo. The endpoint posts to <base>/chat/completions."
+        },
+        "englishTraining.mimoTtsModel": {
+          "type": "string",
+          "default": "mimo-v2.5-tts",
+          "enum": [
+            "mimo-v2.5-tts"
+          ],
+          "description": "Xiaomi MiMo TTS model used for native-version follow-along audio when speech out is set to MiMo."
+        },
+        "englishTraining.mimoTtsVoice": {
+          "type": "string",
+          "default": "Mia",
+          "enum": [
+            "Mia",
+            "Chloe",
+            "Milo",
+            "Dean",
+            "mimo_default"
+          ],
+          "description": "Xiaomi MiMo built-in voice for native-version audio. Mia and Chloe are female; Milo and Dean are male."
         },
         "englishTraining.minimaxTtsBaseUrl": {
           "type": "string",
@@ -354,16 +357,6 @@
           "type": "string",
           "default": "English_expressive_narrator",
           "description": "MiniMax voice id for English follow-along audio."
-        },
-        "englishTraining.kimiChatBaseUrl": {
-          "type": "string",
-          "default": "https://api.kimi.com/coding/v1",
-          "description": "Kimi Code OpenAI-compatible chat base URL. Use a Kimi Code key for this endpoint."
-        },
-        "englishTraining.kimiCoachModel": {
-          "type": "string",
-          "default": "kimi-for-coding",
-          "description": "Kimi Code model used for correction and follow-up coaching."
         },
         "englishTraining.deepseekAnthropicBaseUrl": {
           "type": "string",
