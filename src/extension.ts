@@ -130,6 +130,7 @@ import {
 import { synthesizeOnDemandText, synthesizeTodayAudio } from "./audio/synthesis.js";
 import { sampleFollowupDrillPackage, sampleTrainingPackage } from "./materials/sample-package.js";
 import { createSamplePackage, generateNextPackage } from "./materials/scaffold.js";
+import { composeMaterialPrompt } from "./materials/prompt-composer.js";
 import { StatusProvider } from "./status/status-tree.js";
 import { PracticeViewProvider, normalizePracticeTargetPayload } from "./webview/practice-view.js";
 import {
@@ -196,29 +197,17 @@ export function activate(context: vscode.ExtensionContext): void {
   register("englishTraining.configureMimoKey", async () => {
     await configureApiKey(context, "mimo");
   });
-  register("englishTraining.configureKimiKey", async () => {
-    await configureApiKey(context, "kimi");
-  });
   register("englishTraining.configureDeepSeekKey", async () => {
     await configureApiKey(context, "deepseek");
   });
   register("englishTraining.clearApiKeys", async () => {
     await clearApiKeys(context);
   });
-  register("englishTraining.useOpenAICoach", async () => {
-    await setProviderSetting("coachProvider", "openai");
-  });
   register("englishTraining.useGeminiCoach", async () => {
     await setProviderSetting("coachProvider", "gemini");
   });
-  register("englishTraining.useMiniMaxCoach", async () => {
-    await setProviderSetting("coachProvider", "minimax");
-  });
   register("englishTraining.useMimoCoach", async () => {
     await setProviderSetting("coachProvider", "mimo");
-  });
-  register("englishTraining.useKimiCoach", async () => {
-    await setProviderSetting("coachProvider", "kimi");
   });
   register("englishTraining.useDeepSeekCoach", async () => {
     await setProviderSetting("coachProvider", "deepseek");
@@ -258,6 +247,9 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   register("englishTraining.generateNextPackage", async () => {
     await generateNextPackage(context);
+  });
+  register("englishTraining.composeMaterialPrompt", async () => {
+    await composeMaterialPrompt(context);
   });
   register("englishTraining.openMaterialsGuide", async () => {
     await openMaterialsGuide();
@@ -349,12 +341,9 @@ async function promptForConfigValue(setting: ConfigSettingName, current: string)
 
 function configSettingLabel(setting: ConfigSettingName): string {
   switch (setting) {
-    case "minimaxCoachModel": return "MiniMax coach model";
     case "mimoCoachModel": return "MiMo coach model";
-    case "openaiCoachModel": return "OpenAI coach model";
     case "openaiRealtimeTranscriptionModel": return "OpenAI Realtime speech-input model";
     case "geminiCoachModel": return "Gemini coach model";
-    case "kimiCoachModel": return "Kimi coach model";
     case "deepseekCoachModel": return "DeepSeek coach model";
     case "geminiAudioUnderstandingModel": return "Gemini speech-input model";
     case "minimaxTtsModel": return "MiniMax speech-output model";
@@ -376,12 +365,9 @@ function configSettingPrompt(setting: ConfigSettingName): string {
 
 function configSettingOptions(setting: ConfigSettingName): string[] {
   switch (setting) {
-    case "minimaxCoachModel": return ["MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"];
     case "mimoCoachModel": return ["mimo-v2.5-pro", "mimo-v2.5-flash"];
-    case "openaiCoachModel": return ["gpt-4o-mini", "gpt-4o"];
     case "openaiRealtimeTranscriptionModel": return ["gpt-realtime-whisper"];
     case "geminiCoachModel": return GEMINI_TEXT_MODEL_OPTIONS;
-    case "kimiCoachModel": return ["kimi-for-coding"];
     case "deepseekCoachModel": return ["deepseek-v4-pro", "deepseek-v4-flash"];
     case "geminiAudioUnderstandingModel": return GEMINI_TEXT_MODEL_OPTIONS;
     case "minimaxTtsModel": return ["speech-2.8-hd", "speech-2.8-turbo"];
@@ -394,11 +380,10 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
 
 function providerSetupHint(provider: ProviderName): string {
   switch (provider) {
-    case "gemini": return "Gemini · default coach + native-version TTS";
-    case "minimax": return "MiniMax · optional fallback coach + TTS";
-    case "mimo": return "Xiaomi MiMo · alternate coach (Token Plan, Anthropic-compatible)";
-    case "openai": return "OpenAI · GPT coach + Realtime speech input + TTS";
-    case "kimi": return "Kimi (Moonshot) · alternate coach";
+    case "gemini": return "Gemini · default coach + speech input + native-version TTS";
+    case "minimax": return "MiniMax · speech-output (TTS) provider";
+    case "mimo": return "Xiaomi MiMo · coach + speech input + speech-output (Token Plan)";
+    case "openai": return "OpenAI · Realtime speech input + TTS";
     case "deepseek": return "DeepSeek · alternate coach (Anthropic-compatible)";
   }
 }

@@ -5,6 +5,7 @@ import * as vscode from "vscode";
 import {
   config,
   getRequiredKey,
+  MIMO_OPENAI_BASE_URL,
   MINIMAX_TTS_BASE_URL,
   normalizeTtsSpeed,
   stringValue,
@@ -16,7 +17,7 @@ export function speechOutputFileName(provider: string): string {
 }
 
 export function speechOutputExtension(provider: string): string {
-  return provider === "gemini" ? "wav" : "mp3";
+  return provider === "gemini" || provider === "mimo" ? "wav" : "mp3";
 }
 
 export function mimeTypeForAudioPath(filePath: string): string {
@@ -39,6 +40,9 @@ export async function synthesizeWithConfiguredTts(
   }
   if (provider === "openai") {
     return { provider, filePath: await synthesizeOpenAI(context, text, outPath, speedOverride) };
+  }
+  if (provider === "mimo") {
+    return { provider, filePath: await synthesizeMiMo(context, text, outPath) };
   }
   return { provider: "minimax", filePath: await synthesizeMiniMax(context, text, outPath, speedOverride) };
 }
@@ -177,6 +181,49 @@ async function synthesizeMiniMax(
     throw new Error("MiniMax TTS returned empty audio data.");
   }
   fs.writeFileSync(outPath, Buffer.from(audioHex, "hex"));
+  return outPath;
+}
+
+async function synthesizeMiMo(
+  context: vscode.ExtensionContext,
+  text: string,
+  outPath: string,
+): Promise<string> {
+  const apiKey = await getRequiredKey(context, "mimo");
+  const baseUrl = config<string>("mimoTtsBaseUrl") || MIMO_OPENAI_BASE_URL;
+  const model = config<string>("mimoTtsModel") || "mimo-v2.5-tts";
+  const voice = config<string>("mimoTtsVoice") || "Mia";
+  const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "api-key": apiKey,
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "user", content: "Read the following text aloud in clear, natural English." },
+        { role: "assistant", content: text },
+      ],
+      audio: { format: "wav", voice },
+    }),
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`MiMo TTS failed (${response.status}): ${body.slice(0, 1200)}`);
+  }
+  const parsed = JSON.parse(body) as JsonObject;
+  const choices = parsed.choices;
+  const message = Array.isArray(choices) && choices.length
+    ? ((choices[0] as JsonObject).message as JsonObject | undefined)
+    : undefined;
+  const audio = message?.audio as JsonObject | undefined;
+  const data = stringValue(audio?.data);
+  if (!data) {
+    throw new Error("MiMo TTS returned empty audio data.");
+  }
+  fs.writeFileSync(outPath, Buffer.from(data, "base64"));
   return outPath;
 }
 

@@ -110,7 +110,7 @@ test("activates without a workspace and registers the command surface", async ()
 
   extension.activate(context);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(registered.length, 29);
+  assert.equal(registered.length, 26);
   assert.ok(registered.includes("englishTraining.openPractice"));
   assert.ok(registered.includes("englishTraining.createSamplePackage"));
   assert.ok(registered.includes("englishTraining.generateNextPackage"));
@@ -235,6 +235,8 @@ test("normalizes old Azure speech-input settings to Gemini", () => {
   assert.equal(api.normalizedSpeechInputProvider(), "gemini");
   configValues.audioUnderstandingProvider = "openai";
   assert.equal(api.normalizedSpeechInputProvider(), "openai");
+  configValues.audioUnderstandingProvider = "mimo";
+  assert.equal(api.normalizedSpeechInputProvider(), "mimo");
   configValues.audioUnderstandingProvider = "gemini";
 });
 

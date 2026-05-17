@@ -6,7 +6,6 @@ export type ProviderName =
   | "gemini"
   | "minimax"
   | "mimo"
-  | "kimi"
   | "deepseek";
 export type ActiveMaterialsSource = "local";
 export type KeyAvailability = Record<ProviderName, boolean>;
@@ -73,18 +72,18 @@ export interface TrainingState {
     coachProvider: string;
     audioUnderstandingProvider: string;
     ttsProvider: string;
-    openaiCoachModel: string;
     openaiRealtimeTranscriptionModel: string;
     geminiCoachModel: string;
     geminiTtsModel: string;
     geminiTtsVoice: string;
     geminiAudioUnderstandingModel: string;
-    minimaxAnthropicBaseUrl: string;
-    minimaxCoachModel: string;
     mimoAnthropicBaseUrl: string;
     mimoCoachModel: string;
-    kimiChatBaseUrl: string;
-    kimiCoachModel: string;
+    mimoAudioBaseUrl: string;
+    mimoAudioUnderstandingModel: string;
+    mimoTtsBaseUrl: string;
+    mimoTtsModel: string;
+    mimoTtsVoice: string;
     deepseekAnthropicBaseUrl: string;
     deepseekCoachModel: string;
     minimaxTtsModel: string;

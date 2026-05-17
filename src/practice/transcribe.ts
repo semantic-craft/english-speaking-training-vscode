@@ -8,6 +8,7 @@ import {
   config,
   extractGeminiText,
   getRequiredKey,
+  MIMO_OPENAI_BASE_URL,
   parseLooseJson,
   resolveFfmpegPath,
   stringValue,
@@ -24,7 +25,88 @@ export async function transcribeAudio(
   if (provider === "openai") {
     return transcribeWithOpenAIRealtime(context, audioPath, sessionDir);
   }
+  if (provider === "mimo") {
+    return transcribeWithMimo(context, audioPath, mimeType, sessionDir);
+  }
   return transcribeWithGemini(context, audioPath, mimeType, sessionDir);
+}
+
+function mimoEndpoint(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+}
+
+async function transcribeWithMimo(
+  context: vscode.ExtensionContext,
+  audioPath: string,
+  mimeType: string,
+  sessionDir: string,
+): Promise<string> {
+  const apiKey = await getRequiredKey(context, "mimo");
+  const baseUrl = config<string>("mimoAudioBaseUrl") || MIMO_OPENAI_BASE_URL;
+  const model = config<string>("mimoAudioUnderstandingModel") || "mimo-v2.5";
+  const audio = await prepareInlineAudio(audioPath, mimeType, sessionDir);
+  const byteLength = Buffer.byteLength(audio.base64, "base64");
+  if (byteLength > 45 * 1024 * 1024) {
+    throw new Error("MiMo inline audio limit is close to 50 MB. Shorten the recording.");
+  }
+
+  const response = await fetch(mimoEndpoint(baseUrl), {
+    method: "POST",
+    headers: {
+      "api-key": apiKey,
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      max_completion_tokens: 1024,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You transcribe spoken English exactly. Do not correct grammar, do not replace domain terms, do not translate, and do not add commentary.",
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_audio",
+              input_audio: { data: `data:audio/wav;base64,${audio.base64}` },
+            },
+            {
+              type: "text",
+              text: "Transcribe this audio. Return only the literal transcript text with no quotes, labels, or extra words.",
+            },
+          ],
+        },
+      ],
+    }),
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`MiMo audio understanding failed (${response.status}): ${body.slice(0, 1500)}`);
+  }
+  const transcript = extractMimoTranscript(JSON.parse(body) as JsonObject);
+  if (!transcript) {
+    throw new Error("MiMo audio understanding returned empty transcript.");
+  }
+  return transcript;
+}
+
+function extractMimoTranscript(parsed: JsonObject): string {
+  const choices = parsed.choices;
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return "";
+  }
+  const message = (choices[0] as JsonObject).message as JsonObject | undefined;
+  const raw =
+    stringValue(message?.content).trim() || stringValue(message?.reasoning_content).trim();
+  return raw
+    .replace(/^```(?:json|text)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .replace(/^transcript\s*:\s*/i, "")
+    .replace(/^["“]|["”]$/g, "")
+    .trim();
 }
 
 export async function prepareInlineAudio(

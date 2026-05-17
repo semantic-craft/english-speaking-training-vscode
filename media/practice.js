@@ -256,27 +256,25 @@
       mimo: "MiMo",
       openai: "OpenAI",
       gemini: "Gemini",
-      kimi: "Kimi",
       deepseek: "DeepSeek"
     };
 
     const PROVIDER_ROUTES = {
       coachProvider: [
         { value: "gemini", label: "Gemini", note: "default coach", modelSetting: "geminiCoachModel" },
-        { value: "minimax", label: "MiniMax", note: "optional fallback", modelSetting: "minimaxCoachModel" },
-        { value: "mimo", label: "MiMo", note: "optional fallback", modelSetting: "mimoCoachModel" },
-        { value: "openai", label: "OpenAI", note: "optional GPT coach", modelSetting: "openaiCoachModel" },
-        { value: "kimi", label: "Kimi", note: "Moonshot", modelSetting: "kimiCoachModel" },
+        { value: "mimo", label: "MiMo", note: "Xiaomi Token Plan", modelSetting: "mimoCoachModel" },
         { value: "deepseek", label: "DeepSeek", note: "reasoning alternate", modelSetting: "deepseekCoachModel" },
       ],
       audioUnderstandingProvider: [
         { value: "gemini", label: "Gemini", note: "default STT match", modelSetting: "geminiAudioUnderstandingModel" },
         { value: "openai", label: "OpenAI Realtime", note: "low-latency STT", modelSetting: "openaiRealtimeTranscriptionModel" },
+        { value: "mimo", label: "MiMo", note: "Xiaomi audio understanding" },
       ],
       ttsProvider: [
         { value: "gemini", label: "Gemini", note: "default TTS", modelSetting: "geminiTtsModel", extraSetting: "geminiTtsVoice", extraLabel: "Voice" },
         { value: "minimax", label: "MiniMax", note: "optional fallback", modelSetting: "minimaxTtsModel" },
         { value: "openai", label: "OpenAI", note: "OpenAI voices", modelSetting: "openaiTtsModel", extraSetting: "openaiTtsVoice", extraLabel: "Voice" },
+        { value: "mimo", label: "MiMo", note: "Xiaomi voices" },
       ],
     };
 
@@ -353,7 +351,7 @@
     }
 
     function keyStripHtml(keys) {
-      return '<div class="key-strip">' + ["gemini", "openai", "minimax", "mimo", "kimi", "deepseek"].map((name) => {
+      return '<div class="key-strip">' + ["gemini", "openai", "minimax", "mimo", "deepseek"].map((name) => {
         const saved = keys && keys[name];
         return '<button class="key-pill ' + (saved ? "saved" : "") + '" data-key="' + esc(name) + '">' + esc(providerLabel(name)) + ': ' + (saved ? "saved" : "missing") + '</button>';
       }).join("") + '</div>';
@@ -684,6 +682,19 @@
       return "·";
     }
 
+    // "ac·COUNT·a·bil·i·ty" -> [{seg:"ac",stress:false}, {seg:"COUNT",stress:true}, ...]
+    // Returns null when there is no usable multi-syllable split so the caller
+    // falls back to the original whole-word rendering (old cards, monosyllables).
+    function splitSyllableSpec(spec) {
+      const parts = String(spec || "").split("·").filter((s) => s.length);
+      if (parts.length < 2) return null;
+      return parts.map((seg) => {
+        const letters = seg.replace(/[^A-Za-z]/g, "");
+        const stress = letters.length > 0 && letters === letters.toUpperCase() && letters !== letters.toLowerCase();
+        return { seg, stress };
+      });
+    }
+
     function prosodyWordSpan(token, info, isNucleus, toneArrow) {
       const cls = isNucleus
         ? "nucleus"
@@ -693,7 +704,20 @@
       const title = info
         ? [info.stress ? "Stress: " + info.stress : "", info.pitch_role ? "Pitch: " + info.pitch_role : "", arrow ? "Tone: " + arrow : ""].filter(Boolean).join(" | ")
         : (isNucleus ? "Nucleus" : "");
-      return '<span class="pw pw-' + cls + '"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(token) + arrowHtml + '</span>';
+      const titleAttr = title ? ' title="' + esc(title) + '"' : '';
+      const syllables = info && splitSyllableSpec(info.syllables);
+      if (syllables) {
+        // Mark the stressed syllable with the word's prominence (so the legend
+        // still holds), dim the rest. aria-label keeps the plain word for SR.
+        const inner = syllables.map((s, i) => {
+          const sepHtml = i > 0 ? '<span class="pw-syl-sep" aria-hidden="true">·</span>' : '';
+          const sylCls = s.stress ? "pw-syl pw-" + cls : "pw-syl pw-syl-weak";
+          return sepHtml + '<span class="' + sylCls + '">' + esc(s.seg) + '</span>';
+        }).join("");
+        return '<span class="pw pw-syllabified" aria-label="' + esc(token) + '"' + titleAttr + '>' +
+          '<span aria-hidden="true">' + inner + '</span>' + arrowHtml + '</span>';
+      }
+      return '<span class="pw pw-' + cls + '"' + titleAttr + '>' + esc(token) + arrowHtml + '</span>';
     }
 
     function prosodyGroupLineHtml(groups, words) {
@@ -1788,6 +1812,8 @@
         vscode.postMessage({ type: "command", command: "createSamplePackage" });
       } else if (action === "generate-next") {
         vscode.postMessage({ type: "command", command: "generateNextPackage" });
+      } else if (action === "compose-material") {
+        vscode.postMessage({ type: "command", command: "composeMaterialPrompt" });
       } else if (action === "materials-guide") {
         vscode.postMessage({ type: "command", command: "openMaterialsGuide" });
       }

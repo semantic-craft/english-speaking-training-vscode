@@ -29,6 +29,36 @@ There is no required curriculum length: 7 lessons or 365 lessons both work.
 For the field-by-field schema, run `English Training: Open Materials Guide`
 from the command palette.
 
+## Generate Training Material with the Coach
+
+You do not have to hand-write packages. **Generate training material** at the
+bottom of the Practice sidebar (command: `English Training: Compose Material
+Prompt with Coach`) turns a one-line topic into a ready-to-paste generation
+prompt:
+
+1. Type a topic and a lesson date.
+2. The **configured Coach model** expands the topic into a tailored brief —
+   scenario, who you address, goal, key expressions, and prosody focus.
+3. The brief is wrapped with the extension's versioned Card Schema contract and
+   written as one `material-generation-prompt.md` to a folder you pick.
+4. Paste that single file into any LLM (Gemini, MiMo, DeepSeek, MiniMax,
+   Kimi, …). It returns `english-training.json` and `followup-drill.json` that
+   the sidebar renders with no manual fixes.
+
+If no Coach key is configured, your topic is used verbatim, so the step never
+blocks you. You can also start from a static template via `English Training:
+Generate Next Package`.
+
+**Example topic** that produces a strong package:
+
+> Defending a contested empirical claim to a skeptical discussant in a
+> 30-second conference reply — concede one limitation, then reassert the
+> finding with one piece of evidence.
+
+A terse phrase ("explaining my research contribution to a non-specialist")
+works too — the Coach model fills in the scenario, register, and target
+expressions before the prompt is written.
+
 ## Local Materials Source
 
 - **Local**: auto-detects a workspace or parent folder containing `prebuilt/`.
@@ -85,12 +115,13 @@ Practice / Skip choices after each result, and coach-generated
 
 - Coach: Gemini by default with `gemini-3-flash-preview`, plus
   `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, and
-  `gemini-3.1-flash-lite-preview` available from the model picker. MiniMax,
-  MiMo, OpenAI, Kimi, and DeepSeek remain optional fallbacks.
+  `gemini-3.1-flash-lite-preview` available from the model picker. Xiaomi MiMo
+  and DeepSeek remain optional coach fallbacks.
 - Speech input: Gemini by default for transcript matching; OpenAI Realtime
-  `gpt-realtime-whisper` can be selected for low-latency transcript generation.
-- Speech output: Gemini `gemini-3.1-flash-tts-preview` by default. MiniMax and
-  OpenAI speech output remain optional fallbacks.
+  `gpt-realtime-whisper` for low-latency transcript generation, or Xiaomi MiMo
+  audio understanding.
+- Speech output: Gemini `gemini-3.1-flash-tts-preview` by default. MiniMax,
+  OpenAI, and Xiaomi MiMo speech output remain optional fallbacks.
 - The sidebar's **Routes & Models** panel shows the active route, key status,
   and model/voice controls in one place.
 
@@ -114,12 +145,15 @@ Practice / Skip choices after each result, and coach-generated
   - `English Training: Configure Gemini API Key`
   - `English Training: Configure MiniMax API Key`
   - `English Training: Configure MiMo API Key`
-  - `English Training: Configure Kimi API Key`
   - `English Training: Configure DeepSeek API Key`
 - Route commands:
   - `English Training: Use Gemini Core Route`
   - `English Training: Use Gemini Only`
   - `English Training: Use OpenAI Realtime Speech Input`
+- Material authoring:
+  - `English Training: Compose Material Prompt with Coach`
+  - `English Training: Generate Next Package`
+  - `English Training: Open Materials Guide`
 - Local actions:
   - `English Training: Complete Current Package Locally`
   - `English Training: Open Current Task Card`

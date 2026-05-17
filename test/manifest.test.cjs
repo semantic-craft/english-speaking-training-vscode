@@ -48,7 +48,6 @@ test("every registered command is contributed exactly once", () => {
 
 test("sidebar model presets stay inside package configuration enums", () => {
   for (const setting of [
-    "minimaxCoachModel",
     "mimoCoachModel",
     "openaiRealtimeTranscriptionModel",
     "geminiCoachModel",
@@ -70,7 +69,7 @@ test("OpenAI TTS source fallback matches package default", () => {
 test("speech input manifest no longer exposes Azure", () => {
   const speechInput = packageJson.contributes.configuration.properties["englishTraining.audioUnderstandingProvider"];
   assert.equal(speechInput.default, "gemini");
-  assert.deepEqual(speechInput.enum, ["gemini", "openai"]);
+  assert.deepEqual(speechInput.enum, ["gemini", "openai", "mimo"]);
   assert.equal(packageJson.contributes.configuration.properties["englishTraining.azureSpeechRegion"], undefined);
   assert.equal(packageJson.contributes.configuration.properties["englishTraining.azureSpeechLocale"], undefined);
   assert.equal(
