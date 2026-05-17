@@ -153,6 +153,7 @@
       const todayAudioText = training.tts_example_text || training.clean_tts_text || training.audio_text || training.demo_line || "";
       currentExampleText = todayAudioText;
       renderOnboarding(state);
+      renderDayStrip({ progress: state.progress, next });
       renderProgress(state.progress);
       renderSourceDiagnostics(state.sourceDiagnostics);
       renderLearnerProfile(state.learnerProfile);
@@ -571,6 +572,34 @@
           <span><i class="lg-pending"></i>upcoming</span>
         </div>
       `;
+    }
+
+    function renderDayStrip(ctx) {
+      const strip = $("dayStrip");
+      if (!strip) return;
+      const progress = (ctx && ctx.progress) || null;
+      const next = (ctx && ctx.next) || {};
+      if (!progress || !Array.isArray(progress.cells) || progress.cells.length === 0) {
+        strip.hidden = true;
+        strip.innerHTML = "";
+        return;
+      }
+      const total = progress.total || progress.cells.length;
+      const dayLabel = progress.currentIndex
+        ? "Day " + progress.currentIndex + " / " + total
+        : (progress.completedCount || 0) + " / " + total + " done";
+      const weekLabel = progress.weekIndex
+        ? "Week " + progress.weekIndex + " · " + (progress.weekCompletedDays || 0) + "/" + (progress.weekTotalDays || 7)
+        : "";
+      const streakLabel = progress.streak && progress.streak > 0 ? "🔥 " + progress.streak : "";
+      const chips = [
+        next.package_date ? '<span class="ds-chip ds-date">' + esc(next.package_date) + "</span>" : "",
+        '<span class="ds-chip ds-primary">' + esc(dayLabel) + "</span>",
+        weekLabel ? '<span class="ds-chip">' + esc(weekLabel) + "</span>" : "",
+        streakLabel ? '<span class="ds-chip ds-streak">' + esc(streakLabel) + "</span>" : "",
+      ].filter(Boolean).join("");
+      strip.hidden = false;
+      strip.innerHTML = '<div class="ds-row">' + chips + "</div>";
     }
 
     function renderTodayHero(ctx) {

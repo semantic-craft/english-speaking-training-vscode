@@ -1221,3 +1221,74 @@
       margin-top: 12px;
     }
     .materials-actions button { min-height: 30px; }
+
+    /* Phase 5 — continuous focused flow */
+    .stack.flow { gap: 14px; }
+    .day-strip {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      padding: 7px 10px;
+      background: var(--vscode-sideBar-background);
+      border-bottom: 1px solid var(--border);
+    }
+    .day-strip .ds-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .ds-chip {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--soft);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .ds-chip.ds-primary {
+      color: var(--vscode-editor-foreground);
+      border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+      background: color-mix(in srgb, var(--accent) 16%, var(--soft));
+    }
+    .ds-chip.ds-date { font-variant-numeric: tabular-nums; }
+    .ds-chip.ds-streak { color: var(--vscode-charts-orange, var(--accent)); }
+    .day-strip + .panel { margin-top: 2px; }
+    .stack.flow .record-panel {
+      position: static;
+      box-shadow: none;
+      background: var(--vscode-editor-background);
+    }
+    .flow-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .footer-fold {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--soft);
+    }
+    .footer-fold > summary {
+      cursor: pointer;
+      padding: 10px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      list-style: none;
+      user-select: none;
+    }
+    .footer-fold > summary::-webkit-details-marker { display: none; }
+    .footer-fold > summary::before { content: "▸ "; }
+    .footer-fold[open] > summary::before { content: "▾ "; }
+    .footer-fold[open] > summary { border-bottom: 1px solid var(--border); }
+    .footer-fold-body {
+      display: grid;
+      gap: 12px;
+      padding: 12px;
+    }
+    .footer-fold-body .panel { background: var(--vscode-editor-background); }
