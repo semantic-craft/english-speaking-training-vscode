@@ -18,8 +18,15 @@ export function buildPracticeHtml(webview: vscode.Webview, extensionUri: vscode.
 
 </head>
 <body>
-  <div class="stack">
+  <div class="stack flow">
+    <section class="panel onboarding-panel" id="onboarding" hidden></section>
+    <section class="day-strip" id="dayStrip" hidden></section>
+
+    <section class="panel" id="task"></section>
+    <section class="panel" id="readingCard" hidden></section>
+
     <section class="panel record-panel">
+      <div class="flow-label">● Record &amp; analyze</div>
       <div class="record-row">
         <button id="record" class="record-cta" aria-label="Start recording" title="Start recording">
           <span class="record-cta-icon"></span>
@@ -45,32 +52,37 @@ export function buildPracticeHtml(webview: vscode.Webview, extensionUri: vscode.
       </ol>
       <audio id="localAudio" controls hidden></audio>
     </section>
-    <section class="panel onboarding-panel" id="onboarding" hidden></section>
-    <section class="panel progress-panel" id="progress" hidden></section>
-    <section class="panel" id="task"></section>
-    <section class="panel" id="readingCard" hidden></section>
-    <section class="panel" id="diagnostics"></section>
-    <section class="panel" id="learnerProfile"></section>
-    <section class="panel" id="drill"></section>
-    <section class="panel" id="turnHistory" hidden></section>
+
     <section class="panel" id="result" hidden></section>
-    <section class="panel" id="sessionLog"></section>
-    <section class="panel">
-      <h3>Source</h3>
-      <div id="source" class="chips"></div>
-      <div class="row">
-        <button class="secondary" id="configureMaterials">Local Folder</button>
+    <section class="panel" id="turnHistory" hidden></section>
+
+    <section class="panel" id="drill"></section>
+
+    <details class="footer-fold">
+      <summary>⚙ Progress, diagnostics &amp; configuration</summary>
+      <div class="footer-fold-body">
+        <section class="panel progress-panel" id="progress" hidden></section>
+        <section class="panel" id="diagnostics"></section>
+        <section class="panel" id="learnerProfile"></section>
+        <section class="panel" id="sessionLog"></section>
+        <section class="panel">
+          <h3>Source</h3>
+          <div id="source" class="chips"></div>
+          <div class="row">
+            <button class="secondary" id="configureMaterials">Local Folder</button>
+          </div>
+        </section>
+        <section class="panel" id="providersPanel"></section>
+        <section class="panel">
+          <h3>Local</h3>
+          <div class="row">
+            <button class="secondary" id="completeLocal">Complete</button>
+            <button class="secondary" id="openTask">Task Card</button>
+            <button class="secondary" id="openFolder">Sessions</button>
+          </div>
+        </section>
       </div>
-    </section>
-    <section class="panel" id="providersPanel"></section>
-    <section class="panel">
-      <h3>Local</h3>
-      <div class="row">
-        <button class="secondary" id="completeLocal">Complete</button>
-        <button class="secondary" id="openTask">Task Card</button>
-        <button class="secondary" id="openFolder">Sessions</button>
-      </div>
-    </section>
+    </details>
   </div>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
