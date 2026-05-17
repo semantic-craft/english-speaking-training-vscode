@@ -341,7 +341,13 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     if (!this.view) {
       return;
     }
-    this.view.webview.postMessage({ type: "stage", stage: "transcribe", status: "active", show: true });
+    // Do NOT light the "transcribe" stage here: stopNativeFfmpegRecording()
+    // is a 0.15–5s ffmpeg drain (q → SIGINT → SIGTERM → settle), and showing
+    // the strip with Transcribe blinking during that window mislabels a
+    // multi-second wait exactly the way record-start used to. The webview
+    // already shows an honest "Stopping native recorder…" status on the stop
+    // press; the strip should appear only when transcription truly starts,
+    // which the pipeline's own progress("transcribe","active") reports.
     const session = await stopNativeFfmpegRecording();
     const state = await loadState(this.context);
     const priorTurn = this.pendingPriorTurn;

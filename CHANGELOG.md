@@ -7,10 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.36] — 2026-05-17
+## [0.1.36] — 2026-05-18
 
-A record-start latency pass: pressing record is now fast and *legible*
-instead of a multi-second frozen stall with one unchanging status line.
+A recording-flow fluidity pass: both ends of the practice loop — pressing
+record, and pressing stop through transcribe/coach/speak — are now fast
+and *legible* instead of multi-second frozen stalls behind a wrong or
+unchanging status line.
 
 ### Fixed
 - **Pressing record stalled for seconds with zero feedback.** Every press
@@ -33,6 +35,27 @@ instead of a multi-second frozen stall with one unchanging status line.
   you pressed record — i.e. during reclaim/enumeration/arming — so a turn
   read several seconds longer than you actually spoke. The timer now
   starts only when the recorder is genuinely listening.
+- **Pressing stop showed "Transcribe" while it was still draining the
+  recorder.** The progress strip lit its first stage *before* `ffmpeg`
+  was actually stopped — a quit → `SIGINT` → `SIGTERM` → settle drain
+  that can run several seconds — so the user watched "Transcribe" pulse
+  during a wait that was not transcription, the same opaque mislabel
+  record-start had. The strip now appears only when transcription truly
+  begins; the drain keeps the honest "Stopping native recorder…" status.
+- **Stopping paid an unconditional 150 ms settle every time.** `ffmpeg`
+  finalizes and closes the WAV on exit, so the file is normally usable
+  the instant it exits; the flat sleep was pure dead time on every turn
+  (the stop-side cousin of the removed record-start sleep). It is now an
+  adaptive check that returns immediately in the common case and only
+  waits — up to a *longer* cap than the old 150 ms — if a slow disk
+  flush genuinely needs it, so it is both faster and more robust.
+- **The model answer and the follow-up question were spoken one after
+  the other.** Their two text-to-speech calls are independent round
+  trips to the same provider but were issued serially, so a turn with a
+  follow-up question waited through both in sequence. They now run
+  concurrently — each still degrading on its own (a failed clip is
+  skipped, the turn and the other clip are kept) — which roughly halves
+  the speak step whenever there is a follow-up.
 
 ### Changed
 - **Record-start is now a visible, staged process.** Instead of one frozen

@@ -106,32 +106,36 @@ export async function processPracticeFile(
   progress?.("tts", "active");
   const ttsProvider = config<string>("ttsProvider") || "gemini";
   const outputAudio = path.join(sessionDir, speechOutputFileName(ttsProvider));
-  let audioFile: string | undefined;
-  if (nativeVersion.trim()) {
-    // A speech-output hiccup (missing/invalid TTS key, provider 5xx) must not
-    // discard an already-successful transcribe + coach turn. Degrade like the
-    // follow-up TTS below: keep the coaching result, just skip the playback.
-    try {
-      audioFile = (await synthesizeWithConfiguredTts(context, nativeVersion, outputAudio, ttsProvider))
-        .filePath;
-    } catch (error) {
-      appendOutput(`Native-version TTS failed: ${errorMessage(error)}`);
+  // The native-version and follow-up syntheses are independent round-trips
+  // to the same provider; awaiting them in series doubled the "Speak" stage
+  // whenever a follow-up existed (the conversational-practice common case).
+  // Run them concurrently. Each keeps its own catch so a single TTS hiccup
+  // (missing/invalid key, provider 5xx) just skips that one clip and keeps
+  // the already-successful transcribe + coach turn — Promise.all never sees
+  // a rejection, so one failing can't discard the other or the turn.
+  const synthesizeClip = (
+    text: string,
+    outPath: string,
+    label: string,
+  ): Promise<string | undefined> => {
+    if (!text.trim()) {
+      return Promise.resolve(undefined);
     }
-  }
-  let followUpAudioFile: string | undefined;
-  if (followUpQuestion.trim()) {
-    const followUpPath = path.join(
-      sessionDir,
-      `follow-up.${speechOutputExtension(ttsProvider)}`,
-    );
-    try {
-      followUpAudioFile = (
-        await synthesizeWithConfiguredTts(context, followUpQuestion, followUpPath, ttsProvider)
-      ).filePath;
-    } catch (error) {
-      appendOutput(`Follow-up TTS failed: ${errorMessage(error)}`);
-    }
-  }
+    return synthesizeWithConfiguredTts(context, text, outPath, ttsProvider)
+      .then((result) => result.filePath)
+      .catch((error) => {
+        appendOutput(`${label} TTS failed: ${errorMessage(error)}`);
+        return undefined;
+      });
+  };
+  const [audioFile, followUpAudioFile] = await Promise.all([
+    synthesizeClip(nativeVersion, outputAudio, "Native-version"),
+    synthesizeClip(
+      followUpQuestion,
+      path.join(sessionDir, `follow-up.${speechOutputExtension(ttsProvider)}`),
+      "Follow-up",
+    ),
+  ]);
   progress?.("tts", "done");
 
   progress?.("save", "active");

@@ -163,6 +163,14 @@ const RECORDER_READY_FLOOR_MS = 450;
 const RECORDER_READY_POLL_MS = 60;
 const RECORDER_READY_MAX_MS = 1500;
 
+// Stop-side settle: replaces the old flat `await delay(150)`. The common
+// case returns at ~0ms (file already closed on ffmpeg exit); the cap is
+// deliberately longer than the old 150ms so a slow filesystem flush is
+// tolerated, not turned into a spurious "did not produce a usable file".
+const RECORDER_SAVED_MIN_BYTES = 1000;
+const RECORDER_SAVE_SETTLE_MAX_MS = 600;
+const RECORDER_SAVE_SETTLE_STEP_MS = 40;
+
 /**
  * Resolve as soon as the recorder is demonstrably live; throw the same
  * "failed/exited before it could start" errors the old fixed-delay gate
@@ -240,14 +248,20 @@ export async function stopNativeFfmpegRecording(): Promise<NativeRecordingSessio
     await waitForExit(child, 1000);
   }
 
-  await delay(150);
-  let size = 0;
-  try {
-    size = fs.statSync(session.filePath).size;
-  } catch {
-    size = 0;
-  }
-  if (size < 1000) {
+  // The old unconditional `await delay(150)` taxed every single stop with
+  // dead time the same way the removed record-start `delay(900)` did.
+  // ffmpeg finalizes and closes the WAV on exit, so the file is normally
+  // usable the instant waitForExit resolves. Stat right away and only poll
+  // if it is still short (a rare lagging flush) — and poll *longer* than
+  // the flat 150ms before giving up, so this is both faster in the common
+  // case and more robust than the fixed sleep.
+  const size = await waitForUsableFileSize(
+    session.filePath,
+    RECORDER_SAVED_MIN_BYTES,
+    RECORDER_SAVE_SETTLE_MAX_MS,
+    RECORDER_SAVE_SETTLE_STEP_MS,
+  );
+  if (size < RECORDER_SAVED_MIN_BYTES) {
     throw new Error(nativeRecorderError(session, "Native recorder did not produce a usable audio file."));
   }
   appendOutput(`Native recording saved: ${session.filePath} (${size} bytes, ${Math.round((Date.now() - session.startedAt) / 1000)}s)`);
@@ -397,6 +411,34 @@ export function nativeRecorderError(session: NativeRecordingSession, summary: st
 
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Stat the recording immediately and return as soon as it is at least
+ * `minBytes` (the normal case: ffmpeg has already closed the WAV on exit,
+ * so this returns at ~0ms). Only if the file is still short does it poll,
+ * up to `maxMs`, before returning whatever size it last saw — the caller
+ * turns a still-too-small file into the existing "no usable file" error.
+ */
+async function waitForUsableFileSize(
+  filePath: string,
+  minBytes: number,
+  maxMs: number,
+  stepMs: number,
+): Promise<number> {
+  const start = Date.now();
+  for (;;) {
+    let size = 0;
+    try {
+      size = fs.statSync(filePath).size;
+    } catch {
+      size = 0;
+    }
+    if (size >= minBytes || Date.now() - start >= maxMs) {
+      return size;
+    }
+    await delay(stepMs);
+  }
 }
 
 export function waitForExit(child: cp.ChildProcess, timeoutMs: number): Promise<boolean> {
