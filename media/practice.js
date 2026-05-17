@@ -159,30 +159,7 @@
       const weekTag = state.progress && state.progress.weekIndex
         ? "Week " + state.progress.weekIndex + " · Day " + state.progress.dayInWeek + "/" + (state.progress.weekTotalDays || 7)
         : "";
-      $("task").innerHTML = `
-        <h2>${esc(next.completion_label || "Current Package")} ${next.package_date ? "· " + esc(next.package_date) : ""}</h2>
-        ${weekTag ? '<p class="muted" style="margin: 0 0 8px;">' + esc(weekTag) + '</p>' : ''}
-        <div class="chips">
-          <span class="chip">${esc(state.source || "local")} source</span>
-          <span class="chip">${esc(settings.coachProvider || "gemini")} coach</span>
-          <span class="chip">${esc(settings.audioUnderstandingProvider || "gemini")} speech in</span>
-          <span class="chip">${esc(settings.ttsProvider || "gemini")} speech out</span>
-          <span class="chip">${esc(next.training_type || "practice")}</span>
-        </div>
-        <p>${esc(training.goal || next.goal || "")}</p>
-        <p class="muted">${esc(training.scenario || next.scenario || "")}</p>
-        <div class="field"><span class="label">Frames</span>${frames(training.frames)}</div>
-        <div class="field"><span class="label">Example text</span><p class="text">${esc(todayAudioText)}</p></div>
-        <div class="field">
-          <span class="label">Example audio</span>
-          ${prebuiltDemoAudio(assets)}
-          <div class="row">
-            <button class="secondary" data-action="today-tts" ${todayAudioText ? "" : "disabled"}>Generate Example</button>
-            <span class="muted" id="todayTtsStatus">Reads example only, with ${esc(settings.ttsProvider || "gemini")}</span>
-          </div>
-          <audio id="todayAudio" controls hidden></audio>
-        </div>
-      `;
+      renderTodayHero({ next, training, settings, assets, todayAudioText, weekTag });
       renderReadingCard(training, assets);
       renderDrillPanel();
       $("sessionLog").innerHTML = `
@@ -590,6 +567,183 @@
           <span><i class="lg-pending"></i>upcoming</span>
         </div>
       `;
+    }
+
+    function renderTodayHero(ctx) {
+      const host = $("task");
+      if (!host) return;
+      const next = ctx.next || {};
+      const training = ctx.training || {};
+      const settings = ctx.settings || {};
+      const assets = ctx.assets || {};
+      const line = ctx.todayAudioText || "";
+      const weekTag = ctx.weekTag || "";
+      const goal = training.goal || next.goal || next.completion_label || "Today's practice";
+      const scenario = training.scenario || next.scenario || "";
+      const setup = training.chinese_setup || next.chinese_setup || "";
+      host.innerHTML = `
+        <div class="today-head">
+          <span class="today-eyebrow">🎯 TODAY${next.package_date ? " · " + esc(next.package_date) : ""}${weekTag ? " · " + esc(weekTag) : ""}</span>
+          <span class="chip">${esc(next.training_type || "practice")}</span>
+        </div>
+        <h2 class="today-goal">${esc(goal)}</h2>
+        ${scenario ? '<p class="today-scenario">' + esc(scenario) + '</p>' : ''}
+        ${setup ? '<p class="today-setup muted">' + esc(setup) + '</p>' : ''}
+        ${prosodyLineBlockHtml(training, line)}
+        <div class="today-actions">
+          <button data-hero-practice="1" ${line ? "" : "disabled"}>🎙 Practice this line</button>
+          <button class="secondary" data-action="today-tts" ${line ? "" : "disabled"}>🔊 Generate audio</button>
+          <span class="muted" id="todayTtsStatus">Reads example only, with ${esc(settings.ttsProvider || "gemini")}</span>
+        </div>
+        <div class="today-audio">
+          ${prebuiltDemoAudio(assets)}
+          <audio id="todayAudio" controls hidden></audio>
+        </div>
+        <details class="result-details today-frames">
+          <summary>Frames &amp; plain text</summary>
+          <div class="field"><span class="label">Frames</span>${frames(training.frames)}</div>
+          <div class="field"><span class="label">Example text</span><p class="text">${esc(line)}</p></div>
+        </details>
+      `;
+    }
+
+    function normProsodyWord(value) {
+      return String(value || "").toLowerCase().replace(/[^a-z0-9']+/g, "");
+    }
+
+    function contourClass(arrow) {
+      const a = String(arrow || "");
+      if (a.indexOf("↗") >= 0 || /ris/i.test(a)) return "rise";
+      if (a.indexOf("↘") >= 0 || /fall/i.test(a)) return "fall";
+      if (a.indexOf("↑") >= 0) return "rise";
+      if (a.indexOf("↓") >= 0) return "fall";
+      return "level";
+    }
+
+    function contourGlyph(arrow) {
+      const cls = contourClass(arrow);
+      if (cls === "rise") return "↗";
+      if (cls === "fall") return "↘";
+      return "→";
+    }
+
+    function pauseGlyph(pause) {
+      const p = String(pause || "").toLowerCase();
+      if (p.indexOf("final") >= 0) return "‖";
+      if (p.indexOf("long") >= 0) return "‖";
+      if (!p || p === "none") return "";
+      return "·";
+    }
+
+    function prosodyWordSpan(token, info, isNucleus, toneArrow) {
+      const cls = isNucleus
+        ? "nucleus"
+        : (info ? prosodyStressClass(String(info.stress || "").toLowerCase()) : "neutral");
+      const arrow = (isNucleus ? toneArrow : (info && info.arrow)) || "";
+      const arrowHtml = arrow ? '<sup class="pw-arrow ' + contourClass(arrow) + '">' + esc(contourGlyph(arrow)) + '</sup>' : '';
+      const title = info
+        ? [info.stress ? "Stress: " + info.stress : "", info.pitch_role ? "Pitch: " + info.pitch_role : "", arrow ? "Tone: " + arrow : ""].filter(Boolean).join(" | ")
+        : (isNucleus ? "Nucleus" : "");
+      return '<span class="pw pw-' + cls + '"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(token) + arrowHtml + '</span>';
+    }
+
+    function prosodyGroupLineHtml(groups, words) {
+      const wordsByGroup = new Map();
+      (Array.isArray(words) ? words : []).forEach((word) => {
+        const key = String(word && word.group != null ? word.group : "all");
+        if (!wordsByGroup.has(key)) wordsByGroup.set(key, new Map());
+        const norm = normProsodyWord(word && word.text);
+        if (norm) wordsByGroup.get(key).set(norm, word);
+      });
+      const segments = groups.map((group, index) => {
+        const id = String(group && group.id != null ? group.id : index + 1);
+        const lookup = wordsByGroup.get(id) || wordsByGroup.get("all") || new Map();
+        const nucleusNorm = normProsodyWord(group && group.nucleus);
+        const tokens = String((group && group.text) || "").split(/\s+/).filter(Boolean);
+        const wordHtml = tokens.map((token) => {
+          const norm = normProsodyWord(token);
+          const isNucleus = Boolean(norm) && norm === nucleusNorm;
+          return prosodyWordSpan(token, lookup.get(norm), isNucleus, group && group.contour);
+        }).join(" ");
+        const pause = pauseGlyph(group && group.pause_after);
+        const breakHtml = '<span class="pg-break">' +
+          '<b class="pg-tone ' + contourClass(group && group.contour) + '">' + esc(contourGlyph(group && group.contour)) + '</b>' +
+          (pause ? '<span class="pg-pause" title="Pause: ' + esc((group && group.pause_after) || "") + '">' + esc(pause) + '</span>' : '') +
+          '</span>';
+        return '<span class="pg">' + wordHtml + '</span>' + (index < groups.length - 1 || pause ? breakHtml : '');
+      }).join(" ");
+      return '<p class="prosody-line">' + segments + '</p>';
+    }
+
+    function prosodyContourRailHtml(groups) {
+      if (!groups.length) return "";
+      const tiles = groups.map((group, index) => {
+        const cls = contourClass(group && group.contour);
+        const nucleus = String((group && group.nucleus) || "").replace(/[.,;:!?]+$/, "");
+        return '<div class="contour-tile">' +
+          '<span class="ct-arrow ct-' + cls + '">' + esc(contourGlyph(group && group.contour)) + '</span>' +
+          '<span class="ct-nucleus">' + esc(nucleus || ("Grp " + (index + 1))) + '</span>' +
+          '</div>';
+      }).join("");
+      return '<div class="contour-rail" aria-label="Sentence melody">' + tiles + '</div>';
+    }
+
+    function prosodyGuideFallbackHtml(training, line) {
+      const stressGuide = String(training.stress_guide || "").trim();
+      const intonationGuide = String(training.intonation_guide || "").trim();
+      if (!stressGuide && !intonationGuide && !line) return "";
+      let lineHtml = "";
+      if (stressGuide) {
+        const tokens = stressGuide.split(/\s+/).filter(Boolean);
+        lineHtml = '<p class="prosody-line">' + tokens.map((raw) => {
+          const stressed = raw.indexOf("ˈ") >= 0 || /[A-Z]{2,}/.test(raw.replace(/[^A-Za-z]/g, ""));
+          const clean = raw.replace(/ˈ/g, "");
+          return '<span class="pw pw-' + (stressed ? "support" : "neutral") + '">' + esc(clean) + '</span>';
+        }).join(" ") + '</p>';
+      } else if (line) {
+        lineHtml = '<p class="prosody-line">' + esc(line) + '</p>';
+      }
+      let rail = "";
+      if (intonationGuide) {
+        const segs = intonationGuide.split("|").map((seg) => seg.trim()).filter(Boolean);
+        rail = '<div class="contour-rail" aria-label="Sentence melody">' + segs.map((seg) => {
+          const cls = contourClass(seg);
+          const label = seg.replace(/[→↘↗↑↓]/g, "").trim().split(/\s+/).slice(-1)[0] || "";
+          return '<div class="contour-tile"><span class="ct-arrow ct-' + cls + '">' + esc(contourGlyph(seg)) + '</span><span class="ct-nucleus">' + esc(label) + '</span></div>';
+        }).join("") + '</div>';
+      }
+      return lineHtml + rail;
+    }
+
+    function prosodyLegendHtml() {
+      return '<div class="prosody-legend" aria-hidden="true">' +
+        '<span><i class="lg-nucleus"></i>nucleus</span>' +
+        '<span><i class="lg-support"></i>stress</span>' +
+        '<span><i class="lg-weak"></i>weak</span>' +
+        '<span class="lg-arrow rise">↗ rise</span>' +
+        '<span class="lg-arrow fall">↘ fall</span>' +
+        '<span class="lg-arrow level">→ level</span>' +
+        '<span>‖ pause</span>' +
+        '</div>';
+    }
+
+    function prosodyLineBlockHtml(training, line) {
+      const wl = (training && training.word_level_prosody) || null;
+      const groups = wl && Array.isArray(wl.groups) ? wl.groups : [];
+      const words = wl && Array.isArray(wl.words) ? wl.words : [];
+      let body = "";
+      if (groups.length) {
+        body = prosodyGroupLineHtml(groups, words) + prosodyContourRailHtml(groups) + prosodyLegendHtml();
+      } else {
+        const fallback = prosodyGuideFallbackHtml(training, line);
+        if (fallback) {
+          body = fallback + (training.stress_guide || training.intonation_guide ? prosodyLegendHtml() : "");
+        } else if (line) {
+          body = '<p class="prosody-line">' + esc(line) + '</p>';
+        }
+      }
+      if (!body) return "";
+      return '<div class="prosody-card"><span class="label">Today\'s line · stress · pitch · pauses</span>' + body + '</div>';
     }
 
     function prebuiltDemoAudio(assets) {
@@ -1407,6 +1561,16 @@
         drillListenTrigger.dataset.busy = "1";
         drillListenTrigger.textContent = "Listening…";
         vscode.postMessage({ type: "slowRead", text: example.text, target: "drill", speed: 0.85 });
+        return;
+      }
+      const heroPracticeTrigger = event.target.closest && event.target.closest("[data-hero-practice]");
+      if (heroPracticeTrigger) {
+        const text = String(currentExampleText || "").trim();
+        if (!text) {
+          setStatus("No example line to practice yet.", "error");
+          return;
+        }
+        startDrillPractice({ text, label: "Today's line" });
         return;
       }
       const drillPracticeTrigger = event.target.closest && event.target.closest("[data-drill-practice]");
