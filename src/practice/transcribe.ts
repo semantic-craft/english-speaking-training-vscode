@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import {
   config,
   extractGeminiText,
+  fetchWithTimeout,
   getRequiredKey,
   MIMO_OPENAI_BASE_URL,
   parseLooseJson,
@@ -50,7 +51,7 @@ async function transcribeWithMimo(
     throw new Error("MiMo inline audio limit is close to 50 MB. Shorten the recording.");
   }
 
-  const response = await fetch(mimoEndpoint(baseUrl), {
+  const response = await fetchWithTimeout(mimoEndpoint(baseUrl), {
     method: "POST",
     headers: {
       "api-key": apiKey,
@@ -353,7 +354,7 @@ async function transcribeWithGemini(
     throw new Error("Gemini inline audio limit is close to 20 MB. Shorten the recording or switch speech input to OpenAI Realtime.");
   }
 
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
       method: "POST",

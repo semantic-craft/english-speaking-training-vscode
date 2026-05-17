@@ -52,7 +52,6 @@ export class StatusProvider implements vscode.TreeDataProvider<StatusItem> {
         new StatusItem("MiMo Key", vscode.TreeItemCollapsibleState.None, state.keys.mimo ? "saved" : "missing", { command: "englishTraining.configureMimoKey", title: "Configure MiMo" }),
         new StatusItem("OpenAI Key", vscode.TreeItemCollapsibleState.None, state.keys.openai ? "saved" : "missing", { command: "englishTraining.configureOpenAIKey", title: "Configure OpenAI" }),
         new StatusItem("Gemini Key", vscode.TreeItemCollapsibleState.None, state.keys.gemini ? "saved" : "missing", { command: "englishTraining.configureGeminiKey", title: "Configure Gemini" }),
-        new StatusItem("DeepSeek Key", vscode.TreeItemCollapsibleState.None, state.keys.deepseek ? "saved" : "missing", { command: "englishTraining.configureDeepSeekKey", title: "Configure DeepSeek" }),
         new StatusItem("Open Task Card", vscode.TreeItemCollapsibleState.None, "markdown", { command: "englishTraining.openTaskCard", title: "Open Task Card" }),
       ];
     } catch (error) {

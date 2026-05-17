@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 
 import {
   config,
+  fetchWithTimeout,
   getRequiredKey,
   MIMO_OPENAI_BASE_URL,
   MINIMAX_TTS_BASE_URL,
@@ -58,7 +59,7 @@ async function synthesizeOpenAI(
   speedOverride?: number,
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "openai");
-  const response = await fetch("https://api.openai.com/v1/audio/speech", {
+  const response = await fetchWithTimeout("https://api.openai.com/v1/audio/speech", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -88,7 +89,7 @@ async function synthesizeGemini(
   const apiKey = await getRequiredKey(context, "gemini");
   const model = config<string>("geminiTtsModel") || "gemini-3.1-flash-tts-preview";
   const voiceName = config<string>("geminiTtsVoice") || "Kore";
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
       method: "POST",
@@ -133,7 +134,7 @@ async function synthesizeMiniMax(
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "minimax");
   const ttsBaseUrl = config<string>("minimaxTtsBaseUrl") || MINIMAX_TTS_BASE_URL;
-  const response = await fetch(ttsBaseUrl, {
+  const response = await fetchWithTimeout(ttsBaseUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -193,7 +194,7 @@ async function synthesizeMiMo(
   const baseUrl = config<string>("mimoTtsBaseUrl") || MIMO_OPENAI_BASE_URL;
   const model = config<string>("mimoTtsModel") || "mimo-v2.5-tts";
   const voice = config<string>("mimoTtsVoice") || "Mia";
-  const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+  const response = await fetchWithTimeout(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
     method: "POST",
     headers: {
       "api-key": apiKey,

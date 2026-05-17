@@ -46,9 +46,30 @@ export async function processPracticeFile(
   progress?.("transcribe", "done");
 
   progress?.("coach", "active");
-  const coaching = target
-    ? shadowCheckCoaching(state, transcript, target)
-    : await coachTranscript(context, state, transcript, priorTurn, target);
+  let coaching: JsonObject;
+  if (target) {
+    coaching = shadowCheckCoaching(state, transcript, target);
+  } else {
+    try {
+      coaching = await coachTranscript(context, state, transcript, priorTurn, target);
+    } catch (error) {
+      // A coach hiccup (timeout, missing/invalid key, provider 5xx) must not
+      // discard an already-successful recording + transcribe. Degrade exactly
+      // like the TTS step below: keep the turn, echo the transcript back as the
+      // native version, persist the session, and tell the user plainly what
+      // failed so they can press ↻ to re-analyze without re-recording.
+      const detail = errorMessage(error);
+      appendOutput(`Coach step failed: ${detail}`);
+      coaching = {
+        problems: [
+          `教练分析这一步失败了，但你的录音和转写已经保留。失败原因：${detail}`,
+          "下面的 Native Version 暂时回显你自己的转写文本；按 ↻ 重试即可重新分析这一轮，不需要重录。",
+        ],
+        quick_fix:
+          "教练步骤失败（多为网络或服务商超时）。这一轮的录音与转写已经保存，按 ↻ 重新分析即可，不需要重录。",
+      };
+    }
+  }
   const nativeVersion =
     target?.referenceText ||
     stringValue(coaching.native_version) ||

@@ -24,7 +24,25 @@ export async function startNativeFfmpegRecording(
   practiceTarget?: PracticeTarget,
 ): Promise<NativeRecordingSession> {
   if (nativeRecording) {
-    throw new Error("Native recorder is already running.");
+    // A leftover recorder (a prior turn that errored, or whose webview
+    // start-watchdog fired and reset the UI) must never permanently brick
+    // "record": pressing record is an unambiguous intent to start a NEW
+    // take. retainContextWhenHidden also means hiding the view no longer
+    // disposes it, so onDidDispose can't be relied on to reap it. Reclaim
+    // the stale ffmpeg — kill it and free the microphone — instead of
+    // throwing "already running" into a dead end with the mic still hot.
+    appendOutput("Native recorder was still running from a previous take; reclaiming it.");
+    const stale = nativeRecording;
+    nativeRecording = undefined;
+    if (
+      !stale.process.killed &&
+      stale.process.exitCode === null &&
+      stale.process.signalCode === null
+    ) {
+      stale.process.kill("SIGTERM");
+      await waitForExit(stale.process, 1500);
+    }
+    await delay(200);
   }
   if (process.platform !== "darwin") {
     throw new Error("Native recorder fallback currently supports macOS AVFoundation only.");

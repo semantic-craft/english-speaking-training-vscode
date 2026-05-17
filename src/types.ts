@@ -5,8 +5,7 @@ export type ProviderName =
   | "openai"
   | "gemini"
   | "minimax"
-  | "mimo"
-  | "deepseek";
+  | "mimo";
 export type ActiveMaterialsSource = "local";
 export type KeyAvailability = Record<ProviderName, boolean>;
 
@@ -43,6 +42,9 @@ export interface SourceDiagnostics {
   lessonCount: number;
   completedCount: number;
   dateRange: string;
+  /** Set when the current package's english-training.json exists but failed
+   * to parse — surfaced to the user so a JSON typo is not a silent empty UI. */
+  packageJsonError?: string;
 }
 
 export interface LearnerProfile {
@@ -73,6 +75,7 @@ export interface TrainingState {
     audioUnderstandingProvider: string;
     ttsProvider: string;
     openaiRealtimeTranscriptionModel: string;
+    openaiCoachModel: string;
     geminiCoachModel: string;
     geminiTtsModel: string;
     geminiTtsVoice: string;
@@ -84,8 +87,6 @@ export interface TrainingState {
     mimoTtsBaseUrl: string;
     mimoTtsModel: string;
     mimoTtsVoice: string;
-    deepseekAnthropicBaseUrl: string;
-    deepseekCoachModel: string;
     minimaxTtsModel: string;
     minimaxTtsVoiceId: string;
     ttsSpeed: number;

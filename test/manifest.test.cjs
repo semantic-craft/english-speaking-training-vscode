@@ -50,6 +50,7 @@ test("sidebar model presets stay inside package configuration enums", () => {
   for (const setting of [
     "mimoCoachModel",
     "openaiRealtimeTranscriptionModel",
+    "openaiCoachModel",
     "geminiCoachModel",
     "geminiAudioUnderstandingModel",
     "minimaxTtsModel",

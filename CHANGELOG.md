@@ -7,6 +7,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.35] — 2026-05-17
+
+A runtime-stability pass: every place the practice flow could hang, lose a
+good recording, or trap the user with a hot microphone is now closed, and
+the coach provider lineup is simplified.
+
+### Fixed
+- **No network call had a timeout.** Node's global `fetch` never times out,
+  so a stalled network (captive portal, dead VPN, a provider edge holding
+  the socket) made the coach / transcribe / TTS step hang forever with no
+  self-recovery. All LLM, speech-input, and speech-output HTTP calls now go
+  through a bounded fetch (90 s) that surfaces a clear, retryable error.
+- **A coach failure threw away a good recording.** A coach hiccup (timeout,
+  missing/invalid key, provider 5xx) discarded the already-successful
+  recording + transcript and skipped session persistence, forcing a
+  re-record. The turn is now kept, the transcript is preserved, the session
+  is saved, and you are told to press ↻ to re-analyze without re-recording.
+- **A corrupt lesson file degraded silently.** A syntax error in the current
+  package's `english-training.json` (e.g. a trailing comma) showed an
+  enabled record button over a totally empty lesson with no hint why.
+  Missing vs. malformed are now distinguished: record is gated and Source
+  Diagnostics shows an error banner naming the JSON parse error.
+- **A leftover recorder bricked the record button with the mic still hot.**
+  Pressing record now reclaims and kills a stale `ffmpeg` instead of
+  throwing "already running" into a dead end — important now that the
+  retained webview no longer disposes (and thus no longer reaps it) on hide.
+- **The default Mac recorder could trap the user forever.** If the host
+  never confirmed start, the timer ran, record stayed locked, and stop was
+  inert. A 15 s start watchdog now self-heals into a clear retryable error.
+- The record timer could be orphaned (repainting forever) when the
+  webview-recorder fallback reached `startTimer` twice; it is now idempotent.
+- On any pipeline error a live webview `MediaRecorder` + mic stream was left
+  running (hot mic + a zombie recorder that could post a second unsolicited
+  take). The error path now tears the webview recorder down without firing
+  its `onstop` pipeline, regardless of recorder mode.
+
+### Changed
+- The practice cockpit now **retains its context when hidden**. Collapsing
+  the view or clicking another sidebar item no longer wipes an in-progress
+  session or strands a running native recorder.
+- **DeepSeek removed as a coach provider; OpenAI added as a real one.**
+  Coach providers are now Gemini (default), Xiaomi MiMo, and OpenAI. The
+  OpenAI coach uses the chat-completions JSON endpoint with a configurable
+  `englishTraining.openaiCoachModel` (default `gpt-4o`). All DeepSeek
+  plumbing — the configure-key command, the status-tree row, the
+  `deepseekAnthropicBaseUrl` / `deepseekCoachModel` settings, and the
+  provider enum member — is gone. A persisted `coachProvider: "deepseek"`
+  is migrated to the Gemini default so it cannot wedge the coach step.
+
 ## [0.1.34] — 2026-05-17
 
 Makes the syllable-stress card actually render, and closes the contract loop
