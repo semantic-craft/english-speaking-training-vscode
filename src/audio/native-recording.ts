@@ -68,6 +68,19 @@ export async function startNativeFfmpegRecording(
   const filePath = path.join(sessionDir, "native-input.wav");
   const ffmpegPath = resolveFfmpegPath();
   const device = await resolveNativeFfmpegAudioDevice(ffmpegPath);
+  const sampleRate = resolveRecordingSampleRate();
+  // Why not 16000 anymore: iMac / MacBook built-in microphones capture at
+  // the device's native rate (typically 44.1 / 48 kHz). Asking ffmpeg to
+  // output 16 kHz forces AVFoundation's internal sample-rate converter on
+  // every sample, which audibly degrades the recording — high frequencies
+  // are gone (so the take sounds muffled / "phone quality") AND the SRC
+  // adds a perceptible noise floor. The downstream STT path resamples to
+  // 16 kHz mono inside ffmpeg/swresample when needed (convertAudioToWav
+  // for Gemini/MiMo; OpenAI file mode and Whisper accept any rate and do
+  // the resample internally), so recording at the device's native rate is
+  // pure quality upside with no STT cost. 48 kHz is the safe modern
+  // default; the new englishTraining.recordSampleRate setting lets users
+  // pin a different rate for unusual interfaces.
   const args = [
     "-y",
     "-hide_banner",
@@ -81,9 +94,9 @@ export async function startNativeFfmpegRecording(
     "-ac",
     "1",
     "-ar",
-    "16000",
-    "-sample_fmt",
-    "s16",
+    String(sampleRate),
+    "-c:a",
+    "pcm_s16le",
     filePath,
   ];
 
@@ -391,6 +404,27 @@ export function chooseLocalAvfoundationAudioDevice(devices: AvfoundationAudioDev
     }
   }
   return allowed.find((device) => LOCAL_MICROPHONE_PATTERN.test(device.name)) ?? allowed[0];
+}
+
+/**
+ * Sample rate written to disk for native ffmpeg recordings. Defaults to
+ * 48 kHz (the macOS built-in mic native rate); user can pin a different
+ * value via englishTraining.recordSampleRate. Clamped to the manifest
+ * enum so a bad setting can't crash ffmpeg.
+ */
+export function resolveRecordingSampleRate(): number {
+  const raw = config<unknown>("recordSampleRate");
+  const parsed =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && raw.trim()
+        ? Number(raw)
+        : 48000;
+  const allowed = new Set([16000, 22050, 24000, 32000, 44100, 48000]);
+  if (Number.isFinite(parsed) && allowed.has(parsed)) {
+    return parsed;
+  }
+  return 48000;
 }
 
 export function blockedMicrophoneRegex(): RegExp {

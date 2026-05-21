@@ -2,12 +2,17 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-import { appendOutput, showOutput, stringValue } from "../core.js";
+import { appendOutput, resolveFfmpegPath, showOutput, stringValue } from "../core.js";
 import type { JsonObject } from "../types.js";
 import { refreshAll } from "../runtime/host.js";
 import { pythonPath } from "../runtime/settings.js";
 import { execFile, isHttpUrl } from "../runtime/training-root.js";
 import { invalidateNextPackageCache, loadState } from "../runtime/state.js";
+import {
+  blockedMicrophoneRegex,
+  invalidateResolvedAudioDevice,
+  listAvfoundationAudioDevices,
+} from "../audio/native-recording.js";
 
 export async function completeLocalPackage(context: vscode.ExtensionContext): Promise<void> {
   const state = await loadState(context);
@@ -80,6 +85,87 @@ export async function openSessionFolder(context: vscode.ExtensionContext): Promi
   const dir = path.join(state.root, "runtime", "vscode-sessions");
   fs.mkdirSync(dir, { recursive: true });
   await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(dir));
+}
+
+/**
+ * Pick a recording microphone interactively. Lists AVFoundation audio
+ * devices (skipping the blocked iPhone/Continuity set) and writes the
+ * choice to englishTraining.preferredMicrophoneName so it survives across
+ * sessions. "Auto" clears the preference and lets the existing local-Mac
+ * heuristic pick. We invalidate the resolved-device cache so the next
+ * record press re-detects with the new preference immediately.
+ */
+export async function selectRecordingMicrophone(): Promise<void> {
+  if (process.platform !== "darwin") {
+    vscode.window.showWarningMessage(
+      "Interactive microphone picker currently supports macOS AVFoundation only. " +
+        "Set englishTraining.preferredMicrophoneName manually on other platforms.",
+    );
+    return;
+  }
+  const ffmpegPath = resolveFfmpegPath();
+  let devices: { index: string; name: string }[];
+  try {
+    devices = await listAvfoundationAudioDevices(ffmpegPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    vscode.window.showErrorMessage(`Could not list microphones: ${message}`);
+    return;
+  }
+  if (devices.length === 0) {
+    vscode.window.showWarningMessage(
+      "No AVFoundation audio devices were detected. Check macOS Privacy & Security → Microphone " +
+        "for VS Code (and any standalone ffmpeg you installed).",
+    );
+    return;
+  }
+  const blocked = blockedMicrophoneRegex();
+  const settings = vscode.workspace.getConfiguration("englishTraining");
+  const currentPreference = stringValue(settings.get<string>("preferredMicrophoneName")).trim().toLowerCase();
+  const items: (vscode.QuickPickItem & { value: string })[] = [
+    {
+      label: "Auto (prefer Mac built-in)",
+      description: currentPreference ? undefined : "current",
+      detail: "Clears the preference and lets the extension pick an iMac/MacBook built-in microphone.",
+      value: "",
+    },
+  ];
+  for (const device of devices) {
+    const isBlocked = blocked.test(device.name);
+    const isCurrent =
+      currentPreference.length > 0 && device.name.toLowerCase().includes(currentPreference);
+    items.push({
+      label: device.name,
+      description: isCurrent ? "current" : isBlocked ? "blocked by pattern" : `[${device.index}]`,
+      detail: isBlocked
+        ? "Excluded by englishTraining.blockedMicrophoneNamePattern (typically iPhone/Continuity)."
+        : `AVFoundation index ${device.index}`,
+      value: device.name,
+    });
+  }
+  const picked = await vscode.window.showQuickPick(items, {
+    title: "Choose Recording Microphone",
+    placeHolder: "Pick a microphone for native macOS recording",
+    ignoreFocusOut: true,
+  });
+  if (!picked) {
+    return;
+  }
+  await settings.update("preferredMicrophoneName", picked.value, vscode.ConfigurationTarget.Workspace);
+  invalidateResolvedAudioDevice();
+  if (picked.value) {
+    vscode.window.showInformationMessage(
+      `Recording microphone preference set to "${picked.value}". Next record press will use it.`,
+    );
+  } else {
+    vscode.window.showInformationMessage(
+      "Recording microphone preference cleared — using automatic Mac built-in selection.",
+    );
+  }
+  await refreshAll();
+  appendOutput(
+    `Recording microphone preference: ${picked.value || "(auto)"}; cache invalidated.`,
+  );
 }
 
 export function existingFilePath(value: string): string {

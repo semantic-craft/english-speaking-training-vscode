@@ -114,7 +114,10 @@ test("activates without a workspace and registers the command surface", async ()
   // pin coach + transcribe + TTS all to OpenAI in a single Command Palette
   // action. Bumping this number must stay in lockstep with the contributes
   // block in package.json so a stray rename can't silently lose a command.
-  assert.equal(registered.length, 26);
+  // 27 includes englishTraining.selectMicrophone (0.1.39) — the interactive
+  // microphone picker added so users can switch the AVFoundation input
+  // without editing settings.json by hand.
+  assert.equal(registered.length, 27);
   assert.ok(registered.includes("englishTraining.openPractice"));
   assert.ok(registered.includes("englishTraining.createSamplePackage"));
   assert.ok(registered.includes("englishTraining.generateNextPackage"));
@@ -122,6 +125,7 @@ test("activates without a workspace and registers the command surface", async ()
   // the dead configure-key command can't silently reappear.
   assert.ok(registered.includes("englishTraining.useOpenAICoach"));
   assert.ok(registered.includes("englishTraining.useOpenAIStack"));
+  assert.ok(registered.includes("englishTraining.selectMicrophone"));
   assert.ok(!registered.includes("englishTraining.useDeepSeekCoach"));
   assert.ok(!registered.includes("englishTraining.configureDeepSeekKey"));
   extension.deactivate();

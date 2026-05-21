@@ -7,6 +7,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.39] — 2026-05-22
+
+A recording-audio-quality pass. Native macOS recordings stopped sounding
+muffled / phone-quality and the user can now switch microphones without
+hand-editing settings.json.
+
+### Fixed
+- **Native ffmpeg recorder forced 16 kHz output, which made every take
+  sound muffled and noisy on iMac/MacBook built-in microphones.** The
+  built-in mic captures at the device's native rate (44.1 / 48 kHz);
+  pinning ffmpeg's output to `-ar 16000` made AVFoundation's internal
+  sample-rate converter run on every sample, throwing away everything
+  above 8 kHz and adding an audible noise floor from the SRC itself. The
+  recorder now writes 48 kHz mono PCM by default (matches the built-in
+  rate, no SRC on capture). Downstream STT still works unchanged: the
+  Gemini / MiMo path resamples to 16 kHz inside `convertAudioToWav` when
+  it builds the inline-audio payload; the OpenAI file path uploads as-is
+  and `gpt-4o-transcribe` / Whisper handle the rate internally. Net
+  effect: dramatically cleaner playback for the same STT accuracy.
+
+### Added
+- **`englishTraining.recordSampleRate` setting.** Pin the capture rate to
+  16000 / 22050 / 24000 / 32000 / 44100 / 48000 if you have an interface
+  that prefers a non-48k native rate. Default is 48000.
+- **`English Training: Select Recording Microphone` command** (Command
+  Palette). Lists the live AVFoundation audio devices, marks the current
+  preference and any blocked-by-pattern devices, and writes your pick to
+  `englishTraining.preferredMicrophoneName` for you — including a clean
+  "Auto" option that clears the preference back to the built-in
+  heuristic. Invalidates the resolved-device cache so the next record
+  press uses the new mic immediately, without a window reload.
+
 ## [0.1.38] — 2026-05-21
 
 An OpenAI-first pass: the extension's default route is now the full OpenAI
