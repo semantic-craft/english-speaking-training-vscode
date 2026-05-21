@@ -1,5 +1,7 @@
 import {
   config,
+  isCoachProvider,
+  isTtsProvider,
   MIMO_ANTHROPIC_BASE_URL,
   MIMO_OPENAI_BASE_URL,
   normalizeTtsSpeed,
@@ -12,6 +14,7 @@ export type ProviderSettingName = "coachProvider" | "audioUnderstandingProvider"
 export type ConfigSettingName =
   | "mimoCoachModel"
   | "openaiRealtimeTranscriptionModel"
+  | "openaiFileTranscriptionModel"
   | "openaiCoachModel"
   | "geminiCoachModel"
   | "geminiAudioUnderstandingModel"
@@ -28,11 +31,17 @@ export function pythonPath(): string {
 export function trainingSettings(): TrainingState["settings"] {
   return {
     localMaterialsRoot: config<string>("localMaterialsRoot") || "",
-    coachProvider: config<string>("coachProvider") || "gemini",
+    coachProvider: normalizedCoachProvider(),
     audioUnderstandingProvider: normalizedSpeechInputProvider(),
-    ttsProvider: config<string>("ttsProvider") || "gemini",
+    ttsProvider: normalizedTtsProvider(),
     openaiRealtimeTranscriptionModel: config<string>("openaiRealtimeTranscriptionModel") || "gpt-realtime-whisper",
+    openaiTranscriptionMode: config<string>("openaiTranscriptionMode") || "file",
+    openaiFileTranscriptionModel: config<string>("openaiFileTranscriptionModel") || "gpt-4o-transcribe",
     openaiCoachModel: config<string>("openaiCoachModel") || "gpt-4o",
+    openaiTtsModel: config<string>("openaiTtsModel") || "gpt-4o-mini-tts",
+    openaiTtsVoice: config<string>("openaiTtsVoice") || "marin",
+    openaiTtsInstructions: config<string>("openaiTtsInstructions") || "",
+    openaiTtsResponseFormat: config<string>("openaiTtsResponseFormat") || "wav",
     geminiCoachModel: config<string>("geminiCoachModel") || "gemini-3-flash-preview",
     geminiTtsModel: config<string>("geminiTtsModel") || "gemini-3.1-flash-tts-preview",
     geminiTtsVoice: config<string>("geminiTtsVoice") || "Kore",
@@ -54,16 +63,27 @@ export function trainingSettings(): TrainingState["settings"] {
 }
 
 export function normalizedSpeechInputProvider(): string {
-  const provider = config<string>("audioUnderstandingProvider") || "gemini";
+  const provider = config<string>("audioUnderstandingProvider") || "openai";
   return provider === "openai" || provider === "gemini" || provider === "mimo"
     ? provider
-    : "gemini";
+    : "openai";
+}
+
+export function normalizedCoachProvider(): string {
+  const provider = config<string>("coachProvider") || "openai";
+  return isCoachProvider(provider) ? provider : "openai";
+}
+
+export function normalizedTtsProvider(): string {
+  const provider = config<string>("ttsProvider") || "openai";
+  return isTtsProvider(provider) ? provider : "openai";
 }
 
 export function isConfigSettingName(value: unknown): value is ConfigSettingName {
   return (
     value === "mimoCoachModel" ||
     value === "openaiRealtimeTranscriptionModel" ||
+    value === "openaiFileTranscriptionModel" ||
     value === "openaiCoachModel" ||
     value === "geminiCoachModel" ||
     value === "geminiAudioUnderstandingModel" ||

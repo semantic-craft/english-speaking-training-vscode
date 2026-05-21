@@ -184,23 +184,70 @@
       return target;
     }
 
-    // First-run guard. The red button looks pressable from the very first
-    // render, but a recording made before a Gemini key + a lesson both exist
-    // is wasted work — the pipeline only fails *afterwards* with a raw
-    // "Missing API key" error. Gate the button on the same readiness signal
-    // the onboarding panel uses, and only touch status/button on the
-    // not-ready boundary so a normal "Ready ✓"/result/error status produced
-    // during a real turn is never clobbered by a coincidental re-render.
-    // Single source of truth for "is the practice loop usable yet": a Gemini
-    // key plus at least one lesson. Both the record button and the drill
-    // generator gate on this so a control can never look pressable while a
-    // click would only fail later with a raw "Missing API key" error.
-    function setupReady(currentState) {
+    const ROUTE_KEY_SETTINGS = ["coachProvider", "audioUnderstandingProvider", "ttsProvider"];
+
+    function normalizeProviderForSetting(setting, raw) {
+      if (setting === "coachProvider") {
+        return raw === "gemini" || raw === "mimo" || raw === "openai" ? raw : "openai";
+      }
+      if (setting === "audioUnderstandingProvider") {
+        return raw === "gemini" || raw === "openai" || raw === "mimo" ? raw : "openai";
+      }
+      return raw === "minimax" || raw === "gemini" || raw === "openai" || raw === "mimo" ? raw : "openai";
+    }
+
+    function activeRouteProviders(settings) {
+      const seen = new Set();
+      const providers = [];
+      const defaults = {
+        coachProvider: "openai",
+        audioUnderstandingProvider: "openai",
+        ttsProvider: "openai",
+      };
+      ROUTE_KEY_SETTINGS.forEach((setting) => {
+        const raw = (settings && settings[setting]) || defaults[setting];
+        const value = normalizeProviderForSetting(setting, raw);
+        if (value && !seen.has(value)) {
+          seen.add(value);
+          providers.push(value);
+        }
+      });
+      return providers;
+    }
+
+    function routeKeyStatus(currentState) {
       const keys = (currentState && currentState.keys) || {};
+      const providers = activeRouteProviders(currentState && currentState.settings);
+      const missing = providers.filter((provider) => !keys[provider]);
+      const label = providers.map(providerLabel).join(" + ") || "Provider";
+      const missingLabel = missing.map(providerLabel).join(" + ") || label;
+      return {
+        coreKeysReady: missing.length === 0,
+        providers,
+        missing,
+        label,
+        missingLabel,
+      };
+    }
+
+    // First-run guard. The red button looks pressable from the very first
+    // render, but a recording made before the active route's API keys + a
+    // lesson both exist is wasted work — the pipeline only fails afterwards
+    // with a raw "Missing API key" error. Gate the button on the same
+    // readiness signal the onboarding panel uses, and only touch
+    // status/button on the not-ready boundary so a normal "Ready ✓"/result/
+    // error status produced during a real turn is never clobbered by a
+    // coincidental re-render.
+    function setupReady(currentState) {
       const progress = currentState && currentState.progress;
-      const coreKeysReady = Boolean(keys.gemini);
+      const routeKeys = routeKeyStatus(currentState);
       const hasLessons = Boolean(progress && progress.total && progress.total > 0);
-      return { ready: coreKeysReady && hasLessons, coreKeysReady, hasLessons };
+      return {
+        ready: routeKeys.coreKeysReady && hasLessons,
+        coreKeysReady: routeKeys.coreKeysReady,
+        hasLessons,
+        routeKeys,
+      };
     }
 
     function applySetupGate(currentState) {
@@ -226,7 +273,7 @@
         );
         return;
       }
-      const { ready, coreKeysReady } = setupReady(currentState);
+      const { ready, coreKeysReady, routeKeys } = setupReady(currentState);
       if (!ready) {
         recordingBlockedBySetup = true;
         if (btn) btn.disabled = true;
@@ -236,7 +283,7 @@
         if (!(statusEl && statusEl.classList.contains("error"))) {
           setStatus(
             !coreKeysReady
-              ? "Add a Gemini API key in Quick setup above to start recording."
+              ? "Add " + routeKeys.missingLabel + " API key" + (routeKeys.missing.length === 1 ? "" : "s") + " in Quick setup above to start recording."
               : "Create your first lesson in Quick setup above to start recording.",
           );
         }
@@ -383,19 +430,19 @@
 
     const PROVIDER_ROUTES = {
       coachProvider: [
-        { value: "gemini", label: "Gemini", note: "default coach", modelSetting: "geminiCoachModel" },
+        { value: "openai", label: "OpenAI", note: "default coach — chat-completions JSON", modelSetting: "openaiCoachModel" },
+        { value: "gemini", label: "Gemini", note: "alternate coach", modelSetting: "geminiCoachModel" },
         { value: "mimo", label: "MiMo", note: "Xiaomi Token Plan", modelSetting: "mimoCoachModel" },
-        { value: "openai", label: "OpenAI", note: "chat-completions alternate", modelSetting: "openaiCoachModel" },
       ],
       audioUnderstandingProvider: [
-        { value: "gemini", label: "Gemini", note: "default STT match", modelSetting: "geminiAudioUnderstandingModel" },
-        { value: "openai", label: "OpenAI Realtime", note: "low-latency STT", modelSetting: "openaiRealtimeTranscriptionModel" },
+        { value: "openai", label: "OpenAI", note: "default STT — gpt-4o-transcribe with domain prompt (realtime optional)", modelSetting: "openaiFileTranscriptionModel" },
+        { value: "gemini", label: "Gemini", note: "alternate STT", modelSetting: "geminiAudioUnderstandingModel" },
         { value: "mimo", label: "MiMo", note: "Xiaomi audio understanding" },
       ],
       ttsProvider: [
-        { value: "gemini", label: "Gemini", note: "default TTS", modelSetting: "geminiTtsModel", extraSetting: "geminiTtsVoice", extraLabel: "Voice" },
+        { value: "openai", label: "OpenAI", note: "default TTS — gpt-4o-mini-tts (marin), coach-driven style", modelSetting: "openaiTtsModel", extraSetting: "openaiTtsVoice", extraLabel: "Voice" },
+        { value: "gemini", label: "Gemini", note: "alternate TTS", modelSetting: "geminiTtsModel", extraSetting: "geminiTtsVoice", extraLabel: "Voice" },
         { value: "minimax", label: "MiniMax", note: "optional fallback", modelSetting: "minimaxTtsModel" },
-        { value: "openai", label: "OpenAI", note: "OpenAI voices", modelSetting: "openaiTtsModel", extraSetting: "openaiTtsVoice", extraLabel: "Voice" },
         { value: "mimo", label: "MiMo", note: "Xiaomi voices" },
       ],
     };
@@ -404,10 +451,37 @@
       return PROVIDER_LABELS[name] || name;
     }
 
+    function providerModelSetting(setting, option, settings) {
+      if (setting === "audioUnderstandingProvider" && option.value === "openai") {
+        const mode = settings && settings.openaiTranscriptionMode === "realtime" ? "realtime" : "file";
+        return mode === "realtime" ? "openaiRealtimeTranscriptionModel" : "openaiFileTranscriptionModel";
+      }
+      return option.modelSetting || "";
+    }
+
+    function providerModelButtonLabel(setting, option, settings) {
+      if (setting === "audioUnderstandingProvider" && option.value === "openai") {
+        const mode = settings && settings.openaiTranscriptionMode === "realtime" ? "realtime" : "file";
+        return mode === "realtime" ? "Realtime model" : "File model";
+      }
+      return option.modelLabel || "Model";
+    }
+
+    function providerNote(setting, option, settings) {
+      if (setting === "audioUnderstandingProvider" && option.value === "openai") {
+        const mode = settings && settings.openaiTranscriptionMode === "realtime" ? "realtime" : "file";
+        return mode === "realtime"
+          ? "realtime STT — gpt-realtime-whisper"
+          : "default STT — gpt-4o-transcribe with domain prompt";
+      }
+      return option.note || "";
+    }
+
     function providerModelSummary(setting, option, settings) {
       if (!settings) return "";
-      if (!option.modelSetting) return "";
-      const model = settings[option.modelSetting] || "";
+      const modelSetting = providerModelSetting(setting, option, settings);
+      if (!modelSetting) return "";
+      const model = settings[modelSetting] || "";
       const extra = option.extraSetting ? settings[option.extraSetting] || "" : "";
       if (extra) {
         return esc(model) + " · " + esc(extra);
@@ -419,6 +493,7 @@
       const active = settings && settings[setting] === option.value;
       const hasKey = keys && keys[option.value];
       const modelText = providerModelSummary(setting, option, settings);
+      const modelSetting = providerModelSetting(setting, option, settings);
       const keyBadgeClass = hasKey ? "provider-badge" : "provider-badge missing";
       const routeBadge = active
         ? '<span class="provider-badge active">active</span>'
@@ -426,8 +501,8 @@
       const useButton = active
         ? '<button class="secondary" disabled>Active</button>'
         : '<button class="secondary" data-provider-setting="' + esc(setting) + '" data-provider-value="' + esc(option.value) + '">Use</button>';
-      const modelButton = option.modelSetting
-        ? '<button class="secondary" data-config-setting="' + esc(option.modelSetting) + '">' + esc(option.modelLabel || "Model") + '</button>'
+      const modelButton = modelSetting
+        ? '<button class="secondary" data-config-setting="' + esc(modelSetting) + '">' + esc(providerModelButtonLabel(setting, option, settings)) + '</button>'
         : '';
       const extraButton = option.extraSetting
         ? '<button class="secondary" data-config-setting="' + esc(option.extraSetting) + '">' + esc(option.extraLabel || "Locale") + '</button>'
@@ -435,7 +510,7 @@
       return [
         '<div class="provider-card ' + (active ? "active" : "") + '">',
           '<div class="provider-card-top">',
-            '<div><div class="provider-name">' + esc(option.label) + '</div><div class="provider-note">' + esc(option.note || "") + '</div></div>',
+            '<div><div class="provider-name">' + esc(option.label) + '</div><div class="provider-note">' + esc(providerNote(setting, option, settings)) + '</div></div>',
             routeBadge,
           '</div>',
           modelText ? '<div class="provider-model">' + modelText + '</div>' : '',
@@ -490,6 +565,7 @@
           routeSummaryHtml("Speech out", "ttsProvider", settings),
         '</div>',
         '<div class="provider-presets">',
+          '<button class="secondary" id="useOpenAIStack" title="Set coach, speech input, and speech output all to OpenAI file-mode defaults">Use OpenAI stack</button>',
           '<button class="secondary" id="useGeminiOnly" title="Set coach, speech input, and speech output all to Gemini">Reset to all-Gemini route</button>',
         '</div>',
         providerRoleHtml("Coach", "coachProvider", settings, keys),
@@ -570,8 +646,8 @@
     function renderOnboarding(currentState) {
       const panel = $("onboarding");
       if (!panel) return;
-      const keys = (currentState && currentState.keys) || {};
-      const coreKeysReady = Boolean(keys.gemini);
+      const routeKeys = routeKeyStatus(currentState);
+      const coreKeysReady = routeKeys.coreKeysReady;
       const source = currentState && currentState.source;
       const sourceLabel = currentState && currentState.sourceLabel;
       const sourceConfigured = Boolean(sourceLabel) || source === "local";
@@ -590,8 +666,8 @@
         ? { state: "done", title: "Lesson library ready", hint: progress.total + " lesson" + (progress.total === 1 ? "" : "s") + " in prebuilt/", action: "" }
         : { state: "active", title: "Create your first lesson", hint: "Writes a starter prebuilt/<today>/english-training.json", action: '<button class="primary" data-onboard="create-sample">Create sample</button>' };
       const keyStep = coreKeysReady
-        ? { state: "done", title: "Gemini ready", hint: "Core practice route is fully configured", action: "" }
-        : { state: "active", title: "Connect Gemini", hint: "Gemini handles coach, speech input, and speech output", action: '<button class="primary" data-onboard="provider-key">Set up</button>' };
+        ? { state: "done", title: routeKeys.label + " ready", hint: "Active route keys are saved", action: "" }
+        : { state: "active", title: "Connect " + routeKeys.missingLabel, hint: routeKeys.label + " powers the active practice route", action: '<button class="primary" data-onboard="provider-key">Set up</button>' };
       const steps = [sourceStep, lessonStep, keyStep].filter(Boolean);
       const renderedSteps = steps.map((step, idx) => {
         const mark = step.state === "done" ? "✓" : String(idx + 1);
@@ -609,6 +685,36 @@
         <p class="onboarding-sub">Two minutes to your first practice loop.</p>
         <ol class="onboarding-steps">${renderedSteps}</ol>
       `;
+    }
+
+    function renderMissingSourceSetup(message) {
+      const panel = $("onboarding");
+      if (!panel) return;
+      panel.hidden = false;
+      panel.innerHTML = `
+        <p class="onboarding-title">Quick setup</p>
+        <p class="onboarding-sub">Choose a local materials folder to start.</p>
+        <ol class="onboarding-steps">
+          <li class="onboarding-step active">
+            <span class="step-mark">1</span>
+            <span class="step-body">
+              <strong>Pick local folder</strong>
+              <span>${esc(message || "No prebuilt/ folder was found in this workspace.")}</span>
+            </span>
+            <button class="primary" data-onboard="source">Choose folder</button>
+          </li>
+        </ol>
+      `;
+      const task = $("task");
+      if (task) {
+        task.innerHTML = `
+          <div class="today-head">
+            <span class="today-eyebrow">SETUP</span>
+          </div>
+          <h2 class="today-goal">Connect your English Training materials</h2>
+          <p class="today-scenario">Pick a folder that contains <code>prebuilt/</code>, or choose an empty folder and create the starter lesson there.</p>
+        `;
+      }
     }
 
     function renderSourceDiagnostics(diagnostics) {
@@ -770,7 +876,7 @@
         <div class="today-actions">
           <button data-hero-practice="1" ${line ? "" : "disabled"}>🎙 Practice this line</button>
           <button class="secondary" data-action="today-tts" ${line ? "" : "disabled"}>🔊 Generate audio</button>
-          <span class="muted" id="todayTtsStatus">Reads example only, with ${esc(settings.ttsProvider || "gemini")}</span>
+          <span class="muted" id="todayTtsStatus">Reads example only, with ${esc(settings.ttsProvider || "openai")}</span>
         </div>
         <div class="today-audio">
           ${prebuiltDemoAudio(assets)}
@@ -1622,7 +1728,7 @@
       const generateDisabled = drillGenerating || !gate.ready;
       const generateHint = !gate.ready
         ? (!gate.coreKeysReady
-          ? "Add a Gemini API key in Quick setup to generate lines"
+          ? "Add " + gate.routeKeys.missingLabel + " API key" + (gate.routeKeys.missing.length === 1 ? "" : "s") + " in Quick setup to generate lines"
           : "Create your first lesson in Quick setup to generate lines")
         : (drillGenerating ? "Generating new lines…" : "Fresh FSI substitutions from your coach model");
       drillLibrary = collectDrillLibrary();
@@ -2074,6 +2180,11 @@
         vscode.postMessage({ type: "useGeminiOnly" });
         return;
       }
+      const openAIStackTrigger = event.target.closest && event.target.closest("#useOpenAIStack");
+      if (openAIStackTrigger) {
+        vscode.postMessage({ type: "useOpenAIStack" });
+        return;
+      }
       const keyTrigger = event.target.closest && event.target.closest("[data-key]");
       if (keyTrigger) {
         vscode.postMessage({ type: "configureKey", provider: keyTrigger.dataset.key });
@@ -2344,6 +2455,9 @@
           delete todayButton.dataset.busy;
         }
         showStages(false);
+        if (!state && /prebuilt|EnglishSpeakingTraining root|Could not find/i.test(message.message || "")) {
+          renderMissingSourceSetup(message.message || "");
+        }
         setStatus(message.message || "Error.", "error");
       }
     });

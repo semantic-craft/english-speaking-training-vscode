@@ -41,7 +41,8 @@ export async function processPracticeFile(
 ): Promise<PracticeResult> {
   const target = normalizePracticeTarget(practiceTarget);
   progress?.("transcribe", "active");
-  const transcript = await transcribeAudio(context, inputPath, mimeType, sessionDir);
+  const transcriptionPrompt = buildTranscriptionPrompt(state, target);
+  const transcript = await transcribeAudio(context, inputPath, mimeType, sessionDir, transcriptionPrompt);
   fs.writeFileSync(path.join(sessionDir, "transcript.txt"), `${transcript}\n`, "utf8");
   progress?.("transcribe", "done");
 
@@ -104,7 +105,8 @@ export async function processPracticeFile(
   progress?.("coach", "done");
 
   progress?.("tts", "active");
-  const ttsProvider = config<string>("ttsProvider") || "gemini";
+  const ttsProvider = config<string>("ttsProvider") || "openai";
+  const ttsStyle = stringValue(coaching.tts_style ?? coaching.ttsStyle).trim();
   const outputAudio = path.join(sessionDir, speechOutputFileName(ttsProvider));
   // The native-version and follow-up syntheses are independent round-trips
   // to the same provider; awaiting them in series doubled the "Speak" stage
@@ -121,7 +123,7 @@ export async function processPracticeFile(
     if (!text.trim()) {
       return Promise.resolve(undefined);
     }
-    return synthesizeWithConfiguredTts(context, text, outPath, ttsProvider)
+    return synthesizeWithConfiguredTts(context, text, outPath, ttsProvider, { ttsStyle })
       .then((result) => result.filePath)
       .catch((error) => {
         appendOutput(`${label} TTS failed: ${errorMessage(error)}`);
@@ -155,6 +157,7 @@ export async function processPracticeFile(
     scores,
     audioFile,
     followUpAudioFile,
+    ttsStyle: ttsStyle || undefined,
     sessionDir,
     packageDate,
   };
@@ -446,6 +449,48 @@ function uniqueDrillExample(): (example: DrillExample) => boolean {
     seen.add(key);
     return true;
   };
+}
+
+/**
+ * Build a short domain prompt that biases the OpenAI file transcription
+ * decoder toward this lesson's scenario, frames, and key expressions.
+ * Whisper-family models accept ~224 tokens; we trim conservatively. The
+ * Gemini and Realtime paths ignore this string today, so it's safe to
+ * always compute and pass it through.
+ */
+export function buildTranscriptionPrompt(state: TrainingState, target?: PracticeTarget): string {
+  const parts: string[] = ["Spoken academic English in a Chinese legal scholar's voice."];
+  const scenario =
+    stringValue(state.training.scenario) || stringValue(state.next.scenario);
+  const goal = stringValue(state.training.goal) || stringValue(state.next.goal);
+  if (scenario) parts.push(`Scenario: ${scenario}.`);
+  if (goal) parts.push(`Goal: ${goal}.`);
+
+  const keyExpressions = arrayOfStrings(
+    state.training.key_expressions ?? (state.next.key_expressions as unknown),
+  );
+  if (keyExpressions.length) {
+    parts.push(`Key terms: ${keyExpressions.slice(0, 8).join("; ")}.`);
+  }
+
+  const frames = Array.isArray(state.training.frames)
+    ? state.training.frames
+        .map((item) =>
+          typeof item === "object" && item
+            ? stringValue((item as JsonObject).text)
+            : stringValue(item),
+        )
+        .filter(Boolean)
+    : [];
+  if (frames.length) {
+    parts.push(`Example sentences: ${frames.slice(0, 3).join(" / ")}.`);
+  }
+
+  if (target?.referenceText) {
+    parts.push(`Reference: ${target.referenceText}`);
+  }
+
+  return parts.join(" ");
 }
 
 export function splitPracticeText(text: string): string[] {

@@ -32,6 +32,7 @@ import {
   configureLocalMaterialsRoot,
   setGeminiOnlyProviders,
   setMinimaxVoiceId,
+  setOpenAIStackProviders,
   setProviderSetting,
   setRecommendedHybridProviders,
   setTtsSpeedConfig,
@@ -173,6 +174,10 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
         await setRecommendedHybridProviders();
         return;
       }
+      if (payload.type === "useOpenAIStack") {
+        await setOpenAIStackProviders();
+        return;
+      }
       if (payload.type === "slowRead") {
         const text = stringValue(payload.text);
         const target = stringValue(payload.target) || "native";
@@ -282,8 +287,16 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     }
     const slowSpeed = Number.isFinite(speed) && speed > 0 ? Math.max(0.5, Math.min(1.5, speed)) : 0.7;
     this.view.webview.postMessage({ type: "slowReadStatus", target, message: "Re-reading…" });
+    // For slow re-reads the learner is shadowing word-by-word, so we ask the
+    // TTS to over-articulate and pause between sense groups. The OpenAI
+    // instructions field carries this directly; Gemini/MiniMax/MiMo ignore
+    // the extra hint and just honor the speed override.
+    const slowInstructions =
+      "Read this sentence very slowly and clearly. Over-articulate each word, " +
+      "lengthen the stressed syllables, and pause briefly between sense groups so " +
+      "a learner can shadow you word by word.";
     try {
-      const result = await synthesizeOnDemandText(this.context, trimmed, slowSpeed);
+      const result = await synthesizeOnDemandText(this.context, trimmed, slowSpeed, slowInstructions);
       this.view.webview.postMessage({ type: "slowReadResult", target, result });
     } catch (error) {
       this.view.webview.postMessage({

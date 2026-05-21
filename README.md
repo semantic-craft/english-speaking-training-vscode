@@ -22,8 +22,8 @@ There is no required curriculum length: 7 lessons or 365 lessons both work.
 3. Click *Create your first lesson* → pick a folder; the extension
    creates `prebuilt/` and `progress/` inside it and writes a starter
    `prebuilt/<today>/english-training.json` plus `followup-drill.json` you can edit.
-4. Click *Connect Gemini* -> save a Gemini API key. That completes the core
-   route: Gemini handles coaching, speech input, and native audio.
+4. Click *Connect OpenAI* -> save an OpenAI API key. That completes the
+   default route: OpenAI handles coaching, speech input, and native audio.
 5. Press the red record button.
 
 For the field-by-field schema, run `English Training: Open Materials Guide`
@@ -41,8 +41,8 @@ prompt:
    scenario, who you address, goal, key expressions, and prosody focus.
 3. The brief is wrapped with the extension's versioned Card Schema contract and
    written as one `material-generation-prompt.md` to a folder you pick.
-4. Paste that single file into any LLM (Gemini, MiMo, DeepSeek, MiniMax,
-   Kimi, …). It returns `english-training.json` and `followup-drill.json` that
+4. Paste that single file into any LLM (OpenAI, Gemini, MiMo, MiniMax,
+   Kimi, ...). It returns `english-training.json` and `followup-drill.json` that
    the sidebar renders with no manual fixes.
 
 If no Coach key is configured, your topic is used verbatim, so the step never
@@ -113,15 +113,15 @@ Practice / Skip choices after each result, and coach-generated
 
 ## Provider Defaults
 
-- Coach: Gemini by default with `gemini-3-flash-preview`, plus
-  `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, and
-  `gemini-3.1-flash-lite-preview` available from the model picker. Xiaomi MiMo
-  and DeepSeek remain optional coach fallbacks.
-- Speech input: Gemini by default for transcript matching; OpenAI Realtime
-  `gpt-realtime-whisper` for low-latency transcript generation, or Xiaomi MiMo
-  audio understanding.
-- Speech output: Gemini `gemini-3.1-flash-tts-preview` by default. MiniMax,
-  OpenAI, and Xiaomi MiMo speech output remain optional fallbacks.
+- Coach: OpenAI by default with `gpt-4o`. Gemini and Xiaomi MiMo remain
+  optional coach routes from the sidebar or command palette.
+- Speech input: OpenAI file transcription by default with `gpt-4o-transcribe`
+  plus a lesson-specific domain prompt. OpenAI Realtime
+  `gpt-realtime-whisper`, Gemini audio understanding, and Xiaomi MiMo audio
+  understanding remain optional alternates.
+- Speech output: OpenAI `gpt-4o-mini-tts` by default with the `marin` voice,
+  `wav` output, and coach-generated style instructions. Gemini, MiniMax, and
+  Xiaomi MiMo speech output remain optional fallbacks.
 - The sidebar's **Routes & Models** panel shows the active route, key status,
   and model/voice controls in one place.
 
@@ -144,11 +144,17 @@ Practice / Skip choices after each result, and coach-generated
   - `English Training: Configure OpenAI API Key`
   - `English Training: Configure Gemini API Key`
   - `English Training: Configure MiniMax API Key`
-  - `English Training: Configure MiMo API Key`
-  - `English Training: Configure DeepSeek API Key`
+  - `English Training: Configure Xiaomi MiMo API Key`
 - Route commands:
+  - `English Training: Use OpenAI Coach`
+  - `English Training: Use Gemini Coach`
+  - `English Training: Use Xiaomi MiMo Coach`
+  - `English Training: Use OpenAI Speech Output`
+  - `English Training: Use MiniMax Speech Output`
+  - `English Training: Use Gemini Speech Output`
   - `English Training: Use Gemini Core Route`
   - `English Training: Use Gemini Only`
+  - `English Training: Use OpenAI Stack (Coach + STT + TTS)`
   - `English Training: Use OpenAI Realtime Speech Input`
 - Material authoring:
   - `English Training: Compose Material Prompt with Coach`

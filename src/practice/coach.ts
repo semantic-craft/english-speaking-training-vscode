@@ -36,7 +36,7 @@ export function coachingSystemPrompt(): string {
     "You are an English speaking coach for a Chinese legal academic.",
     "Return strict JSON only.",
     "Do not wrap the JSON in Markdown fences, comments, explanations, or trailing text.",
-    "Use exactly these top-level keys: native_version, problems, error_tags, scores, quick_fix, shadowing_instruction, follow_up_question, next_drill, drill_examples.",
+    "Use exactly these top-level keys: native_version, problems, error_tags, scores, quick_fix, shadowing_instruction, follow_up_question, next_drill, drill_examples, tts_style.",
     "Keep every string on one line; escape quotation marks as JSON; do not use trailing commas.",
     "When a shadow_target is provided, it is authoritative: native_version must copy shadow_target.reference_text exactly, and user_transcript is only an STT observation of the learner's imitation.",
     "Focus on natural spoken academic English, not generic encouragement.",
@@ -44,7 +44,9 @@ export function coachingSystemPrompt(): string {
     "If prior_turn is present, the user_transcript is the learner replying to that follow_up_question; build on it instead of resetting the conversation.",
     "Without a shadow_target, give one native speaker version, 1-2 concrete problems, one quick fix, one shadowing instruction, and one specific follow-up question.",
     "Always include drill_examples: 2-4 short FSI-style substitution sentences the learner can immediately shadow next, using the same scenario, frames, or legal-academic topic.",
-    "Explanations may be in Chinese, but native_version and follow_up_question must be natural English.",
+    "tts_style is a short English direction (under 25 words) for how the native_version should be SPOKEN aloud: accent, emotion, intonation, pacing, emphasis, or whispering. It steers the TTS voice; it is not feedback to the learner.",
+    "Match tts_style to the scenario (e.g., 'Speak like a patient seminar professor; emphasize the modal verbs and slow down on the hedge phrases.' or 'Whisper softly so the learner can shadow the rhythm.'). Avoid generic instructions like 'speak naturally'.",
+    "Explanations may be in Chinese, but native_version, follow_up_question, and tts_style must be natural English.",
   ].join(" ");
 }
 
@@ -103,6 +105,8 @@ export function coachingUserPrompt(
           reason: "brief Chinese reason, e.g. 替换 claim slot / 练 nucleus stress",
         },
       ],
+      tts_style:
+        "short English direction for the next native_version's speaking style (accent, emotion, intonation, speed, tone, or whispering). Under 25 words. Specific, not generic.",
     },
   };
   if (state.drill && Object.keys(state.drill).length) {
@@ -318,7 +322,7 @@ async function requestProviderJson(
   system: string,
   user: string,
 ): Promise<JsonObject> {
-  const provider = config<string>("coachProvider") || "gemini";
+  const provider = config<string>("coachProvider") || "openai";
   if (provider === "mimo") {
     const apiKey = await getRequiredKey(context, "mimo");
     return callAnthropicJson(system, user, {
@@ -328,13 +332,13 @@ async function requestProviderJson(
       model: config<string>("mimoCoachModel") || "mimo-v2.5-pro",
     });
   }
-  if (provider === "openai") {
-    const apiKey = await getRequiredKey(context, "openai");
-    return callOpenAIJson(apiKey, config<string>("openaiCoachModel") || "gpt-4o", system, user);
+  if (provider === "gemini") {
+    const apiKey = await getRequiredKey(context, "gemini");
+    return callGeminiJson(apiKey, config<string>("geminiCoachModel") || "gemini-3-flash-preview", system, user);
   }
-  // Gemini is the default coach and the safety net for any stale/removed value.
-  const apiKey = await getRequiredKey(context, "gemini");
-  return callGeminiJson(apiKey, config<string>("geminiCoachModel") || "gemini-3-flash-preview", system, user);
+  // OpenAI is the default coach and the fallback for any stale/removed value.
+  const apiKey = await getRequiredKey(context, "openai");
+  return callOpenAIJson(apiKey, config<string>("openaiCoachModel") || "gpt-4o", system, user);
 }
 
 async function callAnthropicJson(

@@ -21,15 +21,85 @@ export async function transcribeAudio(
   audioPath: string,
   mimeType: string,
   sessionDir: string,
+  promptText = "",
 ): Promise<string> {
-  const provider = config<string>("audioUnderstandingProvider") || "gemini";
+  const provider = config<string>("audioUnderstandingProvider") || "openai";
   if (provider === "openai") {
-    return transcribeWithOpenAIRealtime(context, audioPath, sessionDir);
+    const mode = (config<string>("openaiTranscriptionMode") || "file").toLowerCase();
+    if (mode === "realtime") {
+      return transcribeWithOpenAIRealtime(context, audioPath, sessionDir);
+    }
+    return transcribeWithOpenAIFile(context, audioPath, mimeType, promptText);
   }
   if (provider === "mimo") {
     return transcribeWithMimo(context, audioPath, mimeType, sessionDir);
   }
   return transcribeWithGemini(context, audioPath, mimeType, sessionDir);
+}
+
+async function transcribeWithOpenAIFile(
+  context: vscode.ExtensionContext,
+  audioPath: string,
+  mimeType: string,
+  promptText: string,
+): Promise<string> {
+  const apiKey = await getRequiredKey(context, "openai");
+  const model = config<string>("openaiFileTranscriptionModel") || "gpt-4o-transcribe";
+  const stats = fs.statSync(audioPath);
+  // /v1/audio/transcriptions enforces a 25 MB upload cap.
+  if (stats.size > 24 * 1024 * 1024) {
+    throw new Error(
+      "OpenAI transcription upload limit is 25 MB. Shorten the recording or switch to realtime mode.",
+    );
+  }
+  const buffer = fs.readFileSync(audioPath);
+  const effectiveMime = mimeType && mimeType !== "application/octet-stream" ? mimeType : "audio/wav";
+  const ext = extensionFromMime(effectiveMime);
+  const blob = new Blob([buffer], { type: effectiveMime });
+  const form = new FormData();
+  form.append("file", blob, `recording.${ext}`);
+  form.append("model", model);
+  // gpt-4o-transcribe-diarize requires diarized_json and a chunking_strategy
+  // for audio > 30s; pick "auto" so the service handles segment boundaries.
+  if (model.endsWith("-diarize")) {
+    form.append("response_format", "diarized_json");
+    form.append("chunking_strategy", "auto");
+  } else {
+    form.append("response_format", "json");
+  }
+  form.append("language", "en");
+  const trimmedPrompt = promptText.trim().slice(0, 1000);
+  if (trimmedPrompt && !model.endsWith("-diarize")) {
+    // Whisper/gpt-4o-transcribe accept a domain prompt to bias decoding.
+    // Diarize does not support prompts; we drop it silently in that case.
+    form.append("prompt", trimmedPrompt);
+  }
+
+  const response = await fetchWithTimeout("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`OpenAI transcription failed (${response.status}): ${body.slice(0, 1500)}`);
+  }
+  const parsed = JSON.parse(body) as JsonObject;
+  return extractOpenAIFileTranscript(parsed);
+}
+
+function extractOpenAIFileTranscript(parsed: JsonObject): string {
+  const direct = stringValue(parsed.text).trim();
+  if (direct) return direct;
+  // gpt-4o-transcribe-diarize returns { segments: [{ speaker, text, ... }] }.
+  const segments = parsed.segments;
+  if (Array.isArray(segments)) {
+    const parts = segments
+      .map((segment) => stringValue((segment as JsonObject).text).trim())
+      .filter(Boolean);
+    if (parts.length) return parts.join(" ");
+  }
+  throw new Error("OpenAI transcription returned empty text.");
 }
 
 function mimoEndpoint(baseUrl: string): string {

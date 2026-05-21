@@ -110,13 +110,18 @@ test("activates without a workspace and registers the command surface", async ()
 
   extension.activate(context);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(registered.length, 25);
+  // 26 includes the useOpenAIStack one-click command added in 0.1.38 to
+  // pin coach + transcribe + TTS all to OpenAI in a single Command Palette
+  // action. Bumping this number must stay in lockstep with the contributes
+  // block in package.json so a stray rename can't silently lose a command.
+  assert.equal(registered.length, 26);
   assert.ok(registered.includes("englishTraining.openPractice"));
   assert.ok(registered.includes("englishTraining.createSamplePackage"));
   assert.ok(registered.includes("englishTraining.generateNextPackage"));
   // DeepSeek coach was fully removed in favor of OpenAI; guard the rename so
   // the dead configure-key command can't silently reappear.
   assert.ok(registered.includes("englishTraining.useOpenAICoach"));
+  assert.ok(registered.includes("englishTraining.useOpenAIStack"));
   assert.ok(!registered.includes("englishTraining.useDeepSeekCoach"));
   assert.ok(!registered.includes("englishTraining.configureDeepSeekKey"));
   extension.deactivate();
@@ -235,14 +240,76 @@ test("normalizes dirty TTS speeds before provider calls or UI state", () => {
   assert.equal(api.normalizeTtsSpeed(0.1), 0.5);
 });
 
-test("normalizes old Azure speech-input settings to Gemini", () => {
+test("normalizes legacy/unknown speech-input settings to the current default", () => {
+  // The default route is now openai (was gemini before 0.1.38). Any
+  // unknown legacy value (azure, deepseek, kimi, etc.) must fall back to
+  // the current default rather than crash or silently pick a removed
+  // provider. gemini/mimo/openai stay as-is.
   configValues.audioUnderstandingProvider = "azure";
-  assert.equal(api.normalizedSpeechInputProvider(), "gemini");
+  assert.equal(api.normalizedSpeechInputProvider(), "openai");
   configValues.audioUnderstandingProvider = "openai";
   assert.equal(api.normalizedSpeechInputProvider(), "openai");
   configValues.audioUnderstandingProvider = "mimo";
   assert.equal(api.normalizedSpeechInputProvider(), "mimo");
   configValues.audioUnderstandingProvider = "gemini";
+  assert.equal(api.normalizedSpeechInputProvider(), "gemini");
+});
+
+test("normalizes stale coach and speech-output providers to OpenAI", () => {
+  configValues.coachProvider = "deepseek";
+  configValues.ttsProvider = "unknown";
+  assert.equal(api.normalizedCoachProvider(), "openai");
+  assert.equal(api.normalizedTtsProvider(), "openai");
+  assert.equal(api.normalizeSpeechOutputProvider("deepseek"), "openai");
+  assert.equal(api.speechOutputExtension("deepseek"), "wav");
+
+  configValues.coachProvider = "mimo";
+  configValues.ttsProvider = "minimax";
+  assert.equal(api.normalizedCoachProvider(), "mimo");
+  assert.equal(api.normalizedTtsProvider(), "minimax");
+});
+
+test("active route key readiness follows configured providers instead of hard-coded Gemini", () => {
+  configValues.coachProvider = undefined;
+  configValues.audioUnderstandingProvider = undefined;
+  configValues.ttsProvider = undefined;
+  assert.deepEqual(api.activeRouteProviders(), ["openai"]);
+  assert.equal(api.normalizeProviderForSetting("coachProvider", "minimax"), "openai");
+  assert.equal(api.normalizeProviderForSetting("audioUnderstandingProvider", "minimax"), "openai");
+  assert.equal(api.normalizeProviderForSetting("ttsProvider", "minimax"), "minimax");
+
+  configValues.coachProvider = "gemini";
+  configValues.audioUnderstandingProvider = "openai";
+  configValues.ttsProvider = "minimax";
+  assert.deepEqual(api.activeRouteProviders(), ["gemini", "openai", "minimax"]);
+
+  configValues.coachProvider = "openai";
+  configValues.audioUnderstandingProvider = "openai";
+  configValues.ttsProvider = "openai";
+  assert.deepEqual(api.activeRouteProviders(), ["openai"]);
+
+  configValues.coachProvider = "deepseek";
+  configValues.audioUnderstandingProvider = "azure";
+  configValues.ttsProvider = "bogus";
+  assert.deepEqual(api.activeRouteProviders(), ["openai"]);
+
+  configValues.coachProvider = "minimax";
+  configValues.audioUnderstandingProvider = "openai";
+  configValues.ttsProvider = "gemini";
+  assert.deepEqual(api.activeRouteProviders(), ["openai", "gemini"]);
+});
+
+test("OpenAI TTS voices are preserved across supported speech models", () => {
+  configValues.openaiTtsVoice = "marin";
+  assert.equal(api.resolveOpenAITtsVoice("gpt-4o-mini-tts"), "marin");
+  assert.equal(api.resolveOpenAITtsVoice("tts-1"), "marin");
+  assert.equal(api.resolveOpenAITtsVoice("tts-1-hd"), "marin");
+
+  configValues.openaiTtsVoice = "ash";
+  assert.equal(api.resolveOpenAITtsVoice("tts-1"), "ash");
+  configValues.openaiTtsVoice = " ";
+  assert.equal(api.resolveOpenAITtsVoice("tts-1"), "marin");
+  configValues.openaiTtsVoice = "";
 });
 
 test("repairs common malformed coaching JSON responses", () => {
@@ -377,7 +444,18 @@ test("maps audio MIME types to stable file extensions and output MIME types", ()
   assert.equal(api.extensionFromMime("audio/ogg"), "ogg");
   assert.equal(api.extensionFromMime("audio/mpeg"), "mp3");
   assert.equal(api.speechOutputExtension("gemini"), "wav");
+  // OpenAI's extension now reflects englishTraining.openaiTtsResponseFormat
+  // (wav is the low-latency default in 0.1.38; mp3 stays available). pcm has
+  // no container so we wrap it in WAV and report .wav. The MiniMax/unknown
+  // branch still falls back to mp3 because that provider returns mp3 bytes.
+  configValues.openaiTtsResponseFormat = "wav";
+  assert.equal(api.speechOutputExtension("openai"), "wav");
+  configValues.openaiTtsResponseFormat = "mp3";
   assert.equal(api.speechOutputExtension("openai"), "mp3");
+  configValues.openaiTtsResponseFormat = "pcm";
+  assert.equal(api.speechOutputExtension("openai"), "wav");
+  configValues.openaiTtsResponseFormat = "";
+  assert.equal(api.speechOutputExtension("minimax"), "mp3");
   assert.equal(api.mimeTypeForAudioPath("/tmp/native-version.wav"), "audio/wav");
   assert.equal(api.mimeTypeForAudioPath("/tmp/native-version.mp3"), "audio/mpeg");
 });

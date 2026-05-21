@@ -75,7 +75,13 @@ export interface TrainingState {
     audioUnderstandingProvider: string;
     ttsProvider: string;
     openaiRealtimeTranscriptionModel: string;
+    openaiTranscriptionMode: string;
+    openaiFileTranscriptionModel: string;
     openaiCoachModel: string;
+    openaiTtsModel: string;
+    openaiTtsVoice: string;
+    openaiTtsInstructions: string;
+    openaiTtsResponseFormat: string;
     geminiCoachModel: string;
     geminiTtsModel: string;
     geminiTtsVoice: string;
@@ -125,6 +131,10 @@ export interface PracticeResult {
   scores: JsonObject;
   audioFile?: string;
   followUpAudioFile?: string;
+  /** Optional short English direction the coach emitted for the TTS voice
+   *  this turn (e.g. "Speak like a patient seminar professor"). Used by the
+   *  OpenAI TTS instructions field; surfaced to the webview for transparency. */
+  ttsStyle?: string;
   sessionDir: string;
   packageDate: string;
 }
