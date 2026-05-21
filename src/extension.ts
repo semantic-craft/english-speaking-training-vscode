@@ -108,6 +108,7 @@ import {
   openCurrentTaskCard,
   openSessionFolder,
   revealCurrentPackage,
+  selectRecordingMicrophone,
 } from "./commands/local-actions.js";
 import {
   dateRangeLabel,
@@ -280,6 +281,9 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   register("englishTraining.openMaterialsGuide", async () => {
     await openMaterialsGuide();
+  });
+  register("englishTraining.selectMicrophone", async () => {
+    await selectRecordingMicrophone();
   });
 
   void refreshAll();
