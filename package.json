@@ -2,7 +2,7 @@
   "name": "english-speaking-training-vscode",
   "displayName": "English Speaking Training",
   "description": "Standalone VS Code speaking-practice cockpit for local EnglishSpeakingTraining files.",
-  "version": "0.1.37",
+  "version": "0.1.38",
   "publisher": "xianwei-zhang",
   "license": "MIT",
   "repository": {
@@ -107,6 +107,11 @@
         "category": "English Training"
       },
       {
+        "command": "englishTraining.useOpenAIStack",
+        "title": "English Training: Use OpenAI Stack (Coach + STT + TTS)",
+        "category": "English Training"
+      },
+      {
         "command": "englishTraining.useGeminiOnly",
         "title": "English Training: Use Gemini Only",
         "category": "English Training"
@@ -199,34 +204,34 @@
         },
         "englishTraining.coachProvider": {
           "type": "string",
-          "default": "gemini",
+          "default": "openai",
           "enum": [
             "gemini",
             "mimo",
             "openai"
           ],
-          "description": "Language-model provider used for transcript correction and follow-up generation. Default routes through Gemini so the full core loop only needs a Gemini key; Xiaomi MiMo and OpenAI are optional alternates (OpenAI uses the chat-completions JSON endpoint with the configured openaiCoachModel)."
+          "description": "Language-model provider used for transcript correction and follow-up generation. Default routes through OpenAI (gpt-4o) so the full OpenAI stack only needs an OpenAI key; Gemini and Xiaomi MiMo remain available as alternates."
         },
         "englishTraining.audioUnderstandingProvider": {
           "type": "string",
-          "default": "gemini",
+          "default": "openai",
           "enum": [
             "gemini",
             "openai",
             "mimo"
           ],
-          "description": "Speech input provider. Gemini is the default STT-matching route; OpenAI Realtime provides lower-latency transcript deltas through gpt-realtime-whisper; Xiaomi MiMo transcribes via its OpenAI-compatible audio-understanding endpoint."
+          "description": "Speech input provider. OpenAI is the default and routes through /v1/audio/transcriptions (gpt-4o-transcribe) for accurate file-based transcription, or Realtime WebSocket if openaiTranscriptionMode is set to realtime. Gemini and Xiaomi MiMo remain available as alternates."
         },
         "englishTraining.ttsProvider": {
           "type": "string",
-          "default": "gemini",
+          "default": "openai",
           "enum": [
             "gemini",
             "minimax",
             "openai",
             "mimo"
           ],
-          "description": "Speech output provider used to generate the native-version follow-along audio. Default uses Gemini TTS so the full core loop only needs a Gemini key; MiniMax, OpenAI, and Xiaomi MiMo are optional fallbacks."
+          "description": "Speech output provider used to generate the native-version follow-along audio. Default uses OpenAI gpt-4o-mini-tts with instructions-based style control (marin voice); Gemini, MiniMax, and Xiaomi MiMo remain available as fallbacks."
         },
         "englishTraining.openaiRealtimeTranscriptionModel": {
           "type": "string",
@@ -234,7 +239,27 @@
           "enum": [
             "gpt-realtime-whisper"
           ],
-          "description": "OpenAI Realtime transcription model used when speech input is set to OpenAI. Current official realtime transcription guidance recommends gpt-realtime-whisper for live audio transcript deltas."
+          "description": "OpenAI Realtime transcription model used when openaiTranscriptionMode is set to realtime. gpt-realtime-whisper is the official choice for live transcript deltas."
+        },
+        "englishTraining.openaiTranscriptionMode": {
+          "type": "string",
+          "default": "file",
+          "enum": [
+            "file",
+            "realtime"
+          ],
+          "description": "OpenAI transcription transport. 'file' uses /v1/audio/transcriptions with openaiFileTranscriptionModel and supports a domain prompt for higher accuracy (recommended for bounded recordings). 'realtime' uses /v1/realtime WebSocket for low-latency transcript deltas."
+        },
+        "englishTraining.openaiFileTranscriptionModel": {
+          "type": "string",
+          "default": "gpt-4o-transcribe",
+          "enum": [
+            "gpt-4o-transcribe",
+            "gpt-4o-mini-transcribe",
+            "gpt-4o-transcribe-diarize",
+            "whisper-1"
+          ],
+          "description": "Model used when openaiTranscriptionMode is 'file'. gpt-4o-transcribe is the latest quality/latency default; gpt-4o-mini-transcribe is faster; gpt-4o-transcribe-diarize adds speaker labels; whisper-1 supports verbose timestamps and SRT/VTT."
         },
         "englishTraining.openaiCoachModel": {
           "type": "string",
@@ -250,12 +275,50 @@
         "englishTraining.openaiTtsModel": {
           "type": "string",
           "default": "gpt-4o-mini-tts",
-          "description": "OpenAI model used for native-version follow-along audio."
+          "enum": [
+            "gpt-4o-mini-tts",
+            "tts-1",
+            "tts-1-hd"
+          ],
+          "description": "OpenAI model used for native-version follow-along audio. gpt-4o-mini-tts supports the 'instructions' field for accent, emotion, intonation, and style control. tts-1 and tts-1-hd remain available but do not accept instructions."
         },
         "englishTraining.openaiTtsVoice": {
           "type": "string",
-          "default": "coral",
-          "description": "OpenAI voice used for native-version follow-along audio."
+          "default": "marin",
+          "enum": [
+            "alloy",
+            "ash",
+            "ballad",
+            "coral",
+            "echo",
+            "fable",
+            "nova",
+            "onyx",
+            "sage",
+            "shimmer",
+            "verse",
+            "marin",
+            "cedar"
+          ],
+          "description": "OpenAI voice used for native-version follow-along audio. The enum lists OpenAI's built-in speech voices: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin, and cedar. The default is marin."
+        },
+        "englishTraining.openaiTtsInstructions": {
+          "type": "string",
+          "default": "",
+          "description": "Optional instructions passed to gpt-4o-mini-tts to steer accent, emotional range, intonation, speed, tone, or whispering. When blank, the coach is asked to emit a tts_style suggestion per turn; if that is also blank, a clear-and-patient academic default is used."
+        },
+        "englishTraining.openaiTtsResponseFormat": {
+          "type": "string",
+          "default": "wav",
+          "enum": [
+            "wav",
+            "mp3",
+            "opus",
+            "aac",
+            "flac",
+            "pcm"
+          ],
+          "description": "OpenAI TTS audio container. wav and pcm are recommended for the lowest first-audio latency because they require no decoding; mp3 is the smallest file. pcm is raw 24kHz signed 16-bit little-endian samples without a header."
         },
         "englishTraining.geminiCoachModel": {
           "type": "string",

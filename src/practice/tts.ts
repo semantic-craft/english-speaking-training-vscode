@@ -6,6 +6,7 @@ import {
   config,
   fetchWithTimeout,
   getRequiredKey,
+  isTtsProvider,
   MIMO_OPENAI_BASE_URL,
   MINIMAX_TTS_BASE_URL,
   normalizeTtsSpeed,
@@ -17,35 +18,96 @@ export function speechOutputFileName(provider: string): string {
   return `native-version.${speechOutputExtension(provider)}`;
 }
 
+export function normalizeSpeechOutputProvider(provider: unknown): string {
+  return isTtsProvider(provider) ? provider : "openai";
+}
+
 export function speechOutputExtension(provider: string): string {
-  return provider === "gemini" || provider === "mimo" ? "wav" : "mp3";
+  const selectedProvider = normalizeSpeechOutputProvider(provider);
+  if (selectedProvider === "gemini" || selectedProvider === "mimo") return "wav";
+  if (selectedProvider === "openai") {
+    const fmt = openaiResponseFormat();
+    // pcm has no container; we wrap it in a .wav header before writing.
+    if (fmt === "pcm") return "wav";
+    return fmt;
+  }
+  return "mp3";
 }
 
 export function mimeTypeForAudioPath(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === ".wav") return "audio/wav";
-  if (ext === ".ogg") return "audio/ogg";
+  if (ext === ".ogg" || ext === ".opus") return "audio/ogg";
   if (ext === ".flac") return "audio/flac";
+  if (ext === ".aac") return "audio/aac";
   return "audio/mpeg";
+}
+
+function openaiResponseFormat(): string {
+  const raw = (config<string>("openaiTtsResponseFormat") || "wav").toLowerCase();
+  if (
+    raw === "wav" ||
+    raw === "mp3" ||
+    raw === "opus" ||
+    raw === "aac" ||
+    raw === "flac" ||
+    raw === "pcm"
+  ) {
+    return raw;
+  }
+  return "wav";
+}
+
+export const DEFAULT_OPENAI_TTS_INSTRUCTIONS =
+  "Speak in clear, patient academic English with measured pace; emphasize key legal or scholarly terms; keep a warm, encouraging tone suitable for a learner shadowing the sentence.";
+
+function resolveOpenAIInstructions(overrideStyle?: string): string {
+  const explicit = (config<string>("openaiTtsInstructions") || "").trim();
+  const fromCoach = (overrideStyle || "").trim();
+  return explicit || fromCoach || DEFAULT_OPENAI_TTS_INSTRUCTIONS;
+}
+
+export function resolveOpenAITtsVoice(model: string): string {
+  void model;
+  return (config<string>("openaiTtsVoice") || "marin").trim() || "marin";
+}
+
+export interface SynthesizeOptions {
+  speedOverride?: number;
+  /**
+   * Optional one-off OpenAI TTS `instructions` (style direction). When set,
+   * it overrides nothing — it is used only if the user has not pinned a
+   * value in englishTraining.openaiTtsInstructions. The typical caller is
+   * the coach, which emits a per-turn tts_style suggestion.
+   */
+  ttsStyle?: string;
 }
 
 export async function synthesizeWithConfiguredTts(
   context: vscode.ExtensionContext,
   text: string,
   outPath: string,
-  provider = config<string>("ttsProvider") || "gemini",
-  speedOverride?: number,
+  provider = config<string>("ttsProvider") || "openai",
+  optionsOrSpeed?: number | SynthesizeOptions,
 ): Promise<{ provider: string; filePath: string }> {
-  if (provider === "gemini") {
-    return { provider, filePath: await synthesizeGemini(context, text, outPath) };
+  const selectedProvider = normalizeSpeechOutputProvider(provider);
+  const options: SynthesizeOptions =
+    typeof optionsOrSpeed === "number"
+      ? { speedOverride: optionsOrSpeed }
+      : optionsOrSpeed ?? {};
+  if (selectedProvider === "gemini") {
+    return { provider: selectedProvider, filePath: await synthesizeGemini(context, text, outPath) };
   }
-  if (provider === "openai") {
-    return { provider, filePath: await synthesizeOpenAI(context, text, outPath, speedOverride) };
+  if (selectedProvider === "openai") {
+    return { provider: selectedProvider, filePath: await synthesizeOpenAI(context, text, outPath, options) };
   }
-  if (provider === "mimo") {
-    return { provider, filePath: await synthesizeMiMo(context, text, outPath) };
+  if (selectedProvider === "mimo") {
+    return { provider: selectedProvider, filePath: await synthesizeMiMo(context, text, outPath) };
   }
-  return { provider: "minimax", filePath: await synthesizeMiniMax(context, text, outPath, speedOverride) };
+  return {
+    provider: "minimax",
+    filePath: await synthesizeMiniMax(context, text, outPath, options.speedOverride),
+  };
 }
 
 function resolveSpeed(speedOverride?: number): number {
@@ -56,28 +118,45 @@ async function synthesizeOpenAI(
   context: vscode.ExtensionContext,
   text: string,
   outPath: string,
-  speedOverride?: number,
+  options: SynthesizeOptions = {},
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "openai");
+  const model = config<string>("openaiTtsModel") || "gpt-4o-mini-tts";
+  const voice = resolveOpenAITtsVoice(model);
+  const responseFormat = openaiResponseFormat();
+  // gpt-4o-mini-tts supports instructions; the older tts-1 / tts-1-hd do not.
+  const supportsInstructions = model.includes("gpt-4o-mini-tts") || model.includes("gpt-4o-tts");
+  const instructions = supportsInstructions ? resolveOpenAIInstructions(options.ttsStyle) : "";
+
+  const body: JsonObject = {
+    model,
+    voice,
+    input: text,
+    response_format: responseFormat,
+    speed: resolveSpeed(options.speedOverride),
+  };
+  if (instructions) body.instructions = instructions;
+
   const response = await fetchWithTimeout("https://api.openai.com/v1/audio/speech", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model: config<string>("openaiTtsModel") || "gpt-4o-mini-tts",
-      voice: config<string>("openaiTtsVoice") || "coral",
-      input: text,
-      response_format: "mp3",
-      speed: resolveSpeed(speedOverride),
-    }),
+    body: JSON.stringify(body),
   });
-  const body = Buffer.from(await response.arrayBuffer());
+  const payload = Buffer.from(await response.arrayBuffer());
   if (!response.ok) {
-    throw new Error(`OpenAI TTS failed (${response.status}): ${body.toString("utf8").slice(0, 1200)}`);
+    throw new Error(`OpenAI TTS failed (${response.status}): ${payload.toString("utf8").slice(0, 1200)}`);
   }
-  fs.writeFileSync(outPath, body);
+  if (responseFormat === "pcm") {
+    // OpenAI documents pcm as raw 24kHz 16-bit signed little-endian mono.
+    // Wrap it in a RIFF/WAVE header so VS Code's media element (HTMLAudio)
+    // can play it back without an external decoder.
+    writePcm16Wav(outPath, payload, 24000, 1);
+    return outPath;
+  }
+  fs.writeFileSync(outPath, payload);
   return outPath;
 }
 

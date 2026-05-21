@@ -20,7 +20,7 @@ export async function synthesizeTodayAudio(context: vscode.ExtensionContext): Pr
   if (!text.trim()) {
     throw new Error("No example text is available for today's package. Add clean_tts_text, audio_text, demo_line, or frames[].text.");
   }
-  const provider = config<string>("ttsProvider") || "gemini";
+  const provider = config<string>("ttsProvider") || "openai";
   const outDir = createReferenceAudioDir(state.root, packageDate);
   const outPath = path.join(outDir, `today-${stamp()}.${speechOutputExtension(provider)}`);
   const result = await synthesizeWithConfiguredTts(context, text, outPath, provider);
@@ -40,13 +40,17 @@ export async function synthesizeOnDemandText(
   context: vscode.ExtensionContext,
   text: string,
   speed: number,
+  ttsStyle?: string,
 ): Promise<JsonObject> {
   const state = await loadState(context);
   const packageDate = stringValue(state.next.package_date) || state.today;
-  const provider = config<string>("ttsProvider") || "gemini";
+  const provider = config<string>("ttsProvider") || "openai";
   const outDir = createReferenceAudioDir(state.root, packageDate);
   const outPath = path.join(outDir, `slow-${stamp()}.${speechOutputExtension(provider)}`);
-  const result = await synthesizeWithConfiguredTts(context, text, outPath, provider, speed);
+  const result = await synthesizeWithConfiguredTts(context, text, outPath, provider, {
+    speedOverride: speed,
+    ttsStyle,
+  });
   const audio = fs.readFileSync(result.filePath);
   const mimeType = mimeTypeForAudioPath(result.filePath);
   return {

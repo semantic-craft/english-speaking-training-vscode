@@ -53,6 +53,8 @@ import {
 import { extensionFromMime } from "./practice/transcribe.js";
 import {
   mimeTypeForAudioPath,
+  normalizeSpeechOutputProvider,
+  resolveOpenAITtsVoice,
   speechOutputExtension,
   synthesizeWithConfiguredTts,
 } from "./practice/tts.js";
@@ -78,19 +80,25 @@ import {
   type ConfigSettingName,
   type ProviderSettingName,
   isConfigSettingName,
+  normalizedCoachProvider,
   normalizedSpeechInputProvider,
+  normalizedTtsProvider,
   pythonPath,
   trainingSettings,
 } from "./runtime/settings.js";
 import {
   apiKeyAvailability,
+  activeRouteProviders,
   clearApiKeys,
   configureApiKey,
   configureCoreRouteKeys,
   configureLocalMaterialsRoot,
   migrateGeminiModelDefaults,
+  normalizeProviderForSetting,
   setGeminiOnlyProviders,
   setMinimaxVoiceId,
+  setOpenAIRealtimeSpeechInput,
+  setOpenAIStackProviders,
   setProviderSetting,
   setRecommendedHybridProviders,
   setTtsSpeedConfig,
@@ -229,7 +237,7 @@ export function activate(context: vscode.ExtensionContext): void {
     await setProviderSetting("coachProvider", "openai");
   });
   register("englishTraining.useOpenAIRealtimeAudioUnderstanding", async () => {
-    await setProviderSetting("audioUnderstandingProvider", "openai");
+    await setOpenAIRealtimeSpeechInput();
   });
   register("englishTraining.useMiniMaxTts", async () => {
     await setProviderSetting("ttsProvider", "minimax");
@@ -245,6 +253,9 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   register("englishTraining.useRecommendedHybrid", async () => {
     await setRecommendedHybridProviders();
+  });
+  register("englishTraining.useOpenAIStack", async () => {
+    await setOpenAIStackProviders();
   });
   register("englishTraining.completeLocal", async () => {
     await completeLocalPackage(context);
@@ -280,6 +291,7 @@ export function deactivate(): void {
 }
 
 export const __test__ = {
+  activeRouteProviders,
   blankFollowupDrillPackage,
   blankTrainingPackage,
   buildGenerationPrompt,
@@ -294,7 +306,11 @@ export const __test__ = {
   listAvfoundationAudioDevices,
   looksLikeTrainingRoot,
   mimeTypeForAudioPath,
+  normalizedCoachProvider,
   normalizedSpeechInputProvider,
+  normalizedTtsProvider,
+  normalizeProviderForSetting,
+  normalizeSpeechOutputProvider,
   normalizePracticeTargetPayload,
   normalizeDrillExamples,
   normalizeTtsSpeed,
@@ -303,6 +319,7 @@ export const __test__ = {
   parseLooseJson,
   readJsonDiagnosed,
   resolveNativeFfmpegAudioDevice,
+  resolveOpenAITtsVoice,
   speechOutputExtension,
   todayExampleText,
   toWebviewState,
@@ -362,6 +379,7 @@ function configSettingLabel(setting: ConfigSettingName): string {
   switch (setting) {
     case "mimoCoachModel": return "MiMo coach model";
     case "openaiRealtimeTranscriptionModel": return "OpenAI Realtime speech-input model";
+    case "openaiFileTranscriptionModel": return "OpenAI file speech-input model";
     case "openaiCoachModel": return "OpenAI coach model";
     case "geminiCoachModel": return "Gemini coach model";
     case "geminiAudioUnderstandingModel": return "Gemini speech-input model";
@@ -386,12 +404,13 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
   switch (setting) {
     case "mimoCoachModel": return ["mimo-v2.5-pro", "mimo-v2.5-flash"];
     case "openaiRealtimeTranscriptionModel": return ["gpt-realtime-whisper"];
+    case "openaiFileTranscriptionModel": return ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize", "whisper-1"];
     case "openaiCoachModel": return ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"];
     case "geminiCoachModel": return GEMINI_TEXT_MODEL_OPTIONS;
     case "geminiAudioUnderstandingModel": return GEMINI_TEXT_MODEL_OPTIONS;
     case "minimaxTtsModel": return ["speech-2.8-hd", "speech-2.8-turbo"];
     case "openaiTtsModel": return ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"];
-    case "openaiTtsVoice": return ["coral", "alloy", "ash", "ballad", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"];
+    case "openaiTtsVoice": return ["marin", "cedar", "coral", "alloy", "ash", "ballad", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"];
     case "geminiTtsModel": return GEMINI_TTS_MODEL_OPTIONS;
     case "geminiTtsVoice": return ["Kore", "Puck", "Charon", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
   }
@@ -399,9 +418,9 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
 
 function providerSetupHint(provider: ProviderName): string {
   switch (provider) {
-    case "gemini": return "Gemini · default coach + speech input + native-version TTS";
+    case "gemini": return "Gemini · alternate coach + speech input + native-version TTS";
     case "minimax": return "MiniMax · speech-output (TTS) provider";
     case "mimo": return "Xiaomi MiMo · coach + speech input + speech-output (Token Plan)";
-    case "openai": return "OpenAI · coach + Realtime speech input + TTS";
+    case "openai": return "OpenAI · default coach + file/realtime speech input + TTS";
   }
 }

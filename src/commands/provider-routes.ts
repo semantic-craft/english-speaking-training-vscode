@@ -2,19 +2,26 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-import { normalizeTtsSpeed, providerLabel, secretKeys } from "../core.js";
+import {
+  isAudioUnderstandingProvider,
+  isCoachProvider,
+  isTtsProvider,
+  normalizeTtsSpeed,
+  providerLabel,
+  secretKeys,
+} from "../core.js";
 import type { KeyAvailability, ProviderName } from "../types.js";
 import { refreshAll, runProviderSetupHint } from "../runtime/host.js";
 import type { ProviderSettingName } from "../runtime/settings.js";
 
 export async function migrateGeminiModelDefaults(): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
-  await migrateProviderSetting(settings, "coachProvider", "minimax", "gemini");
-  await migrateProviderSetting(settings, "coachProvider", "kimi", "gemini");
+  await migrateProviderSetting(settings, "coachProvider", "minimax", "openai");
+  await migrateProviderSetting(settings, "coachProvider", "kimi", "openai");
   // DeepSeek was removed as a coach provider; fall existing users back to
-  // the default so a now-unrouteable value can't wedge the coach step.
-  await migrateProviderSetting(settings, "coachProvider", "deepseek", "gemini");
-  await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "gemini");
+  // the current default so a now-unrouteable value can't wedge the coach step.
+  await migrateProviderSetting(settings, "coachProvider", "deepseek", "openai");
+  await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "openai");
   // NOTE: do not migrate `ttsProvider: minimax`. MiniMax is a currently
   // supported, UI-selectable speech-output provider. Migrating it here ran on
   // every activation and silently reverted a user's deliberate MiniMax TTS
@@ -69,7 +76,7 @@ export async function apiKeyAvailability(context: vscode.ExtensionContext): Prom
   };
 }
 
-export async function configureApiKey(context: vscode.ExtensionContext, provider: ProviderName): Promise<void> {
+export async function configureApiKey(context: vscode.ExtensionContext, provider: ProviderName): Promise<boolean> {
   const label = providerLabel(provider);
   const value = await vscode.window.showInputBox({
     title: `Configure ${label} API Key`,
@@ -78,15 +85,21 @@ export async function configureApiKey(context: vscode.ExtensionContext, provider
     ignoreFocusOut: true,
   });
   if (!value) {
-    return;
+    return false;
   }
-  await context.secrets.store(secretKeys[provider], value.trim());
+  const trimmed = value.trim();
+  if (!trimmed) {
+    vscode.window.showWarningMessage(`${label} API key was empty; nothing was saved.`);
+    return false;
+  }
+  await context.secrets.store(secretKeys[provider], trimmed);
   vscode.window.showInformationMessage(`${label} API key saved.`);
   await refreshAll();
+  return true;
 }
 
 export async function pickAndConfigureProviderKey(context: vscode.ExtensionContext): Promise<void> {
-  const providers: ProviderName[] = ["gemini", "openai", "minimax", "mimo"];
+  const providers: ProviderName[] = ["openai", "gemini", "minimax", "mimo"];
   const availability = await apiKeyAvailability(context);
   const items: (vscode.QuickPickItem & { provider: ProviderName })[] = providers.map((provider) => ({
     provider,
@@ -106,10 +119,43 @@ export async function pickAndConfigureProviderKey(context: vscode.ExtensionConte
 }
 
 export async function configureCoreRouteKeys(context: vscode.ExtensionContext): Promise<void> {
+  const providers = activeRouteProviders();
   const availability = await apiKeyAvailability(context);
-  if (!availability.gemini) {
-    await configureApiKey(context, "gemini");
+  const missing = providers.filter((provider) => !availability[provider]);
+  if (missing.length === 0) {
+    vscode.window.showInformationMessage("English Training active route API keys are already saved.");
+    return;
   }
+  for (const provider of missing) {
+    const saved = await configureApiKey(context, provider);
+    if (!saved) {
+      return;
+    }
+  }
+}
+
+export function activeRouteProviders(
+  settings = vscode.workspace.getConfiguration("englishTraining"),
+): ProviderName[] {
+  const values: ProviderName[] = [
+    normalizeProviderForSetting("coachProvider", settings.get<string>("coachProvider")),
+    normalizeProviderForSetting("audioUnderstandingProvider", settings.get<string>("audioUnderstandingProvider")),
+    normalizeProviderForSetting("ttsProvider", settings.get<string>("ttsProvider")),
+  ];
+  return Array.from(new Set(values));
+}
+
+export function normalizeProviderForSetting(
+  setting: ProviderSettingName,
+  raw: unknown,
+): ProviderName {
+  if (setting === "coachProvider") {
+    return isCoachProvider(raw) ? raw : "openai";
+  }
+  if (setting === "audioUnderstandingProvider") {
+    return isAudioUnderstandingProvider(raw) ? raw : "openai";
+  }
+  return isTtsProvider(raw) ? raw : "openai";
 }
 
 export async function clearApiKeys(context: vscode.ExtensionContext): Promise<void> {
@@ -148,6 +194,14 @@ export async function setProviderSetting(setting: ProviderSettingName, value: st
   await refreshAll();
 }
 
+export async function setOpenAIRealtimeSpeechInput(): Promise<void> {
+  const settings = vscode.workspace.getConfiguration("englishTraining");
+  await settings.update("audioUnderstandingProvider", "openai", vscode.ConfigurationTarget.Workspace);
+  await settings.update("openaiTranscriptionMode", "realtime", vscode.ConfigurationTarget.Workspace);
+  vscode.window.showInformationMessage("English Training OpenAI Realtime speech input enabled.");
+  await refreshAll();
+}
+
 export async function setGeminiOnlyProviders(): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
   await settings.update("coachProvider", "gemini", vscode.ConfigurationTarget.Workspace);
@@ -162,7 +216,21 @@ export async function setRecommendedHybridProviders(): Promise<void> {
   await settings.update("coachProvider", "gemini", vscode.ConfigurationTarget.Workspace);
   await settings.update("audioUnderstandingProvider", "gemini", vscode.ConfigurationTarget.Workspace);
   await settings.update("ttsProvider", "gemini", vscode.ConfigurationTarget.Workspace);
-  vscode.window.showInformationMessage("English Training recommended route enabled: Gemini coach + Gemini speech input + Gemini speech output.");
+  vscode.window.showInformationMessage("English Training Gemini core route enabled: Gemini coach + Gemini speech input + Gemini speech output.");
+  await refreshAll();
+}
+
+export async function setOpenAIStackProviders(): Promise<void> {
+  const settings = vscode.workspace.getConfiguration("englishTraining");
+  await settings.update("coachProvider", "openai", vscode.ConfigurationTarget.Workspace);
+  await settings.update("audioUnderstandingProvider", "openai", vscode.ConfigurationTarget.Workspace);
+  await settings.update("ttsProvider", "openai", vscode.ConfigurationTarget.Workspace);
+  // file mode benefits from the domain prompt and is more accurate for
+  // bounded recordings; users can switch back to realtime in settings.
+  await settings.update("openaiTranscriptionMode", "file", vscode.ConfigurationTarget.Workspace);
+  vscode.window.showInformationMessage(
+    "English Training OpenAI stack enabled: coach (gpt-4o) + transcribe (gpt-4o-transcribe, domain prompt) + TTS (gpt-4o-mini-tts, marin, coach-driven style).",
+  );
   await refreshAll();
 }
 

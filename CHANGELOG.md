@@ -7,6 +7,81 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.38] — 2026-05-21
+
+An OpenAI-first pass: the extension's default route is now the full OpenAI
+stack (gpt-4o coach + gpt-4o-transcribe speech-in + gpt-4o-mini-tts speech-out
+with the new `instructions` field driving voice style per turn), with Gemini /
+MiniMax / MiMo kept as one-click fallbacks.
+
+### Added
+- **OpenAI TTS `instructions` field.** `gpt-4o-mini-tts` accepts a short
+  English direction that controls accent, emotion, intonation, speed,
+  emphasis, and whispering. The coach now emits a per-turn `tts_style`
+  (e.g. *"Speak like a patient seminar professor; emphasize the modal
+  verbs"*) that flows directly into the next native-version synthesis, so
+  every reply has a fitted voice rather than one flat reading. A pinned
+  `englishTraining.openaiTtsInstructions` overrides the coach if you want
+  a fixed style; when both are blank a clear, patient academic default is
+  used. The slow re-read button (↻) ships its own over-articulated
+  instructions so word-by-word shadow practice is actually slower and
+  clearer, not just lower-pitched.
+- **`marin` / `cedar` voices.** The full set of 13 voices (alloy, ash,
+  ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin,
+  cedar) is in the manifest enum and the sidebar voice picker. Default is
+  `marin`, OpenAI's recommended highest-quality voice.
+- **Low-latency audio formats.** `englishTraining.openaiTtsResponseFormat`
+  selects wav / mp3 / opus / aac / flac / pcm. Default is `wav` because it
+  needs no decoding on first play, cutting native-version first-audio
+  latency vs. the old mp3-only path. `pcm` is wrapped in a RIFF/WAVE
+  header on disk so the webview's `<audio>` element plays it without an
+  external decoder.
+- **OpenAI file-mode transcription.** `englishTraining.openaiTranscriptionMode`
+  picks between `file` (POST /v1/audio/transcriptions with `gpt-4o-transcribe`
+  by default — or `gpt-4o-mini-transcribe` / `gpt-4o-transcribe-diarize` /
+  `whisper-1`) and `realtime` (the existing /v1/realtime WebSocket).
+  File mode is the new default and is fed a **domain prompt** built from
+  the lesson's scenario / goal / frames / key expressions, biasing
+  Whisper-family decoding toward your legal-academic vocabulary so terms
+  like *stare decisis*, *prima facie*, *erga omnes* are far less likely to
+  come back as plausible English nonsense.
+- **OpenAI stack one-click command.**
+  *English Training: Use OpenAI Stack (Coach + STT + TTS)* (palette and
+  sidebar) pins coach + transcribe + TTS providers to OpenAI in one step
+  and forces transcription to `file` mode so the domain prompt is active.
+
+### Changed
+- **Default providers flipped to OpenAI.** `coachProvider`,
+  `audioUnderstandingProvider`, and `ttsProvider` all default to `openai`
+  for fresh installs. Existing users keep whatever they had configured.
+  Gemini / MiniMax / MiMo remain first-class alternates; the Gemini-only
+  and Gemini-hybrid one-click presets still work.
+- **Sidebar provider cards** lead with the OpenAI option and label it as
+  the default route; the OpenAI speech-input card now exposes the
+  file-mode model picker (`openaiFileTranscriptionModel`) instead of only
+  the Realtime model.
+
+### Fixed
+- The OpenAI speech-input model picker only edited the Realtime model id,
+  silently doing nothing when the user was on the (more common, more
+  accurate) file path; it now edits the actively-routed model.
+- Quick Setup and the record/drill gates no longer hard-code Gemini after the
+  default route switched to OpenAI; they now ask for the missing key(s) for
+  the active provider route.
+- The Command Palette action named *Use OpenAI Realtime Speech Input* now also
+  switches `openaiTranscriptionMode` to `realtime`, instead of merely selecting
+  OpenAI and leaving the user on file transcription.
+- The sidebar OpenAI speech-input card now edits the Realtime model when the
+  active mode is `realtime`, and exposes the OpenAI stack preset promised by
+  the release notes.
+- First-run workspaces with no `prebuilt/` folder now render a Quick Setup
+  recovery card with a visible *Choose folder* action instead of only showing
+  a dead-end root-detection error.
+- Removed the unsupported OpenAI TTS `language` request field, kept the full
+  built-in OpenAI voice set available across speech models, and only suppress
+  `instructions` for `tts-1` / `tts-1-hd`.
+- `package-lock.json` now matches the `0.1.38` extension version.
+
 ## [0.1.37] — 2026-05-18
 
 Supersedes the 0.1.36 Marketplace publish (that version number was

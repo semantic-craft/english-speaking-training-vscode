@@ -5,8 +5,11 @@ const test = require("node:test");
 
 const root = path.resolve(__dirname, "..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const packageLock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
 const extensionSource = fs.readFileSync(path.join(root, "src", "extension.ts"), "utf8");
+const providerRoutesSource = fs.readFileSync(path.join(root, "src", "commands", "provider-routes.ts"), "utf8");
 const ttsSource = fs.readFileSync(path.join(root, "src", "practice", "tts.ts"), "utf8");
+const mediaSource = fs.readFileSync(path.join(root, "media", "practice.js"), "utf8");
 const optionsSource = extensionSource.slice(
   extensionSource.indexOf("function configSettingOptions"),
   extensionSource.indexOf("function providerSetupHint"),
@@ -50,7 +53,10 @@ test("sidebar model presets stay inside package configuration enums", () => {
   for (const setting of [
     "mimoCoachModel",
     "openaiRealtimeTranscriptionModel",
+    "openaiFileTranscriptionModel",
     "openaiCoachModel",
+    "openaiTtsModel",
+    "openaiTtsVoice",
     "geminiCoachModel",
     "geminiAudioUnderstandingModel",
     "minimaxTtsModel",
@@ -69,7 +75,9 @@ test("OpenAI TTS source fallback matches package default", () => {
 
 test("speech input manifest no longer exposes Azure", () => {
   const speechInput = packageJson.contributes.configuration.properties["englishTraining.audioUnderstandingProvider"];
-  assert.equal(speechInput.default, "gemini");
+  // Default switched from gemini → openai when the OpenAI stack became the
+  // primary route in 0.1.38 (gpt-4o-transcribe with domain prompt).
+  assert.equal(speechInput.default, "openai");
   assert.deepEqual(speechInput.enum, ["gemini", "openai", "mimo"]);
   assert.equal(packageJson.contributes.configuration.properties["englishTraining.azureSpeechRegion"], undefined);
   assert.equal(packageJson.contributes.configuration.properties["englishTraining.azureSpeechLocale"], undefined);
@@ -77,4 +85,31 @@ test("speech input manifest no longer exposes Azure", () => {
     packageJson.contributes.commands.some((item) => item.command.includes("Azure")),
     false,
   );
+});
+
+test("OpenAI-first UX and packaging metadata stay aligned", () => {
+  assert.equal(packageLock.version, packageJson.version);
+  assert.equal(packageLock.packages[""].version, packageJson.version);
+  assert.equal(
+    packageJson.contributes.configuration.properties["englishTraining.openaiTtsLanguage"],
+    undefined,
+    "OpenAI speech endpoint has no language field; do not expose a dead setting",
+  );
+  assert.match(mediaSource, /function routeKeyStatus/);
+  assert.match(mediaSource, /function normalizeProviderForSetting/);
+  assert.match(mediaSource, /function renderMissingSourceSetup/);
+  assert.match(mediaSource, /No prebuilt\/ folder was found/);
+  assert.match(mediaSource, /setting === "coachProvider"/);
+  assert.match(mediaSource, /id="useOpenAIStack"/);
+  assert.match(mediaSource, /type: "useOpenAIStack"/);
+  assert.match(mediaSource, /openaiRealtimeTranscriptionModel/);
+  assert.match(mediaSource, /Realtime model/);
+  assert.doesNotMatch(mediaSource, /Connect Gemini/);
+  assert.doesNotMatch(mediaSource, /Add a Gemini API key/);
+  assert.match(
+    extensionSource,
+    /englishTraining\.useOpenAIRealtimeAudioUnderstanding"[\s\S]*setOpenAIRealtimeSpeechInput/,
+  );
+  assert.match(providerRoutesSource, /const providers: ProviderName\[\] = \["openai", "gemini", "minimax", "mimo"\]/);
+  assert.match(providerRoutesSource, /API key was empty; nothing was saved/);
 });
