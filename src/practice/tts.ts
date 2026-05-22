@@ -77,10 +77,10 @@ export function resolveOpenAITtsVoice(model: string): string {
 export interface SynthesizeOptions {
   speedOverride?: number;
   /**
-   * Optional one-off OpenAI TTS `instructions` (style direction). When set,
-   * it overrides nothing — it is used only if the user has not pinned a
-   * value in englishTraining.openaiTtsInstructions. The typical caller is
-   * the coach, which emits a per-turn tts_style suggestion.
+   * Optional one-off style direction. OpenAI maps it to `instructions`
+   * unless the user has pinned englishTraining.openaiTtsInstructions; MiMo
+   * sends it as an optional user style prompt while keeping the text to read
+   * in the assistant message.
    */
   ttsStyle?: string;
 }
@@ -104,7 +104,7 @@ export async function synthesizeWithConfiguredTts(
     return { provider: selectedProvider, filePath: await synthesizeOpenAI(context, text, outPath, options) };
   }
   if (selectedProvider === "mimo") {
-    return { provider: selectedProvider, filePath: await synthesizeMiMo(context, text, outPath) };
+    return { provider: selectedProvider, filePath: await synthesizeMiMo(context, text, outPath, options) };
   }
   return {
     provider: "minimax",
@@ -280,11 +280,16 @@ async function synthesizeMiMo(
   context: vscode.ExtensionContext,
   text: string,
   outPath: string,
+  options: SynthesizeOptions = {},
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "mimo");
   const baseUrl = configString("mimoTtsBaseUrl", MIMO_OPENAI_BASE_URL);
   const model = configString("mimoTtsModel", "mimo-v2.5-tts");
   const voice = normalizedMimoTtsVoice();
+  const trimmedText = text.trim();
+  if (!trimmedText) {
+    throw new Error("MiMo TTS text was empty.");
+  }
   const response = await fetchWithTimeout(chatCompletionsUrl(baseUrl), {
     method: "POST",
     headers: {
@@ -294,10 +299,7 @@ async function synthesizeMiMo(
     },
     body: JSON.stringify({
       model,
-      messages: [
-        { role: "user", content: "Read the following text aloud in clear, natural English." },
-        { role: "assistant", content: text },
-      ],
+      messages: buildMimoTtsMessages(trimmedText, options.ttsStyle),
       audio: { format: "wav", voice },
     }),
   });
@@ -308,6 +310,19 @@ async function synthesizeMiMo(
   const parsed = parseJsonObject(body, "MiMo TTS");
   fs.writeFileSync(outPath, extractMimoTtsAudioData(parsed));
   return outPath;
+}
+
+function buildMimoTtsMessages(
+  text: string,
+  stylePrompt?: string,
+): Array<{ role: "user" | "assistant"; content: string }> {
+  const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
+  const style = (stylePrompt || "").trim();
+  if (style) {
+    messages.push({ role: "user", content: style });
+  }
+  messages.push({ role: "assistant", content: text });
+  return messages;
 }
 
 export function extractMimoTtsAudioData(parsed: JsonObject): Buffer {
