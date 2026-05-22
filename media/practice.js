@@ -3,6 +3,8 @@
     let stream = null;
     let chunks = [];
     let recorderMode = null;
+    let nativeStartRequestSeq = 0;
+    let activeNativeStartRequestId = 0;
     // True from posting startNativeRecording until the extension confirms
     // ffmpeg is actually up (nativeRecordingStarted) or fails (error). A stop
     // tap in this ~1s window would otherwise tear down a recorder that has
@@ -25,6 +27,7 @@
     let vuRaf = null;
     let timerHandle = null;
     let recordingStartedAt = 0;
+    let stageHideTimer = null;
     let pendingPracticeTarget = null;
     let activeRecordingTarget = null;
     let currentExampleText = "";
@@ -33,8 +36,21 @@
     let drillGeneratedLines = [];
     let drillAttempts = {};
     let drillGenerating = false;
+    let drillLineRequestSeq = 0;
+    let activeDrillLineRequest = null;
+    let drillLineWatchdog = null;
     let pendingSlowReadHost = null;
+    let todayTtsRequestSeq = 0;
+    let activeTodayTtsRequest = null;
+    let slowReadRequestSeq = 0;
+    let activeSlowReadRequest = null;
+    let sidebarCommandRequestSeq = 0;
+    let activeSidebarCommandRequest = null;
+    let refreshInFlight = false;
+    let refreshWatchdog = null;
     let localAudioObjectUrl = null;
+    const turnAudioObjectUrls = new Set();
+    let turnResetArmTimer = null;
     // Start pessimistic: the scaffold ships the record button disabled with a
     // neutral "Checking setup…" status, and applySetupGate flips this the
     // first time real state arrives. This closes the pre-first-state window
@@ -42,23 +58,162 @@
     let recordingBlockedBySetup = true;
     let currentLessonKey = null;
     const STAGES = ["transcribe", "coach", "tts", "save"];
+    const AUDIO_REQUEST_STILL_WORKING_MS = 20000;
+    const AUDIO_REQUEST_HARD_TIMEOUT_MS = 100000;
+    const MAX_TURN_HISTORY = 12;
 
-    // Each webview-recorder turn used to mint a fresh object URL for the
-    // <audio> preview without ever revoking the previous one, leaking a blob
-    // per recording across a long practice session. Revoke the prior one.
-    function setLocalAudioSource(src, ownsBlobUrl) {
-      const el = $("localAudio");
-      if (!el) return;
+    function clearLocalAudioSource() {
       if (localAudioObjectUrl) {
         URL.revokeObjectURL(localAudioObjectUrl);
         localAudioObjectUrl = null;
       }
+      const el = $("localAudio");
+      if (!el) return;
+      try { el.pause(); } catch (_) {}
+      el.removeAttribute("src");
+      try { el.load(); } catch (_) {}
+      el.hidden = true;
+    }
+
+    function retainLocalAudioForTurnHistory(src) {
+      if (src && src === localAudioObjectUrl) {
+        turnAudioObjectUrls.add(src);
+        localAudioObjectUrl = null;
+      }
+    }
+
+    function clearTurnAudioObjectUrls() {
+      turnAudioObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+      turnAudioObjectUrls.clear();
+    }
+
+    // Each webview-recorder turn mints an object URL for the live preview.
+    // Revoke unsubmitted previews here; submitted turn-history blobs are
+    // retained until conversation/lesson reset so previous "You said" audio
+    // remains playable while the learner keeps practicing.
+    function setLocalAudioSource(src, ownsBlobUrl) {
+      clearLocalAudioSource();
+      const el = $("localAudio");
+      if (!el) return;
       el.src = src;
       el.hidden = false;
       if (ownsBlobUrl) localAudioObjectUrl = src;
     }
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+    const objectValue = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null;
+    const textField = (obj, key) => obj && typeof obj[key] === "string" ? obj[key].trim() : "";
+    const scalarText = (value) => {
+      if (typeof value === "string") return value.trim();
+      if (typeof value === "number" || typeof value === "boolean") return String(value);
+      return "";
+    };
+    const compactScalarText = (value) => scalarText(value).replace(/\s+/g, " ").trim();
+    const positiveInteger = (value) => {
+      const parsed = typeof value === "number"
+        ? value
+        : (typeof value === "string" && value.trim() ? Number(value) : undefined);
+      return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+    };
+    const normalizedTtsSpeed = (value, fallback = 0.9) => {
+      const parsed = typeof value === "number"
+        ? value
+        : (typeof value === "string" && value.trim() ? Number(value) : fallback);
+      const speed = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+      return Math.max(0.5, Math.min(1.5, Number(speed.toFixed(2))));
+    };
+    const scalarField = (obj, key) => obj ? scalarText(obj[key]) : "";
+    const compactScalarField = (obj, key) => compactScalarText(obj && obj[key]);
+    const datasetText = (element, key) => element && element.dataset ? scalarText(element.dataset[key]) : "";
+    const textList = (value) => Array.isArray(value)
+      ? value.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean)
+      : [];
+    const firstTextField = (obj, ...keys) => {
+      for (const key of keys) {
+        const text = textField(obj, key);
+        if (text) return text;
+      }
+      return "";
+    };
+    const firstScalarField = (obj, ...keys) => {
+      for (const key of keys) {
+        const text = scalarField(obj, key);
+        if (text) return text;
+      }
+      return "";
+    };
+    const firstTextList = (obj, ...keys) => {
+      for (const key of keys) {
+        const items = textList(obj && obj[key]);
+        if (items.length) return items;
+      }
+      return [];
+    };
+
+    function normalizePracticeDrillExamples(value) {
+      if (!Array.isArray(value)) return [];
+      return value.map((item, index) => {
+        if (typeof item === "string") {
+          const text = item.trim();
+          return text ? { label: "Coach drill " + (index + 1), text, source: "coach" } : null;
+        }
+        const source = objectValue(item);
+        if (!source) return null;
+        const text = scalarField(source, "text");
+        if (!text) return null;
+        return {
+          label: scalarField(source, "label") || scalarField(source, "cue") || scalarField(source, "id") || "Coach drill " + (index + 1),
+          text,
+          reason: scalarField(source, "reason") || scalarField(source, "note"),
+          source: scalarField(source, "source") || "coach",
+        };
+      }).filter(Boolean);
+    }
+
+    function normalizePracticeResult(value) {
+      const result = objectValue(value);
+      if (!result) return null;
+      const mode = textField(result, "mode");
+      return {
+        ...result,
+        transcript: firstTextField(result, "transcript"),
+        nativeVersion: firstTextField(result, "nativeVersion", "native_version"),
+        mode: mode === "shadow" ? "shadow" : "free",
+        referenceText: firstTextField(result, "referenceText", "reference_text"),
+        referenceLabel: firstTextField(result, "referenceLabel", "reference_label"),
+        problems: firstTextList(result, "problems"),
+        quickFix: firstTextField(result, "quickFix", "quick_fix"),
+        followUpQuestion: firstTextField(result, "followUpQuestion", "follow_up_question"),
+        shadowingInstruction: firstTextField(result, "shadowingInstruction", "shadowing_instruction"),
+        errorTags: firstTextList(result, "errorTags", "error_tags"),
+        nextDrill: firstTextField(result, "nextDrill", "next_drill"),
+        drillExamples: normalizePracticeDrillExamples(result.drillExamples || result.drill_examples),
+        scores: objectValue(result.scores) || {},
+        audioUri: firstTextField(result, "audioUri", "audio_uri"),
+        followUpAudioUri: firstTextField(result, "followUpAudioUri", "follow_up_audio_uri"),
+        localAudioUri: firstTextField(result, "localAudioUri", "local_audio_uri"),
+        ttsStyle: firstTextField(result, "ttsStyle", "tts_style"),
+        sessionDir: firstTextField(result, "sessionDir", "session_dir"),
+        packageDate: firstTextField(result, "packageDate", "package_date"),
+        priorTurn: objectValue(result.priorTurn),
+      };
+    }
+
+    function clearTurnResetArmTimer() {
+      if (turnResetArmTimer) {
+        clearTimeout(turnResetArmTimer);
+        turnResetArmTimer = null;
+      }
+    }
+
+    function removeSlowReadAudioPlayer() {
+      const player = $("slowReadAudio");
+      if (!player) return;
+      try { player.pause(); } catch (_) {}
+      player.removeAttribute("src");
+      try { player.load(); } catch (_) {}
+      player.remove();
+    }
 
     function isRecording() {
       return recorderMode === "native" || (mediaRecorder && mediaRecorder.state === "recording");
@@ -146,18 +301,53 @@
       document.querySelectorAll(".stages li").forEach((li) => li.classList.remove("active", "done"));
     }
 
-    function showStages(visible) {
-      $("stages").hidden = !visible;
-      if (visible) resetStages();
+    function clearStageHideTimer() {
+      if (stageHideTimer) {
+        clearTimeout(stageHideTimer);
+        stageHideTimer = null;
+      }
+    }
+
+    function showStages(visible, resetVisible = true) {
+      clearStageHideTimer();
+      const stages = $("stages");
+      if (!stages) return;
+      stages.hidden = !visible;
+      if (!visible) {
+        resetStages();
+        return;
+      }
+      if (visible && resetVisible) resetStages();
+    }
+
+    function scheduleStageHide(delayMs) {
+      clearStageHideTimer();
+      stageHideTimer = setTimeout(() => {
+        stageHideTimer = null;
+        showStages(false);
+      }, delayMs);
+    }
+
+    function stageName(value) {
+      const name = scalarText(value);
+      return STAGES.includes(name) ? name : "";
+    }
+
+    function stageStatus(value, fallback = "active") {
+      const text = scalarText(value);
+      return text === "active" || text === "done" ? text : fallback;
     }
 
     function setStage(stage, status) {
-      const el = document.querySelector('.stages li[data-stage="' + stage + '"]');
+      const name = stageName(stage);
+      if (!name) return;
+      const nextStatus = stageStatus(status);
+      const el = document.querySelector('.stages li[data-stage="' + name + '"]');
       if (!el) return;
-      if (status === "active") {
+      if (nextStatus === "active") {
         el.classList.remove("done");
         el.classList.add("active");
-      } else if (status === "done") {
+      } else if (nextStatus === "done") {
         el.classList.remove("active");
         el.classList.add("done");
       }
@@ -168,13 +358,13 @@
     }
 
     function practiceTarget(referenceText, referenceLabel, followUpQuestion) {
-      const text = String(referenceText || "").trim();
+      const text = compactScalarText(referenceText);
       if (!text) return null;
       return {
         mode: "shadow",
         referenceText: text,
-        referenceLabel: referenceLabel || "Reference",
-        followUpQuestion: String(followUpQuestion || "").trim(),
+        referenceLabel: scalarText(referenceLabel) || "Reference",
+        followUpQuestion: compactScalarText(followUpQuestion),
       };
     }
 
@@ -182,6 +372,15 @@
       const target = pendingPracticeTarget;
       pendingPracticeTarget = null;
       return target;
+    }
+
+    function clearPendingPracticeContexts(notifyHost) {
+      pendingReplyContext = null;
+      pendingPracticeTarget = null;
+      activeRecordingTarget = null;
+      if (notifyHost) {
+        vscode.postMessage({ type: "clearReplyContext" });
+      }
     }
 
     const ROUTE_KEY_SETTINGS = ["coachProvider", "audioUnderstandingProvider", "ttsProvider"];
@@ -250,6 +449,48 @@
       };
     }
 
+    function setupBlockMessage(currentState) {
+      const diag = (currentState && currentState.sourceDiagnostics) || {};
+      if (diag.packageJsonError) {
+        return "Today's lesson file (prebuilt/" + (diag.currentPackageDate || "?")
+          + "/english-training.json) has a JSON syntax error: " + diag.packageJsonError
+          + " — fix the JSON and press ↻.";
+      }
+      const gate = setupReady(currentState);
+      if (gate.ready) return "";
+      return !gate.coreKeysReady
+        ? "Add " + gate.routeKeys.missingLabel + " API key" + (gate.routeKeys.missing.length === 1 ? "" : "s") + " in Quick setup above to start recording."
+        : "Create your first lesson in Quick setup above to start recording.";
+    }
+
+    function isPracticeSetupReady(currentState) {
+      return !setupBlockMessage(currentState);
+    }
+
+    function ttsActionBlockMessage(currentState, text, actionLabel) {
+      if (!String(text || "").trim()) {
+        return "No text is available for " + actionLabel + ".";
+      }
+      const diag = (currentState && currentState.sourceDiagnostics) || {};
+      if (diag.packageJsonError) {
+        return setupBlockMessage(currentState);
+      }
+      const settings = (currentState && currentState.settings) || {};
+      const keys = (currentState && currentState.keys) || {};
+      const provider = normalizeProviderForSetting("ttsProvider", settings.ttsProvider || "openai");
+      if (!keys[provider]) {
+        return "Add " + providerLabel(provider) + " API key in Quick setup above to " + actionLabel + ".";
+      }
+      return "";
+    }
+
+    function todayTtsBlockMessage(currentState, line) {
+      const message = ttsActionBlockMessage(currentState, line, "generate example audio");
+      return message === "No text is available for generate example audio."
+        ? "No example text is available for today's package."
+        : message;
+    }
+
     function applySetupGate(currentState) {
       // A re-render can land mid-recording (an unrelated refreshAll). Never
       // disable the button or clobber "Listening…" while a take is live —
@@ -265,27 +506,17 @@
       if (diag.packageJsonError) {
         recordingBlockedBySetup = true;
         if (btn) btn.disabled = true;
-        setStatus(
-          "Today's lesson file (prebuilt/" + (diag.currentPackageDate || "?")
-            + "/english-training.json) has a JSON syntax error: " + diag.packageJsonError
-            + " — fix the JSON and press ↻.",
-          "error",
-        );
+        setStatus(setupBlockMessage(currentState), "error");
         return;
       }
-      const { ready, coreKeysReady, routeKeys } = setupReady(currentState);
-      if (!ready) {
+      if (!setupReady(currentState).ready) {
         recordingBlockedBySetup = true;
         if (btn) btn.disabled = true;
         // Keep a real, actionable error visible if one is already showing;
         // otherwise replace the misleading hardcoded "Ready to record".
         const statusEl = $("status");
         if (!(statusEl && statusEl.classList.contains("error"))) {
-          setStatus(
-            !coreKeysReady
-              ? "Add " + routeKeys.missingLabel + " API key" + (routeKeys.missing.length === 1 ? "" : "s") + " in Quick setup above to start recording."
-              : "Create your first lesson in Quick setup above to start recording.",
-          );
+          setStatus(setupBlockMessage(currentState));
         }
         return;
       }
@@ -299,67 +530,157 @@
       }
     }
 
-    // After "Complete" advances to the next package, the previous lesson's
-    // conversation, generated drills and attempt counts are stale: the loop
-    // buttons would otherwise record against old material and the drill
-    // workbench would mix yesterday's AI lines into today's set. Reset that
-    // session state when (and only when) the package actually changes. The
-    // first render just adopts the key — a fresh webview already starts clean,
-    // and an in-lesson refresh (e.g. after a turn) keeps the same key so the
-    // history the user just built is preserved.
-    function applyLessonReset(nextInfo) {
-      const key = String((nextInfo && nextInfo.package_date) || "");
+    // After "Complete" advances or the current package is regenerated in
+    // place, the previous lesson's conversation, generated drills and attempt
+    // counts are stale: the loop buttons would otherwise record against old
+    // material and the drill workbench would mix old AI lines into the new set.
+    // Reset that session state when the lesson identity changes. The first
+    // render just adopts the key — a fresh webview already starts clean, and an
+    // in-lesson refresh (e.g. after a turn) keeps the same key so the history
+    // the user just built is preserved.
+    function lessonIdentity(nextInfo, trainingInfo, line) {
+      const diag = objectValue(state && state.sourceDiagnostics) || {};
+      const frames = frameTextList(trainingInfo && trainingInfo.frames).slice(0, 6);
+      return JSON.stringify({
+        json: scalarField(diag, "currentJson"),
+        date: scalarField(nextInfo, "package_date"),
+        type: firstScalarField(trainingInfo, "training_type") || firstScalarField(nextInfo, "training_type"),
+        goal: firstScalarField(trainingInfo, "goal") || firstScalarField(nextInfo, "goal"),
+        scenario: firstScalarField(trainingInfo, "scenario") || firstScalarField(nextInfo, "scenario"),
+        line: scalarText(line),
+        frames,
+      });
+    }
+
+    function stageLessonResetForRender(nextInfo, trainingInfo, line) {
+      const key = lessonIdentity(nextInfo, trainingInfo, line);
       if (currentLessonKey === null) {
         currentLessonKey = key;
-        return;
+        return false;
       }
-      if (key === currentLessonKey) return;
+      if (key === currentLessonKey) return false;
       currentLessonKey = key;
       turnHistory = [];
       lastTurn = null;
       pendingReplyContext = null;
       pendingPracticeTarget = null;
+      activeRecordingTarget = null;
+      clearTransientAudioRequests();
       drillGeneratedLines = [];
       drillAttempts = {};
-      vscode.postMessage({ type: "clearReplyContext" });
+      drillGenerating = false;
+      activeDrillLineRequest = null;
+      return true;
+    }
+
+    function commitLessonResetAfterRender(didReset) {
+      if (!didReset) return;
+      clearTurnAudioObjectUrls();
+      clearPendingPracticeContexts(true);
+      clearTodayGeneratedAudio();
+      clearLocalAudioSource();
+      removeSlowReadAudioPlayer();
+      clearDrillLineWatchdog();
+      showStages(false);
       const resultPanel = $("result");
       if (resultPanel) resultPanel.hidden = true;
       renderTurnHistory();
     }
 
     function renderState(nextState) {
-      state = nextState;
-      const next = state.next || {};
-      const training = state.training || {};
-      const drill = state.drill || {};
-      const settings = state.settings || {};
-      const assets = next.assets || {};
-      const todayAudioText = training.tts_example_text || training.clean_tts_text || training.audio_text || training.demo_line || "";
-      currentExampleText = todayAudioText;
-      renderOnboarding(state);
-      applySetupGate(state);
-      applyLessonReset(next);
-      renderDayStrip({ progress: state.progress, next });
-      renderProgress(state.progress);
-      renderSourceDiagnostics(state.sourceDiagnostics);
-      renderLearnerProfile(state.learnerProfile);
-      const weekTag = state.progress && state.progress.weekIndex
-        ? "Week " + state.progress.weekIndex + " · Day " + state.progress.dayInWeek + "/" + (state.progress.weekTotalDays || 7)
-        : "";
-      renderTodayHero({ next, training, settings, assets, todayAudioText, weekTag });
-      renderReadingCard(training, assets);
-      renderDrillPanel();
-      $("sessionLog").innerHTML = `
-        <h3>Session Log</h3>
-        ${recentSessions(state.recentSessions || [])}
-      `;
-      $("source").innerHTML = `
-        <span class="chip">${esc(state.source || "local")}</span>
-        ${state.sourceLabel ? '<span class="chip">' + esc(shortSourceLabel(state.sourceLabel)) + '</span>' : ''}
-      `;
-      renderProviderPanel(settings, state.keys || {});
-      renderMinimaxVoicePicker(settings);
-      renderSpeedChips(settings);
+      const previousState = state;
+      const previousRenderContext = {
+        activeRecordingTarget,
+        activeDrillLineRequest,
+        activeSlowReadRequest,
+        activeTodayTtsRequest,
+        currentDrillSuggestions,
+        currentExampleText,
+        currentLessonKey,
+        drillAttempts: { ...drillAttempts },
+        drillGeneratedLines,
+        drillGenerating,
+        drillLibrary,
+        lastTurn,
+        pendingPracticeTarget,
+        pendingReplyContext,
+        pendingSlowReadHost,
+        recordingBlockedBySetup,
+        turnHistory,
+      };
+      const webviewState = objectValue(nextState);
+      if (!webviewState) throw new Error("State payload was not an object.");
+      state = webviewState;
+      try {
+        const next = objectValue(state.next) || {};
+        const training = objectValue(state.training) || {};
+        const drill = objectValue(state.drill) || {};
+        const settings = objectValue(state.settings) || {};
+        const assets = objectValue(next.assets) || {};
+        const todayAudioText = firstScalarField(training, "tts_example_text", "clean_tts_text", "audio_text", "demo_line");
+        currentExampleText = todayAudioText;
+        renderOnboarding(state);
+        applySetupGate(state);
+        const lessonDidReset = stageLessonResetForRender(next, training, todayAudioText);
+        renderDayStrip({ progress: state.progress, next });
+        renderProgress(state.progress);
+        renderSourceDiagnostics(state.sourceDiagnostics);
+        renderLearnerProfile(state.learnerProfile);
+        const progress = objectValue(state.progress) || {};
+        const weekIndex = positiveInteger(progress.weekIndex);
+        const dayInWeek = positiveInteger(progress.dayInWeek);
+        const weekTotalDays = positiveInteger(progress.weekTotalDays) || 7;
+        const weekTag = weekIndex
+          ? "Week " + weekIndex + " · Day " + dayInWeek + "/" + weekTotalDays
+          : "";
+        renderTodayHero({ next, training, settings, assets, todayAudioText, weekTag });
+        renderReadingCard(training, assets);
+        renderDrillPanel();
+        $("sessionLog").innerHTML = `
+          <h3>Session Log</h3>
+          ${recentSessions(state.recentSessions || [])}
+        `;
+        $("source").innerHTML = `
+          <span class="chip">${esc(scalarField(state, "source") || "local")}</span>
+          ${scalarField(state, "sourceLabel") ? '<span class="chip">' + esc(shortSourceLabel(scalarField(state, "sourceLabel"))) + '</span>' : ''}
+        `;
+        renderProviderPanel(settings, state.keys || {});
+        renderMinimaxVoicePicker(settings);
+        renderSpeedChips(settings);
+        applyTransientAudioBusyState();
+        applySidebarCommandBusyState();
+        commitLessonResetAfterRender(lessonDidReset);
+      } catch (error) {
+        state = previousState;
+        activeRecordingTarget = previousRenderContext.activeRecordingTarget;
+        activeDrillLineRequest = previousRenderContext.activeDrillLineRequest;
+        activeSlowReadRequest = previousRenderContext.activeSlowReadRequest;
+        activeTodayTtsRequest = previousRenderContext.activeTodayTtsRequest;
+        currentDrillSuggestions = previousRenderContext.currentDrillSuggestions;
+        currentExampleText = previousRenderContext.currentExampleText;
+        currentLessonKey = previousRenderContext.currentLessonKey;
+        drillAttempts = previousRenderContext.drillAttempts;
+        drillGeneratedLines = previousRenderContext.drillGeneratedLines;
+        drillGenerating = previousRenderContext.drillGenerating;
+        drillLibrary = previousRenderContext.drillLibrary;
+        lastTurn = previousRenderContext.lastTurn;
+        pendingPracticeTarget = previousRenderContext.pendingPracticeTarget;
+        pendingReplyContext = previousRenderContext.pendingReplyContext;
+        pendingSlowReadHost = previousRenderContext.pendingSlowReadHost;
+        recordingBlockedBySetup = previousRenderContext.recordingBlockedBySetup;
+        turnHistory = previousRenderContext.turnHistory;
+        throw error;
+      }
+    }
+
+    function handleStateMessage(nextState) {
+      try {
+        renderState(nextState);
+        resetRefreshBusyState();
+      } catch (error) {
+        resetRefreshBusyState();
+        setStatus("Could not render updated lesson state: " + ((error && error.message) || String(error)), "error");
+      }
     }
 
     const SPEED_OPTIONS = [0.6, 0.8, 0.9, 1.0, 1.2];
@@ -367,7 +688,7 @@
     function renderSpeedChips(settings) {
       const chips = $("speedChips");
       if (!chips) return;
-      const current = Number((settings && settings.ttsSpeed) ?? 0.9);
+      const current = normalizedTtsSpeed(settings && settings.ttsSpeed);
       const hasPresetMatch = SPEED_OPTIONS.some((speed) => Math.abs(speed - current) < 0.01);
       const fragments = SPEED_OPTIONS.map((speed) => {
         const pressed = !hasPresetMatch ? false : Math.abs(speed - current) < 0.01;
@@ -384,9 +705,10 @@
       chips.innerHTML = fragments.join("");
       chips.querySelectorAll("button[data-speed]").forEach((button) => {
         button.addEventListener("click", () => {
-          const value = Number(button.dataset.speed);
+          if (blockSetupChangeDuringPractice()) return;
+          const value = Number(datasetText(button, "speed"));
           if (Number.isFinite(value) && value > 0) {
-            vscode.postMessage({ type: "setTtsSpeed", value });
+            postSetupAction({ type: "setTtsSpeed", value }, "Setting TTS speed", button);
           }
         });
       });
@@ -435,15 +757,25 @@
         { value: "mimo", label: "MiMo", note: "Xiaomi Token Plan", modelSetting: "mimoCoachModel" },
       ],
       audioUnderstandingProvider: [
-        { value: "openai", label: "OpenAI", note: "default STT — gpt-4o-transcribe with domain prompt (realtime optional)", modelSetting: "openaiFileTranscriptionModel" },
+        { value: "openai", label: "OpenAI", note: "default STT — gpt-4o-transcribe with domain prompt (realtime optional)", modelSetting: "openaiFileTranscriptionModel", extraSetting: "openaiTranscriptionMode", extraLabel: "Mode" },
         { value: "gemini", label: "Gemini", note: "alternate STT", modelSetting: "geminiAudioUnderstandingModel" },
-        { value: "mimo", label: "MiMo", note: "Xiaomi audio understanding" },
+        { value: "mimo", label: "MiMo", note: "Xiaomi audio understanding", modelSetting: "mimoAudioUnderstandingModel" },
       ],
       ttsProvider: [
-        { value: "openai", label: "OpenAI", note: "default TTS — gpt-4o-mini-tts (marin), coach-driven style", modelSetting: "openaiTtsModel", extraSetting: "openaiTtsVoice", extraLabel: "Voice" },
+        {
+          value: "openai",
+          label: "OpenAI",
+          note: "default TTS — gpt-4o-mini-tts (marin), coach-driven style",
+          modelSetting: "openaiTtsModel",
+          extraSettings: [
+            { setting: "openaiTtsVoice", label: "Voice" },
+            { setting: "openaiTtsInstructions", label: "Style" },
+            { setting: "openaiTtsResponseFormat", label: "Format" },
+          ],
+        },
         { value: "gemini", label: "Gemini", note: "alternate TTS", modelSetting: "geminiTtsModel", extraSetting: "geminiTtsVoice", extraLabel: "Voice" },
         { value: "minimax", label: "MiniMax", note: "optional fallback", modelSetting: "minimaxTtsModel" },
-        { value: "mimo", label: "MiMo", note: "Xiaomi voices" },
+        { value: "mimo", label: "MiMo", note: "Xiaomi voices", modelSetting: "mimoTtsModel", extraSetting: "mimoTtsVoice", extraLabel: "Voice" },
       ],
     };
 
@@ -477,16 +809,30 @@
       return option.note || "";
     }
 
+    function providerExtraSettings(option) {
+      if (Array.isArray(option && option.extraSettings)) {
+        return option.extraSettings
+          .map((item) => objectValue(item))
+          .filter((item) => item && scalarField(item, "setting"))
+          .map((item) => ({
+            setting: scalarField(item, "setting"),
+            label: scalarField(item, "label") || "Option",
+          }));
+      }
+      return option && option.extraSetting
+        ? [{ setting: option.extraSetting, label: option.extraLabel || "Locale" }]
+        : [];
+    }
+
     function providerModelSummary(setting, option, settings) {
       if (!settings) return "";
       const modelSetting = providerModelSetting(setting, option, settings);
       if (!modelSetting) return "";
       const model = settings[modelSetting] || "";
-      const extra = option.extraSetting ? settings[option.extraSetting] || "" : "";
-      if (extra) {
-        return esc(model) + " · " + esc(extra);
-      }
-      return esc(model);
+      const extras = providerExtraSettings(option)
+        .map((item) => settings[item.setting] || "")
+        .filter(Boolean);
+      return [model, ...extras].map(esc).join(" · ");
     }
 
     function providerCardHtml(setting, option, settings, keys) {
@@ -494,6 +840,9 @@
       const hasKey = keys && keys[option.value];
       const modelText = providerModelSummary(setting, option, settings);
       const modelSetting = providerModelSetting(setting, option, settings);
+      const extraButtons = providerExtraSettings(option)
+        .map((item) => '<button class="secondary" data-config-setting="' + esc(item.setting) + '">' + esc(item.label) + '</button>')
+        .join("");
       const keyBadgeClass = hasKey ? "provider-badge" : "provider-badge missing";
       const routeBadge = active
         ? '<span class="provider-badge active">active</span>'
@@ -503,9 +852,6 @@
         : '<button class="secondary" data-provider-setting="' + esc(setting) + '" data-provider-value="' + esc(option.value) + '">Use</button>';
       const modelButton = modelSetting
         ? '<button class="secondary" data-config-setting="' + esc(modelSetting) + '">' + esc(providerModelButtonLabel(setting, option, settings)) + '</button>'
-        : '';
-      const extraButton = option.extraSetting
-        ? '<button class="secondary" data-config-setting="' + esc(option.extraSetting) + '">' + esc(option.extraLabel || "Locale") + '</button>'
         : '';
       return [
         '<div class="provider-card ' + (active ? "active" : "") + '">',
@@ -518,7 +864,7 @@
             useButton,
             '<button class="secondary" data-key="' + esc(option.value) + '">' + (hasKey ? "Key saved" : "Add key") + '</button>',
             modelButton,
-            extraButton,
+            extraButtons,
           '</div>',
         '</div>',
       ].join("");
@@ -547,6 +893,27 @@
       return '<div class="route-summary-item"><span>' + esc(label) + '</span><strong>' + esc(name) + '</strong></div>';
     }
 
+    function recorderSettingsHtml(settings) {
+      const backend = String((settings && settings.recorderBackend) || "macLocal");
+      const mic = String((settings && settings.preferredMicrophoneName) || "").trim() || "Auto (prefer Mac built-in)";
+      return [
+        '<div class="provider-role recorder-role">',
+          '<div class="provider-role-head"><span class="label">Recorder</span><span class="provider-role-current">' + esc(backend) + '</span></div>',
+          '<div class="provider-card active">',
+            '<div class="provider-card-top">',
+              '<div><div class="provider-name">Recording input</div><div class="provider-note">Backend and microphone used by the red record button</div></div>',
+              '<span class="provider-badge active">' + esc(backend) + '</span>',
+            '</div>',
+            '<div class="provider-model">' + esc(mic) + '</div>',
+            '<div class="provider-card-actions">',
+              '<button class="secondary" data-config-setting="recorderBackend">Backend</button>',
+              '<button class="secondary" data-sidebar-command="selectMicrophone">Microphone</button>',
+            '</div>',
+          '</div>',
+        '</div>',
+      ].join("");
+    }
+
     function keyStripHtml(keys) {
       return '<div class="key-strip">' + ["gemini", "openai", "minimax", "mimo"].map((name) => {
         const saved = keys && keys[name];
@@ -571,6 +938,7 @@
         providerRoleHtml("Coach", "coachProvider", settings, keys),
         providerRoleHtml("Speech in", "audioUnderstandingProvider", settings, keys),
         providerRoleHtml("Speech out", "ttsProvider", settings, keys),
+        recorderSettingsHtml(settings),
         '<div class="field" id="minimaxVoiceField" hidden><span class="label">MiniMax voice</span><div class="row" id="minimaxVoicePicker"></div></div>',
         keyStripHtml(keys),
       ].join("");
@@ -587,14 +955,15 @@
       const field = $("minimaxVoiceField");
       const picker = $("minimaxVoicePicker");
       if (!field || !picker) return;
-      const ttsProvider = settings && settings.ttsProvider;
+      const safeSettings = objectValue(settings) || {};
+      const ttsProvider = scalarField(safeSettings, "ttsProvider");
       if (ttsProvider !== "minimax") {
         field.hidden = true;
         picker.innerHTML = "";
         return;
       }
       field.hidden = false;
-      const current = (settings && settings.minimaxTtsVoiceId) || "";
+      const current = scalarField(safeSettings, "minimaxTtsVoiceId");
       const fragments = [];
 
       if (voicePickerExpanded) {
@@ -630,15 +999,18 @@
       picker.innerHTML = fragments.join("");
       picker.querySelectorAll("button[data-voice-id]").forEach((button) => {
         button.addEventListener("click", () => {
-          const voiceId = button.dataset.voiceId;
-          const cloned = button.dataset.voiceCloned === "1";
-          vscode.postMessage({ type: "setMinimaxVoice", voiceId, pinTurbo: cloned });
+          if (blockSetupChangeDuringPractice()) return;
+          const voiceId = datasetText(button, "voiceId");
+          if (!voiceId) return;
+          const cloned = datasetText(button, "voiceCloned") === "1";
+          postSetupAction({ type: "setMinimaxVoice", voiceId, pinTurbo: cloned }, "Setting MiniMax voice", button);
         });
       });
       picker.querySelectorAll("button[data-voice-toggle]").forEach((button) => {
         button.addEventListener("click", () => {
-          voicePickerExpanded = button.dataset.voiceToggle === "expand";
-          renderMinimaxVoicePicker((state && state.settings) || settings);
+          voicePickerExpanded = datasetText(button, "voiceToggle") === "expand";
+          renderMinimaxVoicePicker(objectValue(state && state.settings) || safeSettings);
+          applySidebarCommandBusyState();
         });
       });
     }
@@ -648,11 +1020,12 @@
       if (!panel) return;
       const routeKeys = routeKeyStatus(currentState);
       const coreKeysReady = routeKeys.coreKeysReady;
-      const source = currentState && currentState.source;
-      const sourceLabel = currentState && currentState.sourceLabel;
+      const source = scalarField(currentState, "source");
+      const sourceLabel = scalarField(currentState, "sourceLabel");
       const sourceConfigured = Boolean(sourceLabel) || source === "local";
-      const progress = currentState && currentState.progress;
-      const hasLessons = Boolean(progress && progress.total && progress.total > 0);
+      const progress = objectValue(currentState && currentState.progress) || {};
+      const lessonCount = positiveInteger(progress.total);
+      const hasLessons = lessonCount > 0;
       const allDone = coreKeysReady && sourceConfigured && hasLessons;
       if (allDone) {
         panel.hidden = true;
@@ -663,7 +1036,7 @@
         ? { state: "done", title: "Source connected", hint: "Local prebuilt folder", action: "" }
         : { state: "active", title: "Pick local folder", hint: "Choose a folder containing prebuilt/", action: '<button class="primary" data-onboard="source">Choose folder</button>' };
       const lessonStep = hasLessons
-        ? { state: "done", title: "Lesson library ready", hint: progress.total + " lesson" + (progress.total === 1 ? "" : "s") + " in prebuilt/", action: "" }
+        ? { state: "done", title: "Lesson library ready", hint: lessonCount + " lesson" + (lessonCount === 1 ? "" : "s") + " in prebuilt/", action: "" }
         : { state: "active", title: "Create your first lesson", hint: "Writes a starter prebuilt/<today>/english-training.json", action: '<button class="primary" data-onboard="create-sample">Create sample</button>' };
       const keyStep = coreKeysReady
         ? { state: "done", title: routeKeys.label + " ready", hint: "Active route keys are saved", action: "" }
@@ -720,31 +1093,61 @@
     function renderSourceDiagnostics(diagnostics) {
       const panel = $("diagnostics");
       if (!panel) return;
-      const value = diagnostics || {};
-      const lessonText = (value.lessonCount || 0) + " lesson" + (value.lessonCount === 1 ? "" : "s")
-        + (value.dateRange ? " · " + value.dateRange : "");
+      const value = objectValue(diagnostics) || {};
+      const lessonCount = positiveInteger(value.lessonCount);
+      const dateRange = scalarField(value, "dateRange");
+      const lessonText = lessonCount + " lesson" + (lessonCount === 1 ? "" : "s")
+        + (dateRange ? " · " + dateRange : "");
       const rows = [
-        ["Mode", value.mode || "unknown"],
-        ["Materials root", value.root || ""],
-        ["Configured source", value.configuredRoot || ""],
+        ["Mode", scalarField(value, "mode") || "unknown"],
+        ["Materials root", scalarField(value, "root")],
+        ["Configured source", scalarField(value, "configuredRoot")],
         ["Lessons", lessonText],
-        ["Current package", value.currentPackageDate || ""],
-        ["Current JSON", value.currentJson || ""],
-        ["Package folder", value.packageDir || ""],
+        ["Current package", scalarField(value, "currentPackageDate")],
+        ["Current JSON", scalarField(value, "currentJson")],
+        ["Follow-up drill", scalarField(value, "followupDrillJson")],
+        ["Manifest", scalarField(value, "manifestJson")],
+        ["Progress JSON", scalarField(value, "progressJson")],
+        ["Package folder", scalarField(value, "packageDir")],
       ].filter((row) => row[1]);
-      const errorBanner = value.packageJsonError
-        ? `<div role="alert" style="margin:6px 0;padding:8px 10px;border-radius:4px;`
+      const diagnosticErrorBanner = (text) =>
+        `<div role="alert" style="margin:6px 0;padding:8px 10px;border-radius:4px;`
             + `background:var(--vscode-inputValidation-errorBackground,rgba(229,20,0,0.15));`
             + `border:1px solid var(--vscode-inputValidation-errorBorder,var(--vscode-errorForeground,#e51400));`
             + `color:var(--vscode-errorForeground,#e51400);font-size:12px;line-height:1.5;">`
-            + `⚠ This package's <code>english-training.json</code> failed to parse, so the lesson is empty. `
-            + `Fix the JSON syntax and press ↻ to reload.<br><strong>${esc(value.packageJsonError)}</strong></div>`
-        : "";
+            + text
+            + `</div>`;
+      const errorBanner = [
+        scalarField(value, "packageJsonError")
+          ? diagnosticErrorBanner(
+              `⚠ This package's <code>english-training.json</code> failed to parse, so the lesson is empty. `
+                + `Fix the JSON syntax and press ↻ to reload.<br><strong>${esc(scalarField(value, "packageJsonError"))}</strong>`,
+            )
+          : "",
+        scalarField(value, "drillJsonError")
+          ? diagnosticErrorBanner(
+              `⚠ This package's <code>followup-drill.json</code> failed to parse, so the drill workbench is using fallback lines. `
+                + `Fix the JSON syntax and press ↻ to reload.<br><strong>${esc(scalarField(value, "drillJsonError"))}</strong>`,
+            )
+          : "",
+        scalarField(value, "manifestJsonError")
+          ? diagnosticErrorBanner(
+              `⚠ This package's <code>manifest.json</code> failed to parse, so reading-card asset paths are using default package filenames. `
+                + `Fix the JSON syntax and press ↻ to reload.<br><strong>${esc(scalarField(value, "manifestJsonError"))}</strong>`,
+            )
+          : "",
+        scalarField(value, "progressJsonError")
+          ? diagnosticErrorBanner(
+              `⚠ Your <code>progress/english-speaking-training-progress.json</code> failed to parse, so progress may look incomplete. `
+                + `Fix the JSON syntax and press ↻ to reload.<br><strong>${esc(scalarField(value, "progressJsonError"))}</strong>`,
+            )
+          : "",
+      ].join("");
       panel.innerHTML = `
         <h3>Source Diagnostics</h3>
         ${errorBanner}
         <div class="chips">
-          <span class="chip">${esc(value.mode || "unknown")} source</span>
+          <span class="chip">${esc(scalarField(value, "mode") || "unknown")} source</span>
           <span class="chip">${esc(lessonText)}</span>
         </div>
         <div class="kv-list">
@@ -760,17 +1163,17 @@
     function renderLearnerProfile(profile) {
       const panel = $("learnerProfile");
       if (!panel) return;
-      const value = profile || {};
+      const value = objectValue(profile) || {};
       const loaded = Boolean(value.loaded);
       panel.innerHTML = `
         <h3>Learner Profile</h3>
         <div class="chips">
           <span class="chip">${loaded ? "Profile loaded" : "Profile missing"}</span>
-          <span class="chip">${esc(value.format || "missing")}</span>
+          <span class="chip">${esc(scalarField(value, "format") || "missing")}</span>
         </div>
         <div class="kv-list">
-          ${diagnosticRow("Source", value.source || "profile/learner-profile.md")}
-          ${value.summary ? diagnosticRow(loaded ? "Summary" : "Next step", value.summary) : ""}
+          ${diagnosticRow("Source", scalarField(value, "source") || "profile/learner-profile.md")}
+          ${scalarField(value, "summary") ? diagnosticRow(loaded ? "Summary" : "Next step", scalarField(value, "summary")) : ""}
         </div>
       `;
     }
@@ -787,25 +1190,33 @@
     function renderProgress(progress) {
       const panel = $("progress");
       if (!panel) return;
-      if (!progress || !Array.isArray(progress.cells) || progress.cells.length === 0) {
+      const value = objectValue(progress) || {};
+      const cells = Array.isArray(value.cells) ? value.cells.map((cell) => objectValue(cell)).filter(Boolean) : [];
+      if (!cells.length) {
         panel.hidden = true;
         panel.innerHTML = "";
         return;
       }
       panel.hidden = false;
-      const total = progress.total || progress.cells.length;
-      const dayLabel = progress.currentIndex
-        ? "Day " + progress.currentIndex + " / " + total
-        : (progress.completedCount || 0) + " / " + total + " completed";
-      const weekLabel = progress.weekIndex
-        ? "Week " + progress.weekIndex + " · " + (progress.weekCompletedDays || 0) + "/" + (progress.weekTotalDays || 7)
+      const total = positiveInteger(value.total) || cells.length;
+      const currentIndex = positiveInteger(value.currentIndex);
+      const completedCount = positiveInteger(value.completedCount);
+      const weekIndex = positiveInteger(value.weekIndex);
+      const weekCompletedDays = positiveInteger(value.weekCompletedDays);
+      const weekTotalDays = positiveInteger(value.weekTotalDays) || 7;
+      const streak = positiveInteger(value.streak);
+      const dayLabel = currentIndex
+        ? "Day " + currentIndex + " / " + total
+        : completedCount + " / " + total + " completed";
+      const weekLabel = weekIndex
+        ? "Week " + weekIndex + " · " + weekCompletedDays + "/" + weekTotalDays
         : "";
-      const streakLabel = progress.streak && progress.streak > 0
-        ? "🔥 " + progress.streak + "-day streak"
+      const streakLabel = streak
+        ? "🔥 " + streak + "-day streak"
         : "";
-      const cells = progress.cells.map((cell) => {
-        const status = cell && cell.status ? cell.status : "pending";
-        const date = cell && cell.date ? cell.date : "";
+      const cellHtml = cells.map((cell) => {
+        const status = progressCellStatus(cell);
+        const date = scalarField(cell, "date");
         return '<div class="heatmap-cell ' + esc(status) + '" title="' + esc(date) + ' · ' + esc(status) + '"></div>';
       }).join("");
       panel.innerHTML = `
@@ -814,7 +1225,7 @@
           ${weekLabel ? '<span class="progress-chip">' + esc(weekLabel) + '</span>' : ''}
           ${streakLabel ? '<span class="progress-chip streak">' + esc(streakLabel) + '</span>' : ''}
         </div>
-        <div class="heatmap" role="img" aria-label="${esc(dayLabel)}">${cells}</div>
+        <div class="heatmap" role="img" aria-label="${esc(dayLabel)}">${cellHtml}</div>
         <div class="heatmap-legend" aria-hidden="true">
           <span><i class="lg-completed"></i>done</span>
           <span><i class="lg-current"></i>today</span>
@@ -824,26 +1235,39 @@
       `;
     }
 
+    function progressCellStatus(cell) {
+      const status = scalarField(cell, "status").toLowerCase();
+      return ["completed", "current", "missed", "pending"].includes(status) ? status : "pending";
+    }
+
     function renderDayStrip(ctx) {
       const strip = $("dayStrip");
       if (!strip) return;
-      const progress = (ctx && ctx.progress) || null;
-      const next = (ctx && ctx.next) || {};
-      if (!progress || !Array.isArray(progress.cells) || progress.cells.length === 0) {
+      const progress = objectValue(ctx && ctx.progress) || {};
+      const next = objectValue(ctx && ctx.next) || {};
+      const cells = Array.isArray(progress.cells) ? progress.cells.map((cell) => objectValue(cell)).filter(Boolean) : [];
+      if (!cells.length) {
         strip.hidden = true;
         strip.innerHTML = "";
         return;
       }
-      const total = progress.total || progress.cells.length;
-      const dayLabel = progress.currentIndex
-        ? "Day " + progress.currentIndex + " / " + total
-        : (progress.completedCount || 0) + " / " + total + " done";
-      const weekLabel = progress.weekIndex
-        ? "Week " + progress.weekIndex + " · " + (progress.weekCompletedDays || 0) + "/" + (progress.weekTotalDays || 7)
+      const total = positiveInteger(progress.total) || cells.length;
+      const currentIndex = positiveInteger(progress.currentIndex);
+      const completedCount = positiveInteger(progress.completedCount);
+      const weekIndex = positiveInteger(progress.weekIndex);
+      const weekCompletedDays = positiveInteger(progress.weekCompletedDays);
+      const weekTotalDays = positiveInteger(progress.weekTotalDays) || 7;
+      const streak = positiveInteger(progress.streak);
+      const dayLabel = currentIndex
+        ? "Day " + currentIndex + " / " + total
+        : completedCount + " / " + total + " done";
+      const weekLabel = weekIndex
+        ? "Week " + weekIndex + " · " + weekCompletedDays + "/" + weekTotalDays
         : "";
-      const streakLabel = progress.streak && progress.streak > 0 ? "🔥 " + progress.streak : "";
+      const streakLabel = streak ? "🔥 " + streak : "";
+      const packageDate = scalarField(next, "package_date");
       const chips = [
-        next.package_date ? '<span class="ds-chip ds-date">' + esc(next.package_date) + "</span>" : "",
+        packageDate ? '<span class="ds-chip ds-date">' + esc(packageDate) + "</span>" : "",
         '<span class="ds-chip ds-primary">' + esc(dayLabel) + "</span>",
         weekLabel ? '<span class="ds-chip">' + esc(weekLabel) + "</span>" : "",
         streakLabel ? '<span class="ds-chip ds-streak">' + esc(streakLabel) + "</span>" : "",
@@ -855,28 +1279,33 @@
     function renderTodayHero(ctx) {
       const host = $("task");
       if (!host) return;
-      const next = ctx.next || {};
-      const training = ctx.training || {};
-      const settings = ctx.settings || {};
-      const assets = ctx.assets || {};
-      const line = ctx.todayAudioText || "";
-      const weekTag = ctx.weekTag || "";
-      const goal = training.goal || next.goal || next.completion_label || "Today's practice";
-      const scenario = training.scenario || next.scenario || "";
-      const setup = training.chinese_setup || next.chinese_setup || "";
+      const next = objectValue(ctx && ctx.next) || {};
+      const training = objectValue(ctx && ctx.training) || {};
+      const settings = objectValue(ctx && ctx.settings) || {};
+      const assets = objectValue(ctx && ctx.assets) || {};
+      const line = scalarText(ctx && ctx.todayAudioText);
+      const weekTag = scalarText(ctx && ctx.weekTag);
+      const packageDate = scalarField(next, "package_date");
+      const trainingType = firstScalarField(next, "training_type") || "practice";
+      const goal = firstScalarField(training, "goal") || firstScalarField(next, "goal", "completion_label") || "Today's practice";
+      const scenario = firstScalarField(training, "scenario") || firstScalarField(next, "scenario");
+      const setup = firstScalarField(training, "chinese_setup") || firstScalarField(next, "chinese_setup");
+      const ttsProvider = scalarField(settings, "ttsProvider") || "openai";
+      const practiceBlocked = !line || !isPracticeSetupReady(state);
+      const todayTtsBlocked = todayTtsBlockMessage(state, line);
       host.innerHTML = `
         <div class="today-head">
-          <span class="today-eyebrow">🎯 TODAY${next.package_date ? " · " + esc(next.package_date) : ""}${weekTag ? " · " + esc(weekTag) : ""}</span>
-          <span class="chip">${esc(next.training_type || "practice")}</span>
+          <span class="today-eyebrow">🎯 TODAY${packageDate ? " · " + esc(packageDate) : ""}${weekTag ? " · " + esc(weekTag) : ""}</span>
+          <span class="chip">${esc(trainingType)}</span>
         </div>
         <h2 class="today-goal">${esc(goal)}</h2>
         ${scenario ? '<p class="today-scenario">' + esc(scenario) + '</p>' : ''}
         ${setup ? '<p class="today-setup muted">' + esc(setup) + '</p>' : ''}
         ${prosodyLineBlockHtml(training, line)}
         <div class="today-actions">
-          <button data-hero-practice="1" ${line ? "" : "disabled"}>🎙 Practice this line</button>
-          <button class="secondary" data-action="today-tts" ${line ? "" : "disabled"}>🔊 Generate audio</button>
-          <span class="muted" id="todayTtsStatus">Reads example only, with ${esc(settings.ttsProvider || "openai")}</span>
+          <button data-hero-practice="1" ${practiceBlocked ? "disabled" : ""}>🎙 Practice this line</button>
+          <button class="secondary" data-action="today-tts" ${todayTtsBlocked ? "disabled" : ""}>🔊 Generate audio</button>
+          <span class="muted" id="todayTtsStatus">${todayTtsBlocked ? esc(todayTtsBlocked) : "Reads example only, with " + esc(ttsProvider)}</span>
         </div>
         <div class="today-audio">
           ${prebuiltDemoAudio(assets)}
@@ -891,7 +1320,7 @@
     }
 
     function normProsodyWord(value) {
-      return String(value || "").toLowerCase().replace(/[^a-z0-9']+/g, "");
+      return scalarText(value).toLowerCase().replace(/[^a-z0-9']+/g, "");
     }
 
     // A well-formed package splits a multi-sentence line into one thought group
@@ -907,25 +1336,25 @@
     // continuation by default) and is a no-op for correct multi-group packages.
     function expandDegenerateProsodyGroups(groups) {
       if (!Array.isArray(groups) || groups.length !== 1) return groups;
-      const only = groups[0] || {};
-      const parts = String(only.text || "").match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/g) || [];
+      const only = objectValue(groups[0]) || {};
+      const parts = scalarField(only, "text").match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/g) || [];
       const sentences = parts.map((s) => s.trim()).filter(Boolean);
       if (sentences.length < 2) return groups;
-      const baseId = only.id != null ? only.id : 1;
+      const baseId = scalarField(only, "id") || 1;
       return sentences.map((sentence, i) => {
         const isLast = i === sentences.length - 1;
         return {
           id: baseId, // keep the words[] → group lookup intact
           text: sentence,
-          nucleus: isLast ? only.nucleus : "",
-          contour: isLast ? (only.contour || "→") : "→",
-          pause_after: isLast ? (only.pause_after || "final") : "short",
+          nucleus: isLast ? scalarField(only, "nucleus") : "",
+          contour: isLast ? (scalarField(only, "contour") || "→") : "→",
+          pause_after: isLast ? (scalarField(only, "pause_after") || "final") : "short",
         };
       });
     }
 
     function contourClass(arrow) {
-      const a = String(arrow || "");
+      const a = scalarText(arrow);
       if (a.indexOf("↗") >= 0 || /ris/i.test(a)) return "rise";
       if (a.indexOf("↘") >= 0 || /fall/i.test(a)) return "fall";
       if (a.indexOf("↑") >= 0) return "rise";
@@ -941,7 +1370,7 @@
     }
 
     function pauseGlyph(pause) {
-      const p = String(pause || "").toLowerCase();
+      const p = scalarText(pause).toLowerCase();
       if (p.indexOf("final") >= 0) return "‖";
       if (p.indexOf("long") >= 0) return "‖";
       if (!p || p === "none") return "";
@@ -952,7 +1381,7 @@
     // Returns null when there is no usable multi-syllable split so the caller
     // falls back to the original whole-word rendering (old cards, monosyllables).
     function splitSyllableSpec(spec) {
-      const parts = String(spec || "").split("·").filter((s) => s.length);
+      const parts = scalarText(spec).split("·").filter((s) => s.length);
       if (parts.length < 2) return null;
       return parts.map((seg) => {
         const letters = seg.replace(/[^A-Za-z]/g, "");
@@ -964,11 +1393,15 @@
     function prosodyWordSpan(token, info, isNucleus, toneArrow) {
       const cls = isNucleus
         ? "nucleus"
-        : (info ? prosodyStressClass(String(info.stress || "").toLowerCase()) : "neutral");
-      const arrow = (isNucleus ? toneArrow : (info && info.arrow)) || "";
+        : (info ? prosodyStressClass(scalarField(info, "stress").toLowerCase()) : "neutral");
+      const arrow = isNucleus ? scalarText(toneArrow) : scalarField(info, "arrow");
       const arrowHtml = arrow ? '<sup class="pw-arrow ' + contourClass(arrow) + '">' + esc(contourGlyph(arrow)) + '</sup>' : '';
       const title = info
-        ? [info.stress ? "Stress: " + info.stress : "", info.pitch_role ? "Pitch: " + info.pitch_role : "", arrow ? "Tone: " + arrow : ""].filter(Boolean).join(" | ")
+        ? [
+          scalarField(info, "stress") ? "Stress: " + scalarField(info, "stress") : "",
+          scalarField(info, "pitch_role") ? "Pitch: " + scalarField(info, "pitch_role") : "",
+          arrow ? "Tone: " + arrow : "",
+        ].filter(Boolean).join(" | ")
         : (isNucleus ? "Nucleus" : "");
       const titleAttr = title ? ' title="' + esc(title) + '"' : '';
       const syllables = info && splitSyllableSpec(info.syllables);
@@ -989,25 +1422,27 @@
     function prosodyGroupLineHtml(groups, words) {
       const wordsByGroup = new Map();
       (Array.isArray(words) ? words : []).forEach((word) => {
-        const key = String(word && word.group != null ? word.group : "all");
+        const key = scalarField(word, "group") || "all";
         if (!wordsByGroup.has(key)) wordsByGroup.set(key, new Map());
-        const norm = normProsodyWord(word && word.text);
+        const norm = normProsodyWord(scalarField(word, "text"));
         if (norm) wordsByGroup.get(key).set(norm, word);
       });
       const segments = groups.map((group, index) => {
-        const id = String(group && group.id != null ? group.id : index + 1);
+        const id = scalarField(group, "id") || String(index + 1);
         const lookup = wordsByGroup.get(id) || wordsByGroup.get("all") || new Map();
-        const nucleusNorm = normProsodyWord(group && group.nucleus);
-        const tokens = String((group && group.text) || "").split(/\s+/).filter(Boolean);
+        const contour = scalarField(group, "contour");
+        const pauseAfter = scalarField(group, "pause_after");
+        const nucleusNorm = normProsodyWord(scalarField(group, "nucleus"));
+        const tokens = scalarField(group, "text").split(/\s+/).filter(Boolean);
         const wordHtml = tokens.map((token) => {
           const norm = normProsodyWord(token);
           const isNucleus = Boolean(norm) && norm === nucleusNorm;
-          return prosodyWordSpan(token, lookup.get(norm), isNucleus, group && group.contour);
+          return prosodyWordSpan(token, lookup.get(norm), isNucleus, contour);
         }).join(" ");
-        const pause = pauseGlyph(group && group.pause_after);
+        const pause = pauseGlyph(pauseAfter);
         const breakHtml = '<span class="pg-break">' +
-          '<b class="pg-tone ' + contourClass(group && group.contour) + '">' + esc(contourGlyph(group && group.contour)) + '</b>' +
-          (pause ? '<span class="pg-pause" title="Pause: ' + esc((group && group.pause_after) || "") + '">' + esc(pause) + '</span>' : '') +
+          '<b class="pg-tone ' + contourClass(contour) + '">' + esc(contourGlyph(contour)) + '</b>' +
+          (pause ? '<span class="pg-pause" title="Pause: ' + esc(pauseAfter) + '">' + esc(pause) + '</span>' : '') +
           '</span>';
         return '<span class="pg">' + wordHtml + '</span>' + (index < groups.length - 1 || pause ? breakHtml : '');
       }).join(" ");
@@ -1017,10 +1452,11 @@
     function prosodyContourRailHtml(groups) {
       if (!groups.length) return "";
       const tiles = groups.map((group, index) => {
-        const cls = contourClass(group && group.contour);
-        const nucleus = String((group && group.nucleus) || "").replace(/[.,;:!?]+$/, "");
+        const contour = scalarField(group, "contour");
+        const cls = contourClass(contour);
+        const nucleus = scalarField(group, "nucleus").replace(/[.,;:!?]+$/, "");
         return '<div class="contour-tile">' +
-          '<span class="ct-arrow ct-' + cls + '">' + esc(contourGlyph(group && group.contour)) + '</span>' +
+          '<span class="ct-arrow ct-' + cls + '">' + esc(contourGlyph(contour)) + '</span>' +
           '<span class="ct-nucleus">' + esc(nucleus || ("Grp " + (index + 1))) + '</span>' +
           '</div>';
       }).join("");
@@ -1028,9 +1464,10 @@
     }
 
     function prosodyGuideFallbackHtml(training, line) {
-      const stressGuide = String(training.stress_guide || "").trim();
-      const intonationGuide = String(training.intonation_guide || "").trim();
-      if (!stressGuide && !intonationGuide && !line) return "";
+      const stressGuide = scalarField(training, "stress_guide");
+      const intonationGuide = scalarField(training, "intonation_guide");
+      const lineText = scalarText(line);
+      if (!stressGuide && !intonationGuide && !lineText) return "";
       let lineHtml = "";
       if (stressGuide) {
         const tokens = stressGuide.split(/\s+/).filter(Boolean);
@@ -1039,8 +1476,8 @@
           const clean = raw.replace(/ˈ/g, "");
           return '<span class="pw pw-' + (stressed ? "support" : "neutral") + '">' + esc(clean) + '</span>';
         }).join(" ") + '</p>';
-      } else if (line) {
-        lineHtml = '<p class="prosody-line">' + esc(line) + '</p>';
+      } else if (lineText) {
+        lineHtml = '<p class="prosody-line">' + esc(lineText) + '</p>';
       }
       let rail = "";
       if (intonationGuide) {
@@ -1069,17 +1506,18 @@
     function prosodyLineBlockHtml(training, line) {
       const wl = (training && training.word_level_prosody) || null;
       const rawGroups = wl && Array.isArray(wl.groups) ? wl.groups : [];
-      const groups = expandDegenerateProsodyGroups(rawGroups);
-      const words = wl && Array.isArray(wl.words) ? wl.words : [];
+      const groups = expandDegenerateProsodyGroups(rawGroups.map((item) => objectValue(item)).filter(Boolean));
+      const words = wl && Array.isArray(wl.words) ? wl.words.map((item) => objectValue(item)).filter(Boolean) : [];
+      const lineText = scalarText(line);
       let body = "";
       if (groups.length) {
         body = prosodyGroupLineHtml(groups, words) + prosodyContourRailHtml(groups) + prosodyLegendHtml();
       } else {
-        const fallback = prosodyGuideFallbackHtml(training, line);
+        const fallback = prosodyGuideFallbackHtml(training, lineText);
         if (fallback) {
-          body = fallback + (training.stress_guide || training.intonation_guide ? prosodyLegendHtml() : "");
-        } else if (line) {
-          body = '<p class="prosody-line">' + esc(line) + '</p>';
+          body = fallback + (scalarField(training, "stress_guide") || scalarField(training, "intonation_guide") ? prosodyLegendHtml() : "");
+        } else if (lineText) {
+          body = '<p class="prosody-line">' + esc(lineText) + '</p>';
         }
       }
       if (!body) return "";
@@ -1087,7 +1525,7 @@
     }
 
     function prebuiltDemoAudio(assets) {
-      const uri = assets && assets.demo_audio_uri;
+      const uri = scalarField(assets, "demo_audio_uri");
       if (!uri) return "";
       return '<audio id="prebuiltDemoAudio" controls preload="metadata" src="' + esc(uri) + '"></audio>';
     }
@@ -1136,25 +1574,31 @@
     }
 
     function prosodyGuideBlock(label, value) {
-      const text = String(value || "").trim();
+      const text = scalarText(value);
       if (!text) return "";
       return '<div class="prosody-guide"><span class="label">' + esc(label) + '</span><p>' + esc(text) + '</p></div>';
     }
 
     function prosodyGroupsHtml(wordLevel) {
-      const groups = wordLevel && Array.isArray(wordLevel.groups) ? wordLevel.groups : [];
+      const groups = wordLevel && Array.isArray(wordLevel.groups)
+        ? wordLevel.groups.map((item) => objectValue(item)).filter(Boolean)
+        : [];
       if (!groups.length) return "";
       const items = groups.map((group, index) => {
-        const id = group && group.id != null ? group.id : index + 1;
+        const id = scalarField(group, "id") || String(index + 1);
+        const fn = scalarField(group, "function");
+        const nucleus = scalarField(group, "nucleus");
+        const contour = scalarField(group, "contour");
+        const pauseAfter = scalarField(group, "pause_after");
         const meta = [
-          group && group.function ? "Function: " + group.function : "",
-          group && group.nucleus ? "Nucleus: " + group.nucleus : "",
-          group && group.contour ? "Contour: " + group.contour : "",
-          group && group.pause_after ? "Pause: " + group.pause_after : "",
+          fn ? "Function: " + fn : "",
+          nucleus ? "Nucleus: " + nucleus : "",
+          contour ? "Contour: " + contour : "",
+          pauseAfter ? "Pause: " + pauseAfter : "",
         ].filter(Boolean).join(" | ");
         return '<div class="prosody-group">' +
           '<span class="prosody-row-label">Group ' + esc(id) + '</span>' +
-          '<span class="prosody-group-text">' + esc((group && group.text) || "") + '</span>' +
+          '<span class="prosody-group-text">' + esc(scalarField(group, "text")) + '</span>' +
           (meta ? '<span class="prosody-group-meta">' + esc(meta) + '</span>' : '') +
           '</div>';
       }).join("");
@@ -1162,20 +1606,24 @@
     }
 
     function prosodyWordsHtml(wordLevel) {
-      const words = wordLevel && Array.isArray(wordLevel.words) ? wordLevel.words : [];
+      const words = wordLevel && Array.isArray(wordLevel.words)
+        ? wordLevel.words.map((item) => objectValue(item)).filter(Boolean)
+        : [];
       if (!words.length) return "";
-      const groups = wordLevel && Array.isArray(wordLevel.groups) ? wordLevel.groups : [];
+      const groups = wordLevel && Array.isArray(wordLevel.groups)
+        ? wordLevel.groups.map((item) => objectValue(item)).filter(Boolean)
+        : [];
       const byGroup = new Map();
       const order = [];
       for (const group of groups) {
-        const key = String(group && group.id != null ? group.id : "");
+        const key = scalarField(group, "id");
         if (key && !byGroup.has(key)) {
           byGroup.set(key, []);
           order.push(key);
         }
       }
       for (const word of words) {
-        const key = String(word && word.group != null ? word.group : "all");
+        const key = scalarField(word, "group") || "all";
         if (!byGroup.has(key)) {
           byGroup.set(key, []);
           order.push(key);
@@ -1183,9 +1631,10 @@
         byGroup.get(key).push(word);
       }
       const rows = order.map((key) => {
-        const group = groups.find((item) => String(item && item.id) === key) || {};
+        const group = groups.find((item) => scalarField(item, "id") === key) || {};
         const label = key === "all" ? "Words" : "Group " + key;
-        const meta = group && group.contour ? " | Contour: " + group.contour : "";
+        const contour = scalarField(group, "contour");
+        const meta = contour ? " | Contour: " + contour : "";
         const chips = (byGroup.get(key) || []).map(prosodyWordChip).join("");
         return '<div class="prosody-word-row">' +
           '<span class="prosody-row-label">' + esc(label + meta) + '</span>' +
@@ -1196,16 +1645,16 @@
     }
 
     function prosodyWordChip(word) {
-      const stress = String((word && word.stress) || "").toLowerCase();
+      const stress = scalarField(word, "stress").toLowerCase();
       const cls = prosodyStressClass(stress);
       const mark = prosodyWordMark(word, cls);
       const title = [
-        word && word.stress ? "Stress: " + word.stress : "",
-        word && word.pitch_role ? "Pitch: " + word.pitch_role : "",
-        word && word.arrow ? "Arrow: " + word.arrow : "",
+        scalarField(word, "stress") ? "Stress: " + scalarField(word, "stress") : "",
+        scalarField(word, "pitch_role") ? "Pitch: " + scalarField(word, "pitch_role") : "",
+        scalarField(word, "arrow") ? "Arrow: " + scalarField(word, "arrow") : "",
       ].filter(Boolean).join(" | ");
       return '<span class="prosody-word ' + cls + '" title="' + esc(title) + '">' +
-        '<span>' + esc((word && word.text) || "") + '</span>' +
+        '<span>' + esc(scalarField(word, "text")) + '</span>' +
         '<span class="prosody-mark">' + esc(mark) + '</span>' +
         '</span>';
     }
@@ -1218,73 +1667,147 @@
     }
 
     function prosodyWordMark(word, cls) {
-      const arrow = String((word && word.arrow) || "").trim();
+      const arrow = scalarField(word, "arrow");
       if (cls === "nucleus") return arrow ? "N " + arrow : "N";
       if (cls === "support") return arrow ? "S " + arrow : "S";
       if (cls === "weak") return arrow ? "W " + arrow : "W";
-      return arrow || String((word && word.stress) || "").trim();
+      return arrow || scalarField(word, "stress");
     }
 
     function frames(value) {
-      if (!Array.isArray(value) || value.length === 0) return '<p class="muted">No frames.</p>';
-      return '<ol>' + value.map((item) => '<li>' + esc((item && item.text) || item) + '</li>').join("") + '</ol>';
+      const items = frameTextList(value);
+      if (!items.length) return '<p class="muted">No frames.</p>';
+      return '<ol>' + items.map((item) => '<li>' + esc(item) + '</li>').join("") + '</ol>';
+    }
+
+    function frameTextList(value) {
+      if (!Array.isArray(value)) return [];
+      return value.map((item) => {
+        const obj = objectValue(item);
+        const text = obj ? scalarField(obj, "text") : scalarText(item);
+        return text.replace(/\s+/g, " ").trim();
+      }).filter(Boolean);
     }
 
     function simpleList(value) {
-      if (!Array.isArray(value) || value.length === 0) return '<p class="muted">No items.</p>';
-      return '<ul>' + value.map((item) => '<li>' + esc(item) + '</li>').join("") + '</ul>';
+      const items = scalarTextList(value);
+      if (!items.length) return '<p class="muted">No items.</p>';
+      return '<ul>' + items.map((item) => '<li>' + esc(item) + '</li>').join("") + '</ul>';
+    }
+
+    function scalarTextList(value) {
+      if (!Array.isArray(value)) return [];
+      return value.map((item) => compactScalarText(item)).filter(Boolean);
     }
 
     function drillRounds(value) {
       if (!Array.isArray(value) || value.length === 0) return '<p class="muted">No drill rounds.</p>';
-      return value.map((round) => {
-        const examples = Array.isArray(round.examples) ? round.examples : [];
-        const roundLabel = round.label || round.id || "Round";
+      const html = value.map((round) => {
+        const obj = objectValue(round);
+        if (!obj) return "";
+        const examples = Array.isArray(obj.examples) ? obj.examples : [];
+        const roundLabel = scalarField(obj, "label") || scalarField(obj, "id") || "Round";
+        const baseFrame = compactScalarField(obj, "base_frame");
+        const exampleHtml = examples.map((item) => {
+          const example = objectValue(item);
+          const text = example ? compactScalarField(example, "text") : compactScalarText(item);
+          if (!text) return "";
+          const label = example
+            ? scalarField(example, "cue") || scalarField(example, "label") || roundLabel
+            : roundLabel;
+          return drillExampleHtml({ label, text, source: "prebuilt" }, {});
+        }).filter(Boolean).join("");
         return `
           <div class="field">
             <strong>${esc(roundLabel)}</strong>
-            ${round.base_frame ? '<p class="text">' + esc(round.base_frame) + '</p>' : ''}
-            ${examples.length ? '<ol class="drill-example-list">' + examples.map((item) => {
-              const text = typeof item === "string" ? item : (item.text || "");
-              const label = (typeof item === "object" && item ? (item.cue || item.label) : "") || roundLabel;
-              return drillExampleHtml({ label, text, source: "prebuilt" }, {});
-            }).join("") + '</ol>' : ''}
+            ${baseFrame ? '<p class="text">' + esc(baseFrame) + '</p>' : ''}
+            ${exampleHtml ? '<ol class="drill-example-list">' + exampleHtml + '</ol>' : ''}
           </div>
         `;
-      }).join("");
+      }).filter(Boolean).join("");
+      return html || '<p class="muted">No drill rounds.</p>';
     }
 
     function shadowing(value) {
-      const chunks = value && Array.isArray(value.chunks) ? value.chunks : [];
+      const obj = objectValue(value);
+      const chunks = obj && Array.isArray(obj.chunks) ? scalarTextList(obj.chunks) : [];
       if (!chunks.length) return '<p class="muted">No shadowing chunks.</p>';
-      return '<p class="muted">' + esc(value.instruction_zh || "Shadow each chunk twice.") + '</p><ol>' + chunks.map((item) => '<li>' + esc(item) + '</li>').join("") + '</ol>';
+      const instruction = scalarField(obj, "instruction_zh") || "Shadow each chunk twice.";
+      return '<p class="muted">' + esc(instruction) + '</p><ol>' + chunks.map((item) => '<li>' + esc(item) + '</li>').join("") + '</ol>';
     }
 
     function recentSessions(value) {
-      if (!Array.isArray(value) || value.length === 0) return '<p class="muted">No VS Code sessions yet.</p>';
-      return value.map((item) => `
+      const sessions = Array.isArray(value) ? value.map((item) => objectValue(item)).filter(Boolean) : [];
+      if (!sessions.length) return '<p class="muted">No VS Code sessions yet.</p>';
+      return sessions.map((item) => {
+        const label = scalarField(item, "package_date") || scalarField(item, "packageDate") || "session";
+        const createdAt = scalarField(item, "created_at") || scalarField(item, "createdAt");
+        const tags = scalarTextList(item.error_tags);
+        const text =
+          scalarField(item, "native_version") ||
+          scalarField(item, "nativeVersion") ||
+          scalarField(item, "progress_note");
+        return `
         <div class="field">
-          <strong>${esc(item.package_date || item.packageDate || "session")}</strong>
-          <span class="muted"> · ${esc(item.created_at || item.createdAt || "")}</span>
-          ${Array.isArray(item.error_tags) && item.error_tags.length ? '<div class="chips">' + item.error_tags.map((tag) => '<span class="chip">' + esc(tag) + '</span>').join("") + '</div>' : ''}
-          <p class="text">${esc(item.native_version || item.nativeVersion || item.progress_note || "")}</p>
+          <strong>${esc(label)}</strong>
+          <span class="muted"> · ${esc(createdAt)}</span>
+          ${tags.length ? '<div class="chips">' + tags.map((tag) => '<span class="chip">' + esc(tag) + '</span>').join("") + '</div>' : ''}
+          <p class="text">${esc(text)}</p>
         </div>
-      `).join("");
+      `;
+      }).join("");
     }
 
     function shortSourceLabel(value) {
-      const text = String(value || "");
+      const text = scalarText(value);
       return text.length > 46 ? text.slice(0, 21) + "..." + text.slice(-20) : text;
+    }
+
+    function compactStatusText(value, fallback) {
+      const text = scalarText(value) || fallback || "";
+      return text.length > 260 ? text.slice(0, 257) + "..." : text;
+    }
+
+    function messageText(value, fallback = "") {
+      const obj = objectValue(value);
+      return scalarText(value) || firstScalarField(obj, "message", "error", "detail") || fallback;
+    }
+
+    function messageErrorText(value, fallback = "Unknown error") {
+      return messageText(value, fallback);
     }
 
     function setStatus(text, tone) {
       const el = $("status");
-      el.textContent = text;
+      if (!el) return;
+      el.textContent = compactStatusText(
+        text,
+        tone === "busy" ? "Working..." : tone === "error" ? "Error." : "",
+      );
       el.classList.remove("busy", "error");
       if (tone === "busy") el.classList.add("busy");
       if (tone === "error") el.classList.add("error");
       // Errors must interrupt the screen reader; routine status stays polite.
       el.setAttribute("aria-live", tone === "error" ? "assertive" : "polite");
+    }
+
+    function playAudioOrPrompt(audio, fallbackStatus) {
+      if (!audio || typeof audio.play !== "function") return;
+      const playResult = audio.play();
+      if (playResult && typeof playResult.catch === "function") {
+        playResult.catch(() => {
+          setStatus(fallbackStatus || "Audio ready — press play.");
+        });
+      }
+    }
+
+    function clearTodayGeneratedAudio() {
+      const audio = $("todayAudio");
+      if (!audio) return;
+      try { audio.pause(); } catch (_) {}
+      audio.removeAttribute("src");
+      try { audio.load(); } catch (_) {}
+      audio.hidden = true;
     }
 
     // Recovery net: a hung coach/provider must never trap the user with a
@@ -1315,8 +1838,268 @@
       clearProcessingWatchdog();
       processingWatchdog = setTimeout(() => {
         processingWatchdog = null;
-        setStatus("Still working — this is taking longer than usual. Keep waiting, or press ↻ to reset.", "busy");
+        setStatus("Still working — this is taking longer than usual. Keep waiting; avoid refreshing until this turn finishes.", "busy");
       }, 100000);
+    }
+
+    function resetTransientActionBusyState(errorText) {
+      const todayButton = document.querySelector('[data-action="today-tts"]');
+      if (todayButton) {
+        todayButton.disabled = Boolean(todayTtsBlockMessage(state, currentExampleText));
+        delete todayButton.dataset.busy;
+      }
+      clearTransientAudioRequests();
+      restoreSlowReadButtons();
+      const wasGenerating = drillGenerating;
+      clearDrillLineWatchdog();
+      drillGenerating = false;
+      activeDrillLineRequest = null;
+      const drillButton = document.querySelector("[data-drill-generate]");
+      if (drillButton) {
+        drillButton.disabled = !isPracticeSetupReady(state);
+      }
+      if (wasGenerating) {
+        const drillStatus = $("drillGenStatus");
+        if (drillStatus) {
+          drillStatus.textContent = errorText ? "Generation stopped: " + errorText : "Generation stopped.";
+        }
+      }
+      resetRefreshBusyState();
+      resetSidebarCommandBusyState();
+    }
+
+    function clearTransientAudioRequests() {
+      activeTodayTtsRequest = null;
+      activeSlowReadRequest = null;
+      pendingSlowReadHost = null;
+    }
+
+    function beginTodayTtsRequest(button) {
+      if (activeTodayTtsRequest) {
+        setStatus("Example audio is still generating — wait for it to finish before starting another one.", "busy");
+        return 0;
+      }
+      if (activeSlowReadRequest) {
+        setStatus("Slow-read audio is still generating — wait for it to finish before generating example audio.", "busy");
+        return 0;
+      }
+      const requestId = ++todayTtsRequestSeq;
+      activeTodayTtsRequest = requestId;
+      button.disabled = true;
+      button.dataset.busy = "1";
+      applyTransientAudioBusyState();
+      return requestId;
+    }
+
+    function finishTodayTtsRequest(requestId) {
+      const expectedId = positiveInteger(requestId);
+      if (expectedId && activeTodayTtsRequest !== expectedId) {
+        return false;
+      }
+      activeTodayTtsRequest = null;
+      return true;
+    }
+
+    function armTodayTtsWatchdogs(requestId) {
+      setTimeout(() => {
+        if (activeTodayTtsRequest !== requestId) return;
+        const status = $("todayTtsStatus");
+        if (status) status.textContent = "Still generating example audio...";
+        setStatus("Still generating example audio — keep waiting.", "busy");
+      }, AUDIO_REQUEST_STILL_WORKING_MS);
+      setTimeout(() => {
+        if (activeTodayTtsRequest !== requestId) return;
+        finishTodayTtsRequest(requestId);
+        restoreSlowReadButtons();
+        const btn = document.querySelector('[data-action="today-tts"]');
+        if (btn) {
+          btn.disabled = Boolean(todayTtsBlockMessage(state, currentExampleText));
+          delete btn.dataset.busy;
+        }
+        const status = $("todayTtsStatus");
+        if (status) status.textContent = "Example audio took too long — press the audio button to try again.";
+        setStatus("Example audio took too long — press Generate audio to try again.", "error");
+      }, AUDIO_REQUEST_HARD_TIMEOUT_MS);
+    }
+
+    function beginSlowReadRequest(button, busyLabel, host) {
+      if (activeSlowReadRequest) {
+        setStatus("Audio is still generating — wait for it to finish before starting another listen.", "busy");
+        return 0;
+      }
+      if (activeTodayTtsRequest) {
+        setStatus("Example audio is still generating — wait for it to finish before starting another listen.", "busy");
+        return 0;
+      }
+      const requestId = ++slowReadRequestSeq;
+      activeSlowReadRequest = {
+        id: requestId,
+        host: host || null,
+        button: slowReadButtonDescriptor(button),
+        busyLabel,
+      };
+      pendingSlowReadHost = host || null;
+      button.disabled = true;
+      button.dataset.busy = "1";
+      button.textContent = busyLabel;
+      applyTransientAudioBusyState();
+      return requestId;
+    }
+
+    function finishSlowReadRequest(requestId) {
+      const expectedId = positiveInteger(requestId);
+      if (expectedId && activeSlowReadRequest && activeSlowReadRequest.id !== expectedId) {
+        return null;
+      }
+      if (expectedId && !activeSlowReadRequest) {
+        return null;
+      }
+      const request = activeSlowReadRequest;
+      activeSlowReadRequest = null;
+      pendingSlowReadHost = null;
+      return request;
+    }
+
+    function restoreSlowReadButtons() {
+      document.querySelectorAll('[data-slow-read]').forEach((btn) => {
+        delete btn.dataset.transientDisabled;
+        if (btn.dataset.busy === "1") delete btn.dataset.busy;
+        btn.textContent = slowReadIdleLabel(btn);
+        btn.disabled = Boolean(slowReadButtonBlockMessage(btn));
+      });
+      document.querySelectorAll('[data-drill-listen]').forEach((btn) => {
+        delete btn.dataset.transientDisabled;
+        if (btn.dataset.busy === "1") delete btn.dataset.busy;
+        btn.textContent = slowReadIdleLabel(btn);
+        btn.disabled = Boolean(slowReadButtonBlockMessage(btn));
+      });
+    }
+
+    function slowReadButtonDescriptor(button) {
+      if (!button) return null;
+      if (button.hasAttribute("data-drill-listen")) {
+        return {
+          kind: "drill",
+          index: datasetText(button, "drillIndex"),
+          text: datasetText(button, "drillText"),
+        };
+      }
+      return {
+        kind: "slow",
+        target: datasetText(button, "slowRead"),
+      };
+    }
+
+    function slowReadButtonMatches(button, descriptor) {
+      if (!button || !descriptor) return false;
+      if (descriptor.kind === "slow") {
+        return datasetText(button, "slowRead") === descriptor.target;
+      }
+      if (descriptor.kind !== "drill" || !button.hasAttribute("data-drill-listen")) return false;
+      const index = datasetText(button, "drillIndex");
+      const text = datasetText(button, "drillText");
+      if (descriptor.text) return text === descriptor.text;
+      return Boolean(descriptor.index) && index === descriptor.index;
+    }
+
+    function slowReadIdleLabel(button) {
+      if (button && button.hasAttribute("data-drill-listen")) return "Listen";
+      return datasetText(button, "slowRead") === "followUp" ? "🐢 Slow read" : "🐢 Slow";
+    }
+
+    function slowReadButtonBlockMessage(button) {
+      if (!button) return "";
+      if (button.hasAttribute("data-drill-listen")) {
+        const example = drillExampleFromTrigger(button);
+        return ttsActionBlockMessage(state, example && example.text, "listen to this line");
+      }
+      const target = datasetText(button, "slowRead");
+      const text = target === "followUp"
+        ? (lastTurn && lastTurn.followUpQuestion) || ""
+        : (lastTurn && lastTurn.nativeVersion) || "";
+      return ttsActionBlockMessage(state, text, target === "followUp" ? "slow-read the follow-up" : "slow-read the native version");
+    }
+
+    function applyTransientAudioBusyState() {
+      if (activeTodayTtsRequest) {
+        const button = document.querySelector('[data-action="today-tts"]');
+        if (button) {
+          button.disabled = true;
+          button.dataset.busy = "1";
+        }
+        document.querySelectorAll('[data-slow-read], [data-drill-listen]').forEach((btn) => {
+          btn.disabled = true;
+          btn.dataset.transientDisabled = "1";
+        });
+        const status = $("todayTtsStatus");
+        if (status && !/Still generating|took too long/i.test(status.textContent || "")) {
+          status.textContent = "Generating example audio...";
+        }
+      }
+      if (!activeSlowReadRequest) return;
+      const request = activeSlowReadRequest;
+      document.querySelectorAll('[data-slow-read], [data-drill-listen]').forEach((btn) => {
+        btn.disabled = true;
+        if (slowReadButtonMatches(btn, request.button)) {
+          btn.dataset.busy = "1";
+          delete btn.dataset.transientDisabled;
+          btn.textContent = request.busyLabel || "Generating...";
+        } else {
+          btn.dataset.transientDisabled = "1";
+        }
+      });
+    }
+
+    function armSlowReadWatchdogs(requestId, retryLabel) {
+      setTimeout(() => {
+        if (!activeSlowReadRequest || activeSlowReadRequest.id !== requestId) return;
+        setStatus("Still generating slow-read audio — keep waiting.", "busy");
+      }, AUDIO_REQUEST_STILL_WORKING_MS);
+      setTimeout(() => {
+        if (!activeSlowReadRequest || activeSlowReadRequest.id !== requestId) return;
+        finishSlowReadRequest(requestId);
+        restoreSlowReadButtons();
+        setStatus("Slow-read audio took too long — press " + (retryLabel || "Listen") + " to try again.", "error");
+      }, AUDIO_REQUEST_HARD_TIMEOUT_MS);
+    }
+
+    function beginDrillLineRequest() {
+      clearDrillLineWatchdog();
+      const requestId = ++drillLineRequestSeq;
+      activeDrillLineRequest = requestId;
+      drillGenerating = true;
+      return requestId;
+    }
+
+    function clearDrillLineWatchdog() {
+      if (drillLineWatchdog) {
+        clearTimeout(drillLineWatchdog);
+        drillLineWatchdog = null;
+      }
+    }
+
+    function armDrillLineWatchdog(requestId) {
+      clearDrillLineWatchdog();
+      drillLineWatchdog = setTimeout(() => {
+        drillLineWatchdog = null;
+        if (activeDrillLineRequest !== requestId || !drillGenerating) return;
+        finishDrillLineRequest(requestId);
+        renderDrillPanel();
+        const status = $("drillGenStatus");
+        if (status) status.textContent = "Generation took too long — press Generate to try again.";
+        setStatus("Drill generation took too long — try again.", "error");
+      }, 100000);
+    }
+
+    function finishDrillLineRequest(requestId) {
+      const expectedId = positiveInteger(requestId);
+      if (expectedId && activeDrillLineRequest !== expectedId) {
+        return false;
+      }
+      clearDrillLineWatchdog();
+      activeDrillLineRequest = null;
+      drillGenerating = false;
+      return true;
     }
 
     function setRecording(active) {
@@ -1342,7 +2125,8 @@
 
     function recorderBackend() {
       const settings = currentSettings();
-      return String(settings.recorderBackend || "macLocal");
+      const backend = String(settings.recorderBackend || "macLocal");
+      return backend === "macLocal" || backend === "webview" || backend === "auto" ? backend : "macLocal";
     }
 
     function blockedMicrophonePattern() {
@@ -1387,78 +2171,99 @@
 
     async function startRecording() {
       clearProcessingWatchdog();
+      clearLocalAudioSource();
       activeRecordingTarget = consumePracticeTarget();
-      if (recorderBackend() === "macLocal") {
+      const backend = recorderBackend();
+      if (backend === "macLocal") {
         startNativeRecording("Using Mac local microphone.");
         return;
       }
       if (!navigator.mediaDevices || !window.MediaRecorder) {
-        startNativeRecording("Webview recorder unavailable.");
-        return;
+        if (backend === "auto") {
+          startNativeRecording("Webview recorder unavailable.");
+          return;
+        }
+        throw new Error("Webview recorder unavailable. Switch recorder backend to Auto or macLocal to use the native recorder.");
       }
+      const fallbackToNative = backend === "auto";
+      if (fallbackToNative) {
+        setStatus("Preparing webview microphone…", "busy");
+      } else {
+        setStatus("Preparing microphone…", "busy");
+      }
+      const fallbackToNativeRecording = (error) => {
+        if (!fallbackToNative) throw error;
+        startNativeRecording((error && error.message) || String(error));
+      };
+      const resetWebviewCapture = () => {
+        if (stream) stream.getTracks().forEach((track) => track.stop());
+        stream = null;
+        mediaRecorder = null;
+        chunks = [];
+      };
       // getUserMedia + the permission prompt is an unbounded, browser-owned
       // wait with no other signal; without this the press opens a silent
       // multi-second window (the same opaque-press gap the native path closes
       // with its streamed preparing phases). Mirror that cue here so both
       // recorder backends give immediate, legible feedback on the press.
-      setStatus("Preparing microphone…", "busy");
       chunks = [];
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: await localAudioConstraints() });
+        const constraints = await localAudioConstraints();
+        if (fallbackToNative && (!constraints || !constraints.deviceId)) {
+          startNativeRecording("Webview recorder could not find a local microphone.");
+          return;
+        }
+        stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
         const preferred = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"].find((type) => MediaRecorder.isTypeSupported(type));
         mediaRecorder = preferred ? new MediaRecorder(stream, { mimeType: preferred }) : new MediaRecorder(stream);
-        mediaRecorder.ondataavailable = (event) => {
-          if (event.data && event.data.size > 0) chunks.push(event.data);
-        };
-        mediaRecorder.onstop = async () => {
-          try {
-            const stoppedRecorder = mediaRecorder;
-            const mimeType = (stoppedRecorder && stoppedRecorder.mimeType) || "audio/webm";
-            const blob = new Blob(chunks, { type: mimeType });
-            if (blob.size < 1000) {
-              throw new Error("Recording was empty. Please try again after the microphone indicator appears.");
-            }
-            setLocalAudioSource(URL.createObjectURL(blob), true);
-            setRecording(false);
-            setBusy(true, "Sending to coach…");
-            showStages(true);
-            const base64 = await blobToBase64(blob);
-            if (!base64) {
-              throw new Error("Recording could not be encoded for processing.");
-            }
-            const priorTurn = pendingReplyContext;
-            const practiceTarget = activeRecordingTarget;
-            vscode.postMessage({ type: "practiceAudio", mimeType, base64, priorTurn, practiceTarget });
-            armProcessingWatchdog();
-          } catch (error) {
-            setBusy(false);
-            setRecording(false);
-            showStages(false);
-            setStatus((error && error.message) || String(error), "error");
-          } finally {
-            stopVuMeter();
-            stopTimer();
-            if (stream) stream.getTracks().forEach((track) => track.stop());
-            stream = null;
-            mediaRecorder = null;
-            chunks = [];
-            recorderMode = null;
-            activeRecordingTarget = null;
-          }
-        };
-        recorderMode = "webview";
-        mediaRecorder.start();
-        setRecording(true);
-        setStatus("Listening… speak now.");
-        startVuMeter(stream);
-        startTimer();
       } catch (error) {
-        if (stream) stream.getTracks().forEach((track) => track.stop());
-        stream = null;
-        mediaRecorder = null;
-        chunks = [];
-        startNativeRecording((error && error.message) || String(error));
+        resetWebviewCapture();
+        fallbackToNativeRecording(error);
+        return;
       }
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) chunks.push(event.data);
+      };
+      mediaRecorder.onstop = async () => {
+        try {
+          const stoppedRecorder = mediaRecorder;
+          const mimeType = (stoppedRecorder && stoppedRecorder.mimeType) || "audio/webm";
+          const blob = new Blob(chunks, { type: mimeType });
+          if (blob.size < 1000) {
+            throw new Error("Recording was empty. Please try again after the microphone indicator appears.");
+          }
+          setLocalAudioSource(URL.createObjectURL(blob), true);
+          setRecording(false);
+          setBusy(true, "Sending to coach…");
+          showStages(true);
+          const base64 = await blobToBase64(blob);
+          if (!base64) {
+            throw new Error("Recording could not be encoded for processing.");
+          }
+          const priorTurn = pendingReplyContext;
+          const practiceTarget = activeRecordingTarget;
+          vscode.postMessage({ type: "practiceAudio", mimeType, base64, priorTurn, practiceTarget });
+          armProcessingWatchdog();
+        } catch (error) {
+          setBusy(false);
+          setRecording(false);
+          showStages(false);
+          clearPendingPracticeContexts(true);
+          setStatus((error && error.message) || String(error), "error");
+        } finally {
+          stopVuMeter();
+          stopTimer();
+          resetWebviewCapture();
+          recorderMode = null;
+          activeRecordingTarget = null;
+        }
+      };
+      recorderMode = "webview";
+      mediaRecorder.start();
+      setRecording(true);
+      setStatus("Listening… speak now.");
+      startVuMeter(stream);
+      startTimer();
     }
 
     function stopRecording() {
@@ -1489,12 +2294,168 @@
         stopRecording();
         return;
       }
+      if (blockIfTransientActionInProgress("recording")) return;
       // Block a second tap during the async getUserMedia/permission window so
       // we never open two microphone streams or fire two pipelines at once.
       recordTransition = true;
       startRecording()
-        .catch((error) => setStatus(error.message || String(error), "error"))
+        .catch(recoverStartRecordingFailure)
         .finally(() => { recordTransition = false; });
+    }
+
+    function practiceTurnInProgress() {
+      const recordButton = $("record");
+      const pipelineBusy = Boolean(recordButton && recordButton.classList.contains("busy"));
+      return Boolean(recordTransition || nativeStarting || processingWatchdog || pipelineBusy || isRecording());
+    }
+
+    function blockIfPracticeTurnInProgress(message) {
+      if (!practiceTurnInProgress()) return false;
+      setStatus(message, "busy");
+      return true;
+    }
+
+    function blockSetupChangeDuringPractice() {
+      if (blockIfPracticeTurnInProgress("Finish or stop the current turn before changing setup.")) return true;
+      return blockIfTransientActionInProgress("changing setup");
+    }
+
+    function blockPromptChangeDuringPractice() {
+      if (blockIfPracticeTurnInProgress("Finish or stop the current turn before choosing another practice prompt.")) return true;
+      return blockIfTransientActionInProgress("choosing another practice prompt");
+    }
+
+    function transientActionBlockMessage(actionLabel) {
+      const suffix = actionLabel ? " before " + actionLabel + "." : ".";
+      if (activeTodayTtsRequest) {
+        return "Example audio is still generating — wait for it to finish" + suffix;
+      }
+      if (activeSlowReadRequest) {
+        return "Slow-read audio is still generating — wait for it to finish" + suffix;
+      }
+      if (drillGenerating) {
+        return "Drill lines are still generating — wait for them to finish" + suffix;
+      }
+      if (refreshInFlight) {
+        return "Refresh is still loading — wait for it to finish" + suffix;
+      }
+      if (activeSidebarCommandRequest) {
+        return (activeSidebarCommandRequest.label || "A setup action") + " is still running — wait for it to finish" + suffix;
+      }
+      return "";
+    }
+
+    function blockIfTransientActionInProgress(actionLabel) {
+      const message = transientActionBlockMessage(actionLabel);
+      if (!message) return false;
+      setStatus(message, "busy");
+      return true;
+    }
+
+    function resetSidebarCommandBusyState() {
+      activeSidebarCommandRequest = null;
+      document.querySelectorAll('[data-command-busy="1"]').forEach((btn) => {
+        btn.disabled = false;
+        delete btn.dataset.commandBusy;
+      });
+    }
+
+    function sidebarCommandButtons() {
+      return document.querySelectorAll([
+        "#completeLocal",
+        "#configureMaterials",
+        "#openTask",
+        "#openFolder",
+        "#useOpenAIStack",
+        "#useGeminiOnly",
+        "[data-onboard]",
+        "[data-key]",
+        "[data-provider-setting]",
+        "[data-config-setting]",
+        "[data-sidebar-command]",
+        "[data-speed]",
+        "[data-voice-id]",
+      ].join(","));
+    }
+
+    function markSidebarCommandButton(button) {
+      if (!button || button.disabled) return;
+      button.disabled = true;
+      button.dataset.commandBusy = "1";
+    }
+
+    function applySidebarCommandBusyState() {
+      if (!activeSidebarCommandRequest) return;
+      sidebarCommandButtons().forEach(markSidebarCommandButton);
+      setStatus((activeSidebarCommandRequest.label || "Action") + "…", "busy");
+    }
+
+    function beginSidebarCommand(button, label) {
+      if (activeSidebarCommandRequest) {
+        setStatus((activeSidebarCommandRequest.label || "A setup action") + " is still running — wait for it to finish.", "busy");
+        return 0;
+      }
+      const requestId = ++sidebarCommandRequestSeq;
+      activeSidebarCommandRequest = { id: requestId, label };
+      markSidebarCommandButton(button);
+      applySidebarCommandBusyState();
+      return requestId;
+    }
+
+    function finishSidebarCommand(requestId) {
+      const expectedId = positiveInteger(requestId);
+      if (expectedId && (!activeSidebarCommandRequest || activeSidebarCommandRequest.id !== expectedId)) {
+        return false;
+      }
+      resetSidebarCommandBusyState();
+      return true;
+    }
+
+    function postSetupAction(payload, label, button) {
+      const requestId = beginSidebarCommand(button, label);
+      if (!requestId) return false;
+      vscode.postMessage({ ...payload, requestId });
+      return true;
+    }
+
+    function postSidebarCommand(command, label, button) {
+      return postSetupAction({ type: "command", command }, label, button);
+    }
+
+    function clearRefreshWatchdog() {
+      if (refreshWatchdog) {
+        clearTimeout(refreshWatchdog);
+        refreshWatchdog = null;
+      }
+    }
+
+    function resetRefreshBusyState() {
+      refreshInFlight = false;
+      clearRefreshWatchdog();
+      const button = $("refresh");
+      if (!button || button.dataset.refreshBusy !== "1") return;
+      button.disabled = false;
+      delete button.dataset.refreshBusy;
+    }
+
+    function beginRefreshRequest(button) {
+      if (refreshInFlight) {
+        setStatus("Refresh is still loading — wait for it to finish.", "busy");
+        return false;
+      }
+      refreshInFlight = true;
+      if (button) {
+        button.disabled = true;
+        button.dataset.refreshBusy = "1";
+      }
+      setStatus("Refreshing lesson state…", "busy");
+      clearRefreshWatchdog();
+      refreshWatchdog = setTimeout(() => {
+        if (!refreshInFlight) return;
+        resetRefreshBusyState();
+        setStatus("Refresh took too long — press ↻ to try again.", "error");
+      }, 15000);
+      return true;
     }
 
     function clearNativeStartWatchdog() {
@@ -1502,6 +2463,11 @@
         clearTimeout(nativeStartWatchdog);
         nativeStartWatchdog = null;
       }
+    }
+
+    function isCurrentNativeStartMessage(message) {
+      const requestId = positiveInteger(message && message.requestId);
+      return requestId > 0 && requestId === activeNativeStartRequestId;
     }
 
     // Tear down a live webview MediaRecorder + mic stream WITHOUT firing its
@@ -1524,8 +2490,25 @@
       chunks = [];
     }
 
+    function recoverStartRecordingFailure(error) {
+      clearProcessingWatchdog();
+      clearNativeStartWatchdog();
+      nativeStarting = false;
+      recorderMode = null;
+      abortWebviewRecorder();
+      setRecording(false);
+      stopVuMeter();
+      stopTimer();
+      setBusy(false);
+      clearPendingPracticeContexts(true);
+      showStages(false);
+      setStatus((error && error.message) || String(error), "error");
+    }
+
     function startNativeRecording(reason) {
       clearProcessingWatchdog();
+      const requestId = ++nativeStartRequestSeq;
+      activeNativeStartRequestId = requestId;
       recorderMode = "native";
       nativeStarting = true;
       setRecording(true);
@@ -1537,19 +2520,22 @@
       $("timer").textContent = "00:00";
       const practiceTarget = activeRecordingTarget || consumePracticeTarget();
       activeRecordingTarget = practiceTarget;
-      vscode.postMessage({ type: "startNativeRecording", practiceTarget });
+      const priorTurn = pendingReplyContext;
+      pendingReplyContext = null;
+      vscode.postMessage({ type: "startNativeRecording", practiceTarget, priorTurn, requestId });
       // Generous: host-side ffmpeg spawn + a ~900ms readiness probe; a healthy
       // start confirms well within this. If nothing comes back, unwind the
       // stuck state instead of leaving the user trapped.
       clearNativeStartWatchdog();
       nativeStartWatchdog = setTimeout(() => {
         nativeStartWatchdog = null;
-        if (!nativeStarting) return; // start already resolved — nothing to do
+        if (activeNativeStartRequestId !== requestId || !nativeStarting) return; // start already resolved or superseded
         nativeStarting = false;
         recorderMode = null;
         setRecording(false);
         stopTimer();
         setBusy(false);
+        clearPendingPracticeContexts(true);
         setStatus(
           "The Mac local recorder did not start. Check microphone permission and that ffmpeg is installed, then press record to try again.",
           "error",
@@ -1626,26 +2612,34 @@
 
     function pushDrillExample(list, item, fallbackLabel, source) {
       if (!item) return;
-      const text = typeof item === "string" ? item : (item.text || "");
-      const cleanText = String(text || "").replace(/\s+/g, " ").trim();
+      const obj = objectValue(item);
+      const cleanText = obj ? compactScalarField(obj, "text") : compactScalarText(item);
       if (!cleanText) return;
-      const label = typeof item === "object"
-        ? String(item.label || item.cue || item.id || fallbackLabel || "FSI drill").trim()
-        : String(fallbackLabel || "FSI drill");
-      const reason = typeof item === "object" ? String(item.reason || item.note || "").trim() : "";
-      list.push({ label, text: cleanText, reason, source: source || (item.source || "") });
+      const label = obj
+        ? scalarField(obj, "label") || scalarField(obj, "cue") || scalarField(obj, "id") || scalarText(fallbackLabel) || "FSI drill"
+        : scalarText(fallbackLabel) || "FSI drill";
+      const reason = obj ? scalarField(obj, "reason") || scalarField(obj, "note") : "";
+      list.push({ label, text: cleanText, reason, source: scalarText(source) || scalarField(obj, "source") });
     }
 
     function collectDrillExamples(result) {
       const list = [];
       if (Array.isArray(result && result.drillExamples)) {
-        result.drillExamples.forEach((item, idx) => pushDrillExample(list, item, item.label || "Coach drill " + (idx + 1), item.source || "coach"));
+        result.drillExamples.forEach((item, idx) => {
+          const obj = objectValue(item);
+          pushDrillExample(
+            list,
+            item,
+            scalarField(obj, "label") || "Coach drill " + (idx + 1),
+            scalarField(obj, "source") || "coach",
+          );
+        });
       }
-      const drill = (state && state.drill) || {};
-      const rounds = Array.isArray(drill.rounds) ? drill.rounds : [];
+      const drill = objectValue(state && state.drill) || {};
+      const rounds = Array.isArray(drill.rounds) ? drill.rounds.map((item) => objectValue(item)).filter(Boolean) : [];
       rounds.forEach((round) => {
-        const roundLabel = String((round && (round.label || round.id)) || "FSI drill");
-        const examples = Array.isArray(round && round.examples) ? round.examples : [];
+        const roundLabel = firstScalarField(round, "label", "id") || "FSI drill";
+        const examples = Array.isArray(round.examples) ? round.examples : [];
         examples.forEach((item) => pushDrillExample(list, item, roundLabel, "prebuilt"));
       });
       const chunks = drill && drill.shadowing_loop && Array.isArray(drill.shadowing_loop.chunks)
@@ -1669,11 +2663,11 @@
 
     function collectDrillLibrary() {
       const list = [];
-      const drill = (state && state.drill) || {};
-      const rounds = Array.isArray(drill.rounds) ? drill.rounds : [];
+      const drill = objectValue(state && state.drill) || {};
+      const rounds = Array.isArray(drill.rounds) ? drill.rounds.map((item) => objectValue(item)).filter(Boolean) : [];
       rounds.forEach((round) => {
-        const roundLabel = String((round && (round.label || round.id)) || "FSI drill");
-        const examples = Array.isArray(round && round.examples) ? round.examples : [];
+        const roundLabel = firstScalarField(round, "label", "id") || "FSI drill";
+        const examples = Array.isArray(round.examples) ? round.examples : [];
         examples.forEach((item) => pushDrillExample(list, item, roundLabel, "prebuilt"));
       });
       const chunks = drill && drill.shadowing_loop && Array.isArray(drill.shadowing_loop.chunks)
@@ -1720,24 +2714,27 @@
     function renderDrillPanel() {
       const host = $("drill");
       if (!host) return;
-      const drill = (state && state.drill) || {};
+      const drill = objectValue(state && state.drill) || {};
       // Same gate as the record button: generating lines calls the coach, so
       // before a key + lesson exist the button must not invite a click that
       // only fails after a round trip with a raw "Missing API key" error.
-      const gate = setupReady(state);
-      const generateDisabled = drillGenerating || !gate.ready;
-      const generateHint = !gate.ready
-        ? (!gate.coreKeysReady
-          ? "Add " + gate.routeKeys.missingLabel + " API key" + (gate.routeKeys.missing.length === 1 ? "" : "s") + " in Quick setup to generate lines"
-          : "Create your first lesson in Quick setup to generate lines")
+      const setupMessage = setupBlockMessage(state);
+      const listenBlockMessage = ttsActionBlockMessage(state, "sample", "listen to this line");
+      const generateDisabled = drillGenerating || Boolean(setupMessage);
+      const generateHint = setupMessage
+        ? setupMessage
         : (drillGenerating ? "Generating new lines…" : "Fresh FSI substitutions from your coach model");
       drillLibrary = collectDrillLibrary();
-      const tags = Array.isArray(drill.primary_tags) ? drill.primary_tags : [];
+      const tags = scalarTextList(drill.primary_tags);
+      const method = scalarField(drill, "method") || "FSI-style drill";
+      const requiredFrames = scalarField(drill, "required_frames");
       const items = drillLibrary.map((example, index) => drillExampleHtml(example, {
         persistent: true,
         attemptKey: drillAttemptKey(example.text),
         attempts: drillAttemptCount(example.text),
         libIndex: index,
+        practiceDisabled: Boolean(setupMessage),
+        listenDisabled: Boolean(listenBlockMessage),
       })).join("");
       const listHtml = drillLibrary.length
         ? '<ol class="drill-example-list">' + items + '</ol>'
@@ -1755,9 +2752,9 @@
           <span class="muted">${drillLibrary.length} line${drillLibrary.length === 1 ? "" : "s"} · practice as many times as you like</span>
         </div>
         <div class="chips">
-          <span class="chip">${esc(drill.method || "FSI-style drill")}</span>
+          <span class="chip">${esc(method)}</span>
           ${tags.map((tag) => '<span class="chip">' + esc(tag) + '</span>').join("")}
-          ${drill.required_frames ? '<span class="chip">use ' + esc(drill.required_frames) + ' frames</span>' : ''}
+          ${requiredFrames ? '<span class="chip">use ' + esc(requiredFrames) + ' frames</span>' : ''}
         </div>
         ${listHtml}
         <div class="loop-actions drill-generate-row">
@@ -1770,7 +2767,10 @@
 
     function drillChoiceHtml(examples) {
       if (!Array.isArray(examples) || !examples.length) return "";
-      const items = examples.map((example, index) => drillExampleHtml(example, { index })).join("");
+      const items = examples.map((example, index) => drillExampleHtml(example, {
+        index,
+        listenDisabled: Boolean(ttsActionBlockMessage(state, example && example.text, "listen to this line")),
+      })).join("");
       return '<div class="fsi-choice-card">' +
         '<div class="fsi-choice-head"><strong>FSI next lines</strong><span>choose practice or skip</span></div>' +
         '<ol class="drill-example-list">' + items + '</ol>' +
@@ -1785,6 +2785,8 @@
       const persistent = Boolean(opts.persistent);
       const attempts = Number(opts.attempts) || 0;
       const keyAttr = opts.attemptKey ? ' data-drill-attempt-key="' + esc(opts.attemptKey) + '"' : '';
+      const practiceDisabled = opts.practiceDisabled ? " disabled" : "";
+      const listenDisabled = opts.listenDisabled ? " disabled" : "";
       const badge = persistent
         ? '<span class="drill-attempt-badge" data-drill-attempt-badge="1"' + keyAttr + (attempts ? '' : ' hidden') + '>⟳ <span data-drill-attempt-count="1">' + esc(attempts) + '</span></span>'
         : '';
@@ -1797,21 +2799,21 @@
         '<p class="drill-example-text">' + esc(example.text || "") + '</p>' +
         (example.reason ? '<p class="drill-example-reason">' + esc(example.reason) + '</p>' : '') +
         '<div class="drill-example-actions">' +
-          '<button class="secondary" data-drill-listen="1"' + indexAttr + textAttr + '>Listen</button>' +
-          '<button data-drill-practice="1"' + indexAttr + textAttr + keyAttr + '>' + practiceLabel + '</button>' +
+          '<button class="secondary" data-drill-listen="1"' + indexAttr + textAttr + listenDisabled + '>Listen</button>' +
+          '<button data-drill-practice="1"' + indexAttr + textAttr + keyAttr + practiceDisabled + '>' + practiceLabel + '</button>' +
         '</div>' +
       '</li>';
     }
 
     function drillExampleFromTrigger(trigger) {
-      const idx = Number(trigger.dataset.drillIndex);
+      const idx = Number(datasetText(trigger, "drillIndex"));
       if (Number.isFinite(idx) && idx >= 0 && currentDrillSuggestions[idx]) {
         return currentDrillSuggestions[idx];
       }
-      const text = String(trigger.dataset.drillText || "").trim();
+      const text = compactScalarText(datasetText(trigger, "drillText"));
       if (!text) return null;
       return {
-        label: String(trigger.dataset.drillLabel || "FSI drill").trim(),
+        label: datasetText(trigger, "drillLabel") || "FSI drill",
         text,
       };
     }
@@ -1836,12 +2838,31 @@
         : "Ready — press the red button to record.");
     }
 
+    function ensurePracticeSetupReady() {
+      const message = setupBlockMessage(state);
+      if (!message) return true;
+      setStatus(message, "error");
+      return false;
+    }
+
+    function ensureTtsActionReady(text, actionLabel) {
+      const message = ttsActionBlockMessage(state, text, actionLabel);
+      if (!message) return true;
+      setStatus(message, "error");
+      return false;
+    }
+
     function startDrillPractice(example) {
-      if (!example || !String(example.text || "").trim()) return;
+      const text = compactScalarText(example && example.text);
+      if (!text) return false;
+      if (blockPromptChangeDuringPractice()) return false;
+      if (!ensurePracticeSetupReady()) return false;
+      const label = scalarField(example, "label") || "FSI drill";
       pendingReplyContext = null;
-      pendingPracticeTarget = practiceTarget(example.text, example.label || "FSI drill", "");
+      pendingPracticeTarget = practiceTarget(text, label, "");
       vscode.postMessage({ type: "clearReplyContext" });
-      cueRecording(example.label || "this line");
+      cueRecording(label);
+      return true;
     }
 
     function followUpCardHtml(result, followUpAudioSrc) {
@@ -1849,12 +2870,13 @@
       const audioTag = followUpAudioSrc
         ? '<audio id="followUpAudio" controls preload="auto" src="' + esc(followUpAudioSrc) + '"></audio>'
         : '';
+      const slowDisabled = ttsActionBlockMessage(state, result.followUpQuestion, "slow-read the follow-up") ? " disabled" : "";
       return '<div class="follow-up-card">' +
         '<span class="follow-up-label">Coach asks</span>' +
         '<p class="follow-up-text">' + esc(result.followUpQuestion) + '</p>' +
         audioTag +
         '<div class="loop-actions">' +
-          '<button type="button" class="slow-read-btn" data-slow-read="followUp" title="Re-read at 0.7×">🐢 Slow read</button>' +
+          '<button type="button" class="slow-read-btn" data-slow-read="followUp" title="Re-read at 0.7×"' + slowDisabled + '>🐢 Slow read</button>' +
           '<button type="button" id="answerFollowUpBtn" data-loop-action="reply">Answer follow-up →</button>' +
         '</div>' +
       '</div>';
@@ -1863,6 +2885,20 @@
     let lastTurn = null;
     let pendingReplyContext = null;
     let turnHistory = [];
+
+    function pruneTurnHistory() {
+      while (turnHistory.length > MAX_TURN_HISTORY) {
+        const dropped = turnHistory.shift();
+        const audioUrl = dropped && dropped.userAudioUri;
+        if (audioUrl && turnAudioObjectUrls.has(audioUrl)) {
+          URL.revokeObjectURL(audioUrl);
+          turnAudioObjectUrls.delete(audioUrl);
+        }
+      }
+      turnHistory.forEach((turn, index) => {
+        turn.turnIndex = index + 1;
+      });
+    }
 
     function turnBreadcrumbHtml() {
       const total = turnHistory.length;
@@ -1880,6 +2916,7 @@
     function renderTurnHistory() {
       const panel = $("turnHistory");
       if (!panel) return;
+      clearTurnResetArmTimer();
       if (turnHistory.length <= 1) {
         panel.hidden = true;
         panel.innerHTML = "";
@@ -1913,8 +2950,17 @@
       const reset = $("resetTurns");
       if (reset) {
         let resetArmed = false;
-        let resetArmTimer = null;
         reset.addEventListener("click", () => {
+          if (
+            blockIfPracticeTurnInProgress("Finish or stop the current turn before resetting the conversation.") ||
+            blockIfTransientActionInProgress("resetting the conversation")
+          ) {
+            clearTurnResetArmTimer();
+            resetArmed = false;
+            reset.textContent = "Reset";
+            reset.setAttribute("title", "Start a new conversation");
+            return;
+          }
           // A multi-turn conversation is real practice work; one stray click on
           // a ghost button must not wipe it silently. Require a confirm click,
           // auto-disarming after a few seconds.
@@ -1922,18 +2968,23 @@
             resetArmed = true;
             reset.textContent = "Reset? click again";
             reset.setAttribute("title", "Click again to clear this conversation");
-            resetArmTimer = setTimeout(() => {
+            turnResetArmTimer = setTimeout(() => {
+              turnResetArmTimer = null;
+              if (!reset.isConnected) return;
               resetArmed = false;
               reset.textContent = "Reset";
               reset.setAttribute("title", "Start a new conversation");
             }, 4000);
             return;
           }
-          if (resetArmTimer) clearTimeout(resetArmTimer);
+          clearTurnResetArmTimer();
+          clearTurnAudioObjectUrls();
           turnHistory = [];
           lastTurn = null;
-          pendingReplyContext = null;
-          vscode.postMessage({ type: "clearReplyContext" });
+          clearPendingPracticeContexts(true);
+          resetTransientActionBusyState("");
+          clearLocalAudioSource();
+          removeSlowReadAudioPlayer();
           renderTurnHistory();
           $("result").hidden = true;
           setStatus("New conversation. Tap to speak.");
@@ -1942,13 +2993,17 @@
     }
 
 	    function renderResult(result) {
-	      const diff = wordDiff(result.transcript, result.nativeVersion);
+      removeSlowReadAudioPlayer();
+		      const diff = wordDiff(result.transcript, result.nativeVersion);
 	      const userAudioSrc = (result && result.localAudioUri) || ($("localAudio").src || "");
 	      const nativeAudioSrc = (result && result.audioUri) || "";
 	      const followUpAudioSrc = (result && result.followUpAudioUri) || "";
 	      const isShadow = result && result.mode === "shadow";
 	      const nativeLabel = isShadow ? (result.referenceLabel || "Reference") : "Native says";
 	      const heading = isShadow ? "Shadowing check" : "Coaching";
+	      const nativeSlowDisabled = ttsActionBlockMessage(state, result && result.nativeVersion, "slow-read the native version")
+	        ? " disabled"
+	        : "";
       currentDrillSuggestions = collectDrillExamples(result || {});
       const tagsHtml = Array.isArray(result.errorTags) && result.errorTags.length
         ? '<div class="chips">' + result.errorTags.map((tag) => '<span class="chip">' + esc(tag) + '</span>').join("") + '</div>'
@@ -1978,7 +3033,7 @@
           </div>
           <div class="ab-side">
             <span class="ab-label muted">Native audio
-              ${result.nativeVersion ? '<button type="button" class="slow-read-btn" data-slow-read="native" title="Re-read at 0.7×">🐢 Slow</button>' : ''}
+              ${result.nativeVersion ? '<button type="button" class="slow-read-btn" data-slow-read="native" title="Re-read at 0.7×"' + nativeSlowDisabled + '>🐢 Slow</button>' : ''}
             </span>
             ${nativeAudioSrc ? '<audio id="nativeAudio" controls src="' + esc(nativeAudioSrc) + '"></audio>' : '<span class="muted">—</span>'}
           </div>
@@ -2010,10 +3065,15 @@
     }
 
     $("record").addEventListener("click", toggleRecording);
-    $("refresh").addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
+    $("refresh").addEventListener("click", () => {
+      if (blockIfPracticeTurnInProgress("Current turn is still running — wait for it to finish before refreshing.")) return;
+      if (blockIfTransientActionInProgress("refreshing")) return;
+      if (!beginRefreshRequest($("refresh"))) return;
+      vscode.postMessage({ type: "refresh" });
+    });
     function focusTurnChip(trigger) {
-      const idx = Number(trigger.dataset.turnIndex);
-      if (!Number.isFinite(idx) || idx <= 0) return false;
+      const idx = positiveInteger(datasetText(trigger, "turnIndex"));
+      if (!idx) return false;
       const targetItem = document.querySelector('[data-turn-item="' + idx + '"]');
       if (targetItem && typeof targetItem.scrollIntoView === "function") {
         targetItem.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -2042,26 +3102,21 @@
       }
       const drillListenTrigger = event.target.closest && event.target.closest("[data-drill-listen]");
       if (drillListenTrigger) {
+        if (blockIfPracticeTurnInProgress("Finish or stop the current turn before listening to another line.")) return;
+        if (blockIfTransientActionInProgress("listening to another line")) return;
         const example = drillExampleFromTrigger(drillListenTrigger);
-        if (!example || !String(example.text || "").trim()) return;
-        pendingSlowReadHost = drillListenTrigger.closest(".drill-example");
-        drillListenTrigger.disabled = true;
-        drillListenTrigger.dataset.busy = "1";
-        drillListenTrigger.textContent = "Listening…";
-        vscode.postMessage({ type: "slowRead", text: example.text, target: "drill", speed: 0.85 });
-        const listenBtn = drillListenTrigger;
-        setTimeout(() => {
-          if (listenBtn && listenBtn.dataset.busy === "1") {
-            listenBtn.disabled = false;
-            delete listenBtn.dataset.busy;
-            listenBtn.textContent = "Listen";
-          }
-        }, 20000);
+        const exampleText = compactScalarText(example && example.text);
+        if (!exampleText) return;
+        if (!ensureTtsActionReady(exampleText, "listen to this line")) return;
+        const requestId = beginSlowReadRequest(drillListenTrigger, "Listening…", drillListenTrigger.closest(".drill-example"));
+        if (!requestId) return;
+        vscode.postMessage({ type: "slowRead", text: exampleText, target: "drill", speed: 0.85, requestId });
+        armSlowReadWatchdogs(requestId, "Listen");
         return;
       }
       const heroPracticeTrigger = event.target.closest && event.target.closest("[data-hero-practice]");
       if (heroPracticeTrigger) {
-        const text = String(currentExampleText || "").trim();
+        const text = compactScalarText(currentExampleText);
         if (!text) {
           setStatus("No example line to practice yet.", "error");
           return;
@@ -2072,27 +3127,31 @@
       const drillPracticeTrigger = event.target.closest && event.target.closest("[data-drill-practice]");
       if (drillPracticeTrigger) {
         const example = drillExampleFromTrigger(drillPracticeTrigger);
-        if (drillPracticeTrigger.dataset.drillAttemptKey && example && example.text) {
+        if (!startDrillPractice(example)) return;
+        const attemptKey = datasetText(drillPracticeTrigger, "drillAttemptKey");
+        if (attemptKey && example && example.text) {
           const count = bumpDrillAttempt(example.text);
-          updateDrillAttemptBadge(drillPracticeTrigger.dataset.drillAttemptKey, count);
+          updateDrillAttemptBadge(attemptKey, count);
           drillPracticeTrigger.textContent = "Practice again";
         }
-        startDrillPractice(example);
         return;
       }
       const drillGenerateTrigger = event.target.closest && event.target.closest("[data-drill-generate]");
       if (drillGenerateTrigger) {
-        if (drillGenerating) return;
+        if (blockIfPracticeTurnInProgress("Finish or stop the current turn before generating new drill lines.")) return;
+        if (blockIfTransientActionInProgress("generating new drill lines")) return;
         // Defense in depth: the button is rendered disabled before setup, but
         // never let a stray click run the coach into a guaranteed key error.
-        if (!setupReady(state).ready) return;
-        const count = Number(drillGenerateTrigger.dataset.drillGenerate) || 5;
-        drillGenerating = true;
+        if (!ensurePracticeSetupReady()) return;
+        const count = positiveInteger(datasetText(drillGenerateTrigger, "drillGenerate")) || 5;
+        const requestId = beginDrillLineRequest();
         drillGenerateTrigger.disabled = true;
         const status = $("drillGenStatus");
         if (status) status.textContent = "Generating new lines…";
+        setStatus("Generating new drill lines…", "busy");
         const existing = drillLibrary.map((item) => item.text);
-        vscode.postMessage({ type: "generateDrillLines", count, existing });
+        vscode.postMessage({ type: "generateDrillLines", count, existing, requestId });
+        armDrillLineWatchdog(requestId);
         return;
       }
       const drillSkipTrigger = event.target.closest && event.target.closest("[data-drill-skip]");
@@ -2105,46 +3164,48 @@
       }
       const slowTrigger = event.target.closest && event.target.closest("[data-slow-read]");
       if (slowTrigger) {
-        const target = slowTrigger.dataset.slowRead;
+        if (blockIfPracticeTurnInProgress("Finish or stop the current turn before generating slow-read audio.")) return;
+        if (blockIfTransientActionInProgress("generating slow-read audio")) return;
+        const target = datasetText(slowTrigger, "slowRead");
         const text = target === "followUp"
-          ? (lastTurn && lastTurn.followUpQuestion) || ""
-          : (lastTurn && lastTurn.nativeVersion) || "";
-        if (!text.trim()) return;
-        slowTrigger.disabled = true;
-        slowTrigger.dataset.busy = "1";
-        slowTrigger.textContent = "🐢 …";
-        vscode.postMessage({ type: "slowRead", text, target, speed: 0.7 });
-        const slowBtn = slowTrigger;
-        setTimeout(() => {
-          if (slowBtn && slowBtn.dataset.busy === "1") {
-            slowBtn.disabled = false;
-            delete slowBtn.dataset.busy;
-            slowBtn.textContent = slowBtn.dataset.slowRead === "followUp" ? "🐢 Slow read" : "🐢 Slow";
-          }
-        }, 20000);
+          ? compactScalarText(lastTurn && lastTurn.followUpQuestion)
+          : compactScalarText(lastTurn && lastTurn.nativeVersion);
+        if (!text) return;
+        if (!ensureTtsActionReady(text, target === "followUp" ? "slow-read the follow-up" : "slow-read the native version")) return;
+        const requestId = beginSlowReadRequest(slowTrigger, "🐢 …", null);
+        if (!requestId) return;
+        vscode.postMessage({ type: "slowRead", text, target, speed: 0.7, requestId });
+        armSlowReadWatchdogs(requestId, "Slow");
         return;
       }
       const trigger = event.target.closest && event.target.closest("[data-loop-action]");
       if (!trigger) return;
-      const action = trigger.dataset.loopAction;
+      const action = datasetText(trigger, "loopAction");
       if (action !== "imitate" && action !== "reply") return;
-      const imitateLabel = lastTurn && lastTurn.mode === "shadow"
-        ? (lastTurn.referenceLabel || "the reference line")
+      if (blockPromptChangeDuringPractice()) return;
+      if (!ensurePracticeSetupReady()) return;
+      const lastNativeVersion = compactScalarText(lastTurn && lastTurn.nativeVersion);
+      const lastFollowUpQuestion = compactScalarText(lastTurn && lastTurn.followUpQuestion);
+      const lastTranscript = compactScalarText(lastTurn && lastTurn.transcript);
+      const lastMode = scalarField(lastTurn, "mode");
+      const lastReferenceLabel = scalarField(lastTurn, "referenceLabel");
+      const imitateLabel = lastMode === "shadow"
+        ? (lastReferenceLabel || "the reference line")
         : "the native version";
-      if (action === "reply" && lastTurn && lastTurn.followUpQuestion) {
+      if (action === "reply" && lastFollowUpQuestion) {
         pendingReplyContext = {
-          nativeVersion: lastTurn.nativeVersion || "",
-          followUpQuestion: lastTurn.followUpQuestion || "",
-          userTranscript: lastTurn.transcript || "",
+          nativeVersion: lastNativeVersion,
+          followUpQuestion: lastFollowUpQuestion,
+          userTranscript: lastTranscript,
         };
         pendingPracticeTarget = null;
         vscode.postMessage({ type: "setReplyContext", priorTurn: pendingReplyContext });
-      } else if (action === "imitate" && lastTurn && lastTurn.nativeVersion) {
+      } else if (action === "imitate" && lastNativeVersion) {
         pendingReplyContext = null;
         pendingPracticeTarget = practiceTarget(
-          lastTurn.nativeVersion,
-          lastTurn.mode === "shadow" ? (lastTurn.referenceLabel || "Reference") : "Native version",
-          lastTurn.followUpQuestion || "",
+          lastNativeVersion,
+          lastMode === "shadow" ? (lastReferenceLabel || "Reference") : "Native version",
+          lastFollowUpQuestion,
         );
         vscode.postMessage({ type: "clearReplyContext" });
       } else {
@@ -2156,81 +3217,139 @@
     });
     document.addEventListener("click", (event) => {
       const actionTrigger = event.target.closest && event.target.closest("[data-action]");
-      if (actionTrigger && actionTrigger.dataset.action === "today-tts") {
+      if (actionTrigger && datasetText(actionTrigger, "action") === "today-tts") {
+        if (blockIfPracticeTurnInProgress("Finish or stop the current turn before generating example audio.")) return;
+        if (blockIfTransientActionInProgress("generating example audio")) return;
         const status = $("todayTtsStatus");
+        const blockMessage = todayTtsBlockMessage(state, currentExampleText);
+        if (blockMessage) {
+          if (status) status.textContent = blockMessage;
+          setStatus(blockMessage, "error");
+          return;
+        }
         if (status) status.textContent = "Generating example…";
-        actionTrigger.disabled = true;
-        actionTrigger.dataset.busy = "1";
-        vscode.postMessage({ type: "todayTts" });
-        // Self-heal: if a TTS provider hangs without ever returning a result
-        // or error, don't leave this button dead with no way back.
-        const ttsBtn = actionTrigger;
-        setTimeout(() => {
-          if (ttsBtn && ttsBtn.dataset.busy === "1") {
-            ttsBtn.disabled = false;
-            delete ttsBtn.dataset.busy;
-            const s = $("todayTtsStatus");
-            if (s) s.textContent = "Example audio took too long — press 🔊 to try again.";
-          }
-        }, 25000);
+        const requestId = beginTodayTtsRequest(actionTrigger);
+        if (!requestId) return;
+        clearTodayGeneratedAudio();
+        setStatus("Generating example audio…", "busy");
+        vscode.postMessage({ type: "todayTts", requestId });
+        armTodayTtsWatchdogs(requestId);
         return;
       }
       const geminiTrigger = event.target.closest && event.target.closest("#useGeminiOnly");
       if (geminiTrigger) {
-        vscode.postMessage({ type: "useGeminiOnly" });
+        if (blockSetupChangeDuringPractice()) return;
+        postSetupAction({ type: "useGeminiOnly" }, "Switching to Gemini route", geminiTrigger);
         return;
       }
       const openAIStackTrigger = event.target.closest && event.target.closest("#useOpenAIStack");
       if (openAIStackTrigger) {
-        vscode.postMessage({ type: "useOpenAIStack" });
+        if (blockSetupChangeDuringPractice()) return;
+        postSetupAction({ type: "useOpenAIStack" }, "Switching to OpenAI stack", openAIStackTrigger);
         return;
       }
       const keyTrigger = event.target.closest && event.target.closest("[data-key]");
       if (keyTrigger) {
-        vscode.postMessage({ type: "configureKey", provider: keyTrigger.dataset.key });
+        if (blockSetupChangeDuringPractice()) return;
+        const provider = datasetText(keyTrigger, "key");
+        if (!provider) return;
+        postSetupAction({ type: "configureKey", provider }, "Configuring API key", keyTrigger);
         return;
       }
       const providerTrigger = event.target.closest && event.target.closest("[data-provider-setting]");
       if (providerTrigger) {
-        vscode.postMessage({
+        if (blockSetupChangeDuringPractice()) return;
+        const setting = datasetText(providerTrigger, "providerSetting");
+        const value = datasetText(providerTrigger, "providerValue");
+        if (!setting || !value) return;
+        postSetupAction({
           type: "setProvider",
-          setting: providerTrigger.dataset.providerSetting,
-          value: providerTrigger.dataset.providerValue,
-        });
+          setting,
+          value,
+        }, "Switching provider", providerTrigger);
         return;
       }
       const configTrigger = event.target.closest && event.target.closest("[data-config-setting]");
       if (configTrigger) {
-        vscode.postMessage({ type: "configureSetting", setting: configTrigger.dataset.configSetting });
+        if (blockSetupChangeDuringPractice()) return;
+        const setting = datasetText(configTrigger, "configSetting");
+        if (!setting) return;
+        postSetupAction({ type: "configureSetting", setting }, "Configuring setting", configTrigger);
+        return;
+      }
+      const sidebarCommandTrigger = event.target.closest && event.target.closest("[data-sidebar-command]");
+      if (sidebarCommandTrigger) {
+        if (blockSetupChangeDuringPractice()) return;
+        const command = datasetText(sidebarCommandTrigger, "sidebarCommand");
+        if (!command) return;
+        const label = command === "selectMicrophone" ? "Choosing microphone" : "Running action";
+        postSidebarCommand(command, label, sidebarCommandTrigger);
         return;
       }
       const trigger = event.target.closest && event.target.closest("[data-onboard]");
       if (!trigger) return;
-      const action = trigger.dataset.onboard;
+      const action = datasetText(trigger, "onboard");
       if (action === "source") {
-        vscode.postMessage({ type: "command", command: "configureMaterials" });
+        if (blockSetupChangeDuringPractice()) return;
+        postSidebarCommand("configureMaterials", "Choosing materials folder", trigger);
       } else if (action === "provider-key") {
-        vscode.postMessage({ type: "command", command: "setupProviderKey" });
+        if (blockSetupChangeDuringPractice()) return;
+        postSidebarCommand("setupProviderKey", "Configuring provider keys", trigger);
       } else if (action === "create-sample") {
-        vscode.postMessage({ type: "command", command: "createSamplePackage" });
+        if (blockSetupChangeDuringPractice()) return;
+        postSidebarCommand("createSamplePackage", "Creating sample package", trigger);
       } else if (action === "generate-next") {
-        vscode.postMessage({ type: "command", command: "generateNextPackage" });
+        if (blockSetupChangeDuringPractice()) return;
+        postSidebarCommand("generateNextPackage", "Generating next package", trigger);
       } else if (action === "compose-material") {
-        vscode.postMessage({ type: "command", command: "composeMaterialPrompt" });
+        if (blockSetupChangeDuringPractice()) return;
+        postSidebarCommand("composeMaterialPrompt", "Composing material prompt", trigger);
       } else if (action === "materials-guide") {
-        vscode.postMessage({ type: "command", command: "openMaterialsGuide" });
+        if (blockIfPracticeTurnInProgress("Finish or stop the current turn before opening the materials guide.")) return;
+        if (blockIfTransientActionInProgress("opening the materials guide")) return;
+        postSidebarCommand("openMaterialsGuide", "Opening materials guide", trigger);
       }
     });
-    $("completeLocal").addEventListener("click", () => vscode.postMessage({ type: "completeLocal" }));
-    $("configureMaterials").addEventListener("click", () => vscode.postMessage({ type: "command", command: "configureMaterials" }));
-    $("openTask").addEventListener("click", () => vscode.postMessage({ type: "command", command: "openTask" }));
-    $("openFolder").addEventListener("click", () => vscode.postMessage({ type: "command", command: "openSessionFolder" }));
+    $("completeLocal").addEventListener("click", () => {
+      if (blockIfPracticeTurnInProgress("Finish or stop the current turn before completing this lesson.")) return;
+      if (blockIfTransientActionInProgress("completing this lesson")) return;
+      const requestId = beginSidebarCommand($("completeLocal"), "Completing lesson");
+      if (!requestId) return;
+      vscode.postMessage({ type: "completeLocal", requestId });
+    });
+    $("configureMaterials").addEventListener("click", () => {
+      if (blockSetupChangeDuringPractice()) return;
+      postSidebarCommand("configureMaterials", "Choosing materials folder", $("configureMaterials"));
+    });
+    $("openTask").addEventListener("click", () => {
+      if (blockIfPracticeTurnInProgress("Finish or stop the current turn before opening the task card.")) return;
+      if (blockIfTransientActionInProgress("opening the task card")) return;
+      postSidebarCommand("openTask", "Opening task card", $("openTask"));
+    });
+    $("openFolder").addEventListener("click", () => {
+      if (blockIfPracticeTurnInProgress("Finish or stop the current turn before opening the session folder.")) return;
+      if (blockIfTransientActionInProgress("opening the session folder")) return;
+      postSidebarCommand("openSessionFolder", "Opening session folder", $("openFolder"));
+    });
 
     window.addEventListener("message", (event) => {
       const message = event.data || {};
-      if (message.type === "state") renderState(message.state);
-      if (message.type === "busy") setStatus(message.message || "Working…", "busy");
+      if (message.type === "state") {
+        handleStateMessage(message.state);
+      }
+      if (message.type === "busy") setStatus(messageText(message.message, "Working…"), "busy");
+      if (message.type === "commandResult") {
+        const requestId = positiveInteger(message.requestId);
+        if (requestId && !finishSidebarCommand(requestId)) return;
+        if (!requestId) resetSidebarCommandBusyState();
+        if (message.error) {
+          setStatus("Action failed: " + messageErrorText(message.error, "Unknown action error"), "error");
+        } else {
+          setStatus(messageText(message.message, "Action finished."));
+        }
+      }
       if (message.type === "nativeRecordingPreparing") {
+        if (!isCurrentNativeStartMessage(message)) return;
         // Live, moving feedback for the otherwise-opaque warm-up gap.
         const prepLabels = {
           reclaim: "Resetting the previous recorder…",
@@ -2242,57 +3361,91 @@
         }
       }
       if (message.type === "nativeRecordingStarted") {
+        if (!isCurrentNativeStartMessage(message)) return;
         clearNativeStartWatchdog();
+        const wasAwaitingStart = nativeStarting && recorderMode === "native";
         nativeStarting = false;
+        // If the 15s start watchdog already released the UI, a late
+        // nativeRecordingStarted still means ffmpeg is now holding the mic.
+        // Put the button back into stop mode so the user can finish/stop that
+        // take instead of being left with a running recorder and no stop path.
+        if (!wasAwaitingStart) {
+          recorderMode = "native";
+          setRecording(true);
+          setBusy(false);
+        }
         // Now actually capturing — start the elapsed timer here so it
         // reflects real recording time, not microphone warm-up.
         startTimer();
-        setStatus("Listening… speak now.");
+        setStatus(wasAwaitingStart
+          ? "Listening… speak now."
+          : "Recorder started after a delay — press stop when you finish this take.");
       }
       if (message.type === "stage") {
-        if (message.show) showStages(true);
-        if (message.stage) setStage(message.stage, message.status || "active");
+        const name = stageName(message.stage);
+        const status = stageStatus(message.status);
+        if (message.show && name) {
+          const isFreshPipelineStart = name === "transcribe" && status === "active";
+          showStages(true, isFreshPipelineStart);
+        }
+        if (name) setStage(name, status);
         // Real pipeline progress: re-arm the no-progress watchdog so a long but
         // healthy multi-leg turn is never mistaken for a wedged one.
-        armProcessingWatchdog();
+        if (name) armProcessingWatchdog();
       }
       if (message.type === "practiceResult") {
         clearProcessingWatchdog();
         nativeStarting = false;
+        const r = normalizePracticeResult(message.result);
+        if (!r) {
+          recorderMode = null;
+          setRecording(false);
+          setBusy(false);
+          clearPendingPracticeContexts(true);
+          showStages(false);
+          setStatus("Practice result was malformed. Try again.", "error");
+          return;
+        }
         markAllStagesDone();
         setBusy(false);
-	        setStatus("Ready ✓");
-	        recorderMode = null;
-	        pendingReplyContext = null;
-	        pendingPracticeTarget = null;
-	        activeRecordingTarget = null;
-        if (message.result && message.result.localAudioUri) {
-          setLocalAudioSource(message.result.localAudioUri, false);
+        setStatus("Ready ✓");
+        recorderMode = null;
+        clearPendingPracticeContexts(false);
+        if (r.localAudioUri) {
+          setLocalAudioSource(r.localAudioUri, false);
         }
-        const r = message.result || {};
+        const nativeVersion = compactScalarText(r.nativeVersion);
+        const followUpQuestion = compactScalarText(r.followUpQuestion);
+        const transcript = compactScalarText(r.transcript);
+        const mode = scalarField(r, "mode") || "free";
+        const referenceLabel = scalarField(r, "referenceLabel");
+        const quickFix = compactScalarText(r.quickFix);
         lastTurn = {
-          nativeVersion: r.nativeVersion || "",
-          followUpQuestion: r.followUpQuestion || "",
-          transcript: r.transcript || "",
-          mode: r.mode || "free",
-          referenceLabel: r.referenceLabel || "",
+          nativeVersion,
+          followUpQuestion,
+          transcript,
+          mode,
+          referenceLabel,
         };
-        const localAudioFallback = r.localAudioUri || ($("localAudio").src || "");
+        const localAudio = $("localAudio");
+        const localAudioFallback = r.localAudioUri || (localAudio ? localAudio.src : "");
+        retainLocalAudioForTurnHistory(localAudioFallback);
         turnHistory.push({
           turnIndex: turnHistory.length + 1,
-          transcript: r.transcript || "",
-          nativeVersion: r.nativeVersion || "",
-          mode: r.mode || "free",
-          referenceLabel: r.referenceLabel || "",
-          followUpQuestion: r.followUpQuestion || "",
-          quickFix: r.quickFix || "",
+          transcript,
+          nativeVersion,
+          mode,
+          referenceLabel,
+          followUpQuestion,
+          quickFix,
           userAudioUri: localAudioFallback,
           nativeAudioUri: r.audioUri || "",
           followUpAudioUri: r.followUpAudioUri || "",
           priorTurn: r.priorTurn || null,
           timestamp: Date.now(),
         });
-        renderResult(message.result);
+        pruneTurnHistory();
+        renderResult(r);
         renderTurnHistory();
         const resultPanel = $("result");
         if (resultPanel && typeof resultPanel.scrollIntoView === "function") {
@@ -2303,38 +3456,37 @@
         if (resultPanel && typeof resultPanel.focus === "function") {
           resultPanel.focus({ preventScroll: true });
         }
-        setTimeout(() => showStages(false), 1500);
+        scheduleStageHide(1500);
       }
       if (message.type === "todayTtsStatus") {
+        const requestId = positiveInteger(message.requestId);
+        if (!requestId || activeTodayTtsRequest !== requestId) return;
+        const statusText = messageText(message.message, "Generating example audio…");
         const status = $("todayTtsStatus");
-        if (status) status.textContent = message.message || "Generating…";
+        if (status) status.textContent = statusText;
+        setStatus(statusText, "busy");
       }
       if (message.type === "slowReadStatus") {
-        // No-op for now; could surface inline status later.
+        const requestId = positiveInteger(message.requestId);
+        if (!requestId || !activeSlowReadRequest || activeSlowReadRequest.id !== requestId) return;
+        setStatus(messageText(message.message, "Generating slow-read audio…"), "busy");
       }
       if (message.type === "slowReadResult") {
-        document.querySelectorAll('[data-slow-read]').forEach((btn) => {
-          if (btn.dataset.busy === "1") {
-            btn.disabled = false;
-            delete btn.dataset.busy;
-            btn.textContent = btn.dataset.slowRead === "followUp" ? "🐢 Slow read" : "🐢 Slow";
-          }
-        });
-        document.querySelectorAll('[data-drill-listen]').forEach((btn) => {
-          if (btn.dataset.busy === "1") {
-            btn.disabled = false;
-            delete btn.dataset.busy;
-            btn.textContent = "Listen";
-          }
-        });
+        const requestId = positiveInteger(message.requestId);
+        if (!requestId) return;
+        const request = finishSlowReadRequest(requestId);
+        if (!request) return;
+        restoreSlowReadButtons();
         if (message.error) {
           // Clear the drill host too, or a later non-drill slow read would
           // append its player into this stale, now-irrelevant drill card.
           pendingSlowReadHost = null;
-          setStatus("Slow read failed: " + message.error, "error");
+          setStatus("Slow read failed: " + messageErrorText(message.error, "Unknown slow-read error"), "error");
           return;
         }
-        if (message.result && message.result.audioDataUri) {
+        const result = objectValue(message.result);
+        const audioDataUri = textField(result, "audioDataUri");
+        if (audioDataUri) {
           let player = document.getElementById("slowReadAudio");
           if (!player) {
             player = document.createElement("audio");
@@ -2346,41 +3498,70 @@
           }
           const followUpCard = document.querySelector(".follow-up-card");
           const nativeSide = document.querySelector('.ab-side audio#nativeAudio');
-          const host = message.target === "drill" && pendingSlowReadHost
-            ? pendingSlowReadHost
+          const requestHost = request && request.host && request.host.isConnected ? request.host : null;
+          const host = message.target === "drill"
+            ? (requestHost || $("drill") || document.body)
             : message.target === "followUp" && followUpCard
             ? followUpCard
             : (nativeSide ? nativeSide.parentNode : null);
           if (host && player.parentNode !== host) {
             host.appendChild(player);
           }
-          player.src = message.result.audioDataUri;
+          player.src = audioDataUri;
           player.hidden = false;
-          player.play().catch(() => {});
+          setStatus("Slow-read audio ready.");
+          playAudioOrPrompt(player, "Slow-read audio ready — press play.");
           if (message.target === "drill") {
             pendingSlowReadHost = null;
           }
+        } else {
+          pendingSlowReadHost = null;
+          setStatus("Slow read returned no audio. Try again.", "error");
         }
       }
       if (message.type === "todayTtsResult") {
+        const requestId = positiveInteger(message.requestId);
+        if (!requestId || !finishTodayTtsRequest(requestId)) return;
+        restoreSlowReadButtons();
         const audio = $("todayAudio");
         const status = $("todayTtsStatus");
-        if (audio && message.result && message.result.audioDataUri) {
-          audio.src = message.result.audioDataUri;
+        const button = document.querySelector('[data-action="today-tts"]');
+        if (button) {
+          button.disabled = Boolean(todayTtsBlockMessage(state, currentExampleText));
+          delete button.dataset.busy;
+        }
+        if (message.error) {
+          const text = "Example audio failed: " + messageErrorText(message.error, "Unknown audio error");
+          if (status) status.textContent = text;
+          setStatus(text, "error");
+          return;
+        }
+        const result = objectValue(message.result);
+        const audioDataUri = textField(result, "audioDataUri");
+        if (!audioDataUri) {
+          const text = "Example audio returned no audio. Try again.";
+          if (status) status.textContent = text;
+          setStatus(text, "error");
+          return;
+        }
+        if (audio) {
+          audio.src = audioDataUri;
           audio.hidden = false;
-          audio.play().catch(() => {});
+          playAudioOrPrompt(audio, "Example audio ready — press play. Your next recording will shadow this text.");
         }
         let armedShadow = false;
-        if (message.result && message.result.text) {
-          pendingPracticeTarget = practiceTarget(message.result.text, "Example text", "");
+        const resultText = textField(result, "text");
+        if (resultText) {
+          pendingPracticeTarget = practiceTarget(resultText, "Example text", "");
           armedShadow = true;
         } else if (currentExampleText) {
           pendingPracticeTarget = practiceTarget(currentExampleText, "Example text", "");
           armedShadow = true;
         }
         if (status) {
-          status.textContent = message.result && message.result.provider
-            ? "Example generated with " + message.result.provider + " · next recording shadows this text"
+          const provider = textField(result, "provider");
+          status.textContent = provider
+            ? "Example generated with " + provider + " · next recording shadows this text"
             : "Example generated";
         }
         // #todayTtsStatus lives inside #task and is wiped by the next
@@ -2391,39 +3572,41 @@
         if (armedShadow) {
           setStatus("Example ready — your next recording will shadow it. Press the red button when you're ready.");
         }
-        const button = document.querySelector('[data-action="today-tts"]');
-        if (button) {
-          button.disabled = false;
-          delete button.dataset.busy;
-        }
       }
       if (message.type === "drillLinesStatus") {
+        const requestId = positiveInteger(message.requestId);
+        if (!requestId || activeDrillLineRequest !== requestId) return;
+        const statusText = messageText(message.message, "Generating new drill lines…");
         const status = $("drillGenStatus");
-        if (status) status.textContent = message.message || "Generating new lines…";
+        if (status) status.textContent = statusText;
+        setStatus(statusText, "busy");
       }
       if (message.type === "drillLinesResult") {
-        drillGenerating = false;
+        const requestId = positiveInteger(message.requestId);
+        if (!requestId || !finishDrillLineRequest(requestId)) return;
         if (message.error) {
+          const errorText = messageErrorText(message.error, "Drill generation failed.");
           const status = $("drillGenStatus");
-          if (status) status.textContent = "Generation failed: " + message.error;
+          if (status) status.textContent = "Generation failed: " + errorText;
           const button = document.querySelector("[data-drill-generate]");
           if (button) button.disabled = false;
-          setStatus("Drill generation failed: " + message.error, "error");
+          setStatus("Drill generation failed: " + errorText, "error");
           return;
         }
         const incoming = Array.isArray(message.lines) ? message.lines : [];
         const known = new Set(drillLibrary.map((item) => normalizeComparable(item.text)));
         let added = 0;
         incoming.forEach((item) => {
-          const text = String((item && item.text) || "").replace(/\s+/g, " ").trim();
+          const obj = objectValue(item);
+          const text = obj ? compactScalarField(obj, "text") : compactScalarText(item);
           const key = normalizeComparable(text);
           if (!text || !key || known.has(key)) return;
           known.add(key);
           added += 1;
           drillGeneratedLines.push({
-            label: String((item && item.label) || "AI drill").trim() || "AI drill",
+            label: obj ? firstScalarField(obj, "label", "cue", "id") || "AI drill" : "AI drill",
             text,
-            reason: String((item && item.reason) || "").trim(),
+            reason: obj ? firstScalarField(obj, "reason", "note") : "",
             source: "coach",
           });
         });
@@ -2437,6 +3620,8 @@
         setStatus(added ? "Added " + added + " fresh FSI line" + (added === 1 ? "" : "s") : "No new drill lines generated");
       }
       if (message.type === "error") {
+        if (message.requestId && !isCurrentNativeStartMessage(message)) return;
+        const errorText = messageErrorText(message.message, "Error.");
         clearProcessingWatchdog();
         clearNativeStartWatchdog();
         nativeStarting = false;
@@ -2449,16 +3634,13 @@
         stopVuMeter();
         stopTimer();
         setBusy(false);
-        const todayButton = document.querySelector('[data-action="today-tts"]');
-        if (todayButton) {
-          todayButton.disabled = false;
-          delete todayButton.dataset.busy;
-        }
+        resetTransientActionBusyState(errorText);
+        clearPendingPracticeContexts(true);
         showStages(false);
-        if (!state && /prebuilt|EnglishSpeakingTraining root|Could not find/i.test(message.message || "")) {
-          renderMissingSourceSetup(message.message || "");
+        if (!state && /prebuilt|EnglishSpeakingTraining root|Could not find/i.test(errorText)) {
+          renderMissingSourceSetup(errorText);
         }
-        setStatus(message.message || "Error.", "error");
+        setStatus(errorText, "error");
       }
     });
 

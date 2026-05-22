@@ -38,6 +38,9 @@ export interface SourceDiagnostics {
   configuredRoot: string;
   packageDir: string;
   currentJson: string;
+  followupDrillJson: string;
+  manifestJson: string;
+  progressJson: string;
   currentPackageDate: string;
   lessonCount: number;
   completedCount: number;
@@ -45,6 +48,15 @@ export interface SourceDiagnostics {
   /** Set when the current package's english-training.json exists but failed
    * to parse — surfaced to the user so a JSON typo is not a silent empty UI. */
   packageJsonError?: string;
+  /** Set when followup-drill.json exists but failed to parse. This does not
+   * block recording, but it explains why the drill workbench fell back. */
+  drillJsonError?: string;
+  /** Set when manifest.json exists but failed to parse. Asset paths stay
+   * conservative, but the user should know why package media fell back. */
+  manifestJsonError?: string;
+  /** Set when the local progress file exists but failed to parse. The sidebar
+   * stays usable, but progress/current-package inference may be conservative. */
+  progressJsonError?: string;
 }
 
 export interface LearnerProfile {
@@ -159,6 +171,7 @@ export interface NativeRecordingSession {
   filePath: string;
   sessionDir: string;
   packageDate: string;
+  priorTurn?: CoachPriorTurn;
   practiceTarget?: PracticeTarget;
   startedAt: number;
   stderr: string[];

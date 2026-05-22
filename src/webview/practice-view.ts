@@ -3,12 +3,13 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 import {
-  config,
+  appendOutput,
+  configString,
   errorMessage,
   isAudioUnderstandingProvider,
   isCoachProvider,
-  isProviderName,
   isTtsProvider,
+  normalizedProviderName,
   stringValue,
 } from "../core.js";
 import type {
@@ -41,6 +42,7 @@ import {
   completeLocalPackage,
   openCurrentTaskCard,
   openSessionFolder,
+  selectRecordingMicrophone,
 } from "../commands/local-actions.js";
 import { createSamplePackage, generateNextPackage } from "../materials/scaffold.js";
 import { composeMaterialPrompt } from "../materials/prompt-composer.js";
@@ -48,6 +50,7 @@ import { expandHome } from "../runtime/training-root.js";
 import { invalidateNextPackageCache, loadState, toWebviewState } from "../runtime/state.js";
 import {
   killActiveNativeRecording,
+  killNativeRecordingSession,
   startNativeFfmpegRecording,
   stopNativeFfmpegRecording,
 } from "../audio/native-recording.js";
@@ -60,33 +63,53 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
   constructor(private readonly context: vscode.ExtensionContext) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
+    if (this.view && this.view !== view) {
+      // A replacement view cannot stop an old panel's recorder from the UI, so
+      // release the native microphone before adopting the new webview.
+      killActiveNativeRecording();
+    }
+    // A resolved webview starts with fresh in-page state. Do not carry a
+    // previous panel's armed follow-up reply into the first recording here.
+    this.pendingPriorTurn = undefined;
     this.view = view;
     this.applyResourceRoots();
-    view.webview.html = this.html(view.webview);
+    // Register the host listener before loading the webview document. The
+    // script posts `ready` as soon as it executes, and installing the listener
+    // after assigning html leaves a tiny first-load race where that message can
+    // be missed on a fast reload.
     view.webview.onDidReceiveMessage((message: unknown) => {
-      void this.handleMessage(message);
+      void this.handleMessage(view, message);
     });
+    view.webview.html = this.html(view.webview);
     // If the practice view is torn down (panel closed/moved) while a native
     // ffmpeg recorder is running, deactivate() never fires, so the recorder
     // would keep holding the microphone and a re-resolved view could never
     // start a new recording ("already running"). Stop it on disposal.
     view.onDidDispose(() => {
+      if (this.view !== view) {
+        return;
+      }
       killActiveNativeRecording();
+      this.pendingPriorTurn = undefined;
       this.view = undefined;
     });
     void this.postState();
   }
 
   async postState(): Promise<void> {
-    if (!this.view) {
+    const view = this.view;
+    if (!view) {
       return;
     }
     try {
       const state = await loadState(this.context);
+      if (this.view !== view) {
+        return;
+      }
       this.applyResourceRoots(state.root);
-      this.view.webview.postMessage({ type: "state", state: toWebviewState(this.view.webview, state) });
+      this.postToActiveView(view, { type: "state", state: toWebviewState(view.webview, state) });
     } catch (error) {
-      this.view.webview.postMessage({ type: "error", message: errorMessage(error) });
+      this.postToActiveView(view, { type: "error", message: errorMessage(error) });
     }
   }
 
@@ -94,7 +117,7 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     if (!this.view) {
       return;
     }
-    const configuredRoot = expandHome(config<string>("localMaterialsRoot") || "").trim();
+    const configuredRoot = expandHome(configString("localMaterialsRoot"));
     const roots = [
       vscode.Uri.file(this.context.extensionPath),
       this.context.globalStorageUri,
@@ -108,8 +131,8 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
-  private async handleMessage(message: unknown): Promise<void> {
-    if (!this.view || typeof message !== "object" || !message) {
+  private async handleMessage(view: vscode.WebviewView, message: unknown): Promise<void> {
+    if (this.view !== view || typeof message !== "object" || !message) {
       return;
     }
     const payload = message as JsonObject;
@@ -125,69 +148,167 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (payload.type === "configureKey") {
-        const provider = payload.provider;
-        if (isProviderName(provider)) {
-          await configureApiKey(this.context, provider);
+        const rawProvider = stringValue(payload.provider).trim();
+        const provider = normalizedProviderName(rawProvider);
+        const requestId = positiveRequestId(payload.requestId);
+        if (provider) {
+          await this.runOptionalSidebarCommand(
+            view,
+            "configureKey",
+            requestId,
+            () => configureApiKey(this.context, provider),
+          );
+        } else {
+          this.postOptionalSidebarError(
+            view,
+            "configureKey",
+            requestId,
+            `Unknown provider key route: ${messageValue(rawProvider)}.`,
+          );
         }
         return;
       }
       if (payload.type === "setProvider") {
-        if (payload.setting === "coachProvider" && isCoachProvider(payload.value)) {
-          await setProviderSetting("coachProvider", payload.value);
-        } else if (payload.setting === "audioUnderstandingProvider" && isAudioUnderstandingProvider(payload.value)) {
-          await setProviderSetting("audioUnderstandingProvider", payload.value);
-        } else if (payload.setting === "ttsProvider" && isTtsProvider(payload.value)) {
-          await setProviderSetting("ttsProvider", payload.value);
+        const providerSetting = stringValue(payload.setting).trim();
+        const providerValue = normalizedProviderName(payload.value);
+        const requestId = positiveRequestId(payload.requestId);
+        if (providerSetting === "coachProvider" && isCoachProvider(providerValue)) {
+          await this.runOptionalSidebarCommand(
+            view,
+            "setProvider",
+            requestId,
+            () => setProviderSetting("coachProvider", providerValue),
+          );
+        } else if (providerSetting === "audioUnderstandingProvider" && isAudioUnderstandingProvider(providerValue)) {
+          await this.runOptionalSidebarCommand(
+            view,
+            "setProvider",
+            requestId,
+            () => setProviderSetting("audioUnderstandingProvider", providerValue),
+          );
+        } else if (providerSetting === "ttsProvider" && isTtsProvider(providerValue)) {
+          await this.runOptionalSidebarCommand(
+            view,
+            "setProvider",
+            requestId,
+            () => setProviderSetting("ttsProvider", providerValue),
+          );
         } else {
           // Never let a provider "Use" click silently no-op: the card would
           // look clickable but dead. Tell the user why it was rejected.
-          this.view.webview.postMessage({
-            type: "error",
-            message: `Cannot use "${stringValue(payload.value)}" for ${stringValue(payload.setting)}.`,
-          });
+          this.postOptionalSidebarError(
+            view,
+            "setProvider",
+            requestId,
+            `Cannot use "${messageValue(payload.value)}" for ${messageValue(payload.setting)}.`,
+          );
         }
         return;
       }
-      if (payload.type === "configureSetting" && isConfigSettingName(payload.setting)) {
-        await runConfigureSetting(payload.setting);
+      if (payload.type === "configureSetting") {
+        const setting = stringValue(payload.setting).trim();
+        const requestId = positiveRequestId(payload.requestId);
+        if (isConfigSettingName(setting)) {
+          await this.runOptionalSidebarCommand(
+            view,
+            "configureSetting",
+            requestId,
+            () => runConfigureSetting(setting),
+          );
+        } else {
+          this.postOptionalSidebarError(
+            view,
+            "configureSetting",
+            requestId,
+            `Unknown setting: ${messageValue(setting)}.`,
+          );
+        }
         return;
       }
       if (payload.type === "setMinimaxVoice") {
-        const voiceId = stringValue(payload.voiceId);
+        const voiceId = stringValue(payload.voiceId).trim();
+        const requestId = positiveRequestId(payload.requestId);
         if (voiceId) {
-          await setMinimaxVoiceId(voiceId, Boolean(payload.pinTurbo));
+          await this.runOptionalSidebarCommand(
+            view,
+            "setMinimaxVoice",
+            requestId,
+            () => setMinimaxVoiceId(voiceId, explicitTruePayloadFlag(payload.pinTurbo)),
+          );
+        } else {
+          this.postOptionalSidebarError(view, "setMinimaxVoice", requestId, "MiniMax voice id was missing.");
         }
         return;
       }
       if (payload.type === "setTtsSpeed") {
-        const value = Number(payload.value);
-        if (Number.isFinite(value) && value > 0) {
-          await setTtsSpeedConfig(value);
+        const value = positiveScalarNumber(payload.value);
+        const requestId = positiveRequestId(payload.requestId);
+        if (value !== undefined) {
+          await this.runOptionalSidebarCommand(
+            view,
+            "setTtsSpeed",
+            requestId,
+            () => setTtsSpeedConfig(value),
+          );
+        } else {
+          this.postOptionalSidebarError(
+            view,
+            "setTtsSpeed",
+            requestId,
+            `Invalid TTS speed: ${messageValue(payload.value)}.`,
+          );
         }
         return;
       }
       if (payload.type === "useGeminiOnly") {
-        await setGeminiOnlyProviders();
+        await this.runOptionalSidebarCommand(
+          view,
+          "useGeminiOnly",
+          positiveRequestId(payload.requestId),
+          () => setGeminiOnlyProviders(),
+        );
         return;
       }
       if (payload.type === "useRecommendedHybrid") {
-        await setRecommendedHybridProviders();
+        await this.runOptionalSidebarCommand(
+          view,
+          "useRecommendedHybrid",
+          positiveRequestId(payload.requestId),
+          () => setRecommendedHybridProviders(),
+        );
         return;
       }
       if (payload.type === "useOpenAIStack") {
-        await setOpenAIStackProviders();
+        await this.runOptionalSidebarCommand(
+          view,
+          "useOpenAIStack",
+          positiveRequestId(payload.requestId),
+          () => setOpenAIStackProviders(),
+        );
         return;
       }
       if (payload.type === "slowRead") {
         const text = stringValue(payload.text);
-        const target = stringValue(payload.target) || "native";
-        const speed = Number(payload.speed);
-        await this.slowReadText(text, target, Number.isFinite(speed) && speed > 0 ? speed : 0.7);
+        const target = stringValue(payload.target).trim() || "native";
+        const speed = positiveScalarNumber(payload.speed);
+        const requestId = positiveRequestId(payload.requestId);
+        if (!requestId) {
+          this.postToActiveView(view, {
+            type: "error",
+            message: "Slow-read request id was missing. Refresh the practice view and try again.",
+          });
+          return;
+        }
+        await this.slowReadText(
+          text,
+          target,
+          speed ?? 0.7,
+          requestId,
+        );
         return;
       }
       if (payload.type === "setReplyContext") {
-        const priorTurn = payload.priorTurn as CoachPriorTurn | undefined;
-        this.pendingPriorTurn = priorTurn && priorTurn.nativeVersion ? priorTurn : undefined;
+        this.pendingPriorTurn = normalizeCoachPriorTurnPayload(payload.priorTurn);
         return;
       }
       if (payload.type === "clearReplyContext") {
@@ -195,38 +316,67 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (payload.type === "completeLocal") {
-        await completeLocalPackage(this.context);
+        await this.runSidebarCommand(
+          view,
+          "completeLocal",
+          positiveRequestId(payload.requestId),
+          () => completeLocalPackage(this.context),
+        );
         return;
       }
       if (payload.type === "command") {
-        if (payload.command === "configureMaterials") {
-          await configureLocalMaterialsRoot();
-        }
-        if (payload.command === "openTask") {
-          await openCurrentTaskCard(this.context);
-        }
-        if (payload.command === "openSessionFolder") {
-          await openSessionFolder(this.context);
-        }
-        if (payload.command === "setupProviderKey") {
-          await configureCoreRouteKeys(this.context);
-        }
-        if (payload.command === "createSamplePackage") {
-          await createSamplePackage(this.context);
-        }
-        if (payload.command === "generateNextPackage") {
-          await generateNextPackage(this.context);
-        }
-        if (payload.command === "composeMaterialPrompt") {
-          await composeMaterialPrompt(this.context);
-        }
-        if (payload.command === "openMaterialsGuide") {
-          await openMaterialsGuide();
+        const command = stringValue(payload.command).trim();
+        const requestId = positiveRequestId(payload.requestId);
+        if (command === "configureMaterials") {
+          await this.runSidebarCommand(
+            view,
+            command,
+            requestId,
+            () => configureLocalMaterialsRoot({ onChanged: invalidateNextPackageCache }),
+          );
+        } else if (command === "openTask") {
+          await this.runOptionalSidebarCommand(view, command, requestId, () => openCurrentTaskCard(this.context));
+        } else if (command === "openSessionFolder") {
+          await this.runOptionalSidebarCommand(view, command, requestId, () => openSessionFolder(this.context));
+        } else if (command === "setupProviderKey") {
+          await this.runSidebarCommand(view, command, requestId, () => configureCoreRouteKeys(this.context));
+        } else if (command === "createSamplePackage") {
+          await this.runSidebarCommand(view, command, requestId, () => createSamplePackage(this.context));
+        } else if (command === "generateNextPackage") {
+          await this.runSidebarCommand(view, command, requestId, () => generateNextPackage(this.context));
+        } else if (command === "composeMaterialPrompt") {
+          await this.runSidebarCommand(view, command, requestId, () => composeMaterialPrompt(this.context));
+        } else if (command === "openMaterialsGuide") {
+          await this.runOptionalSidebarCommand(view, command, requestId, () => openMaterialsGuide());
+        } else if (command === "selectMicrophone") {
+          await this.runSidebarCommand(view, command, requestId, () => selectRecordingMicrophone());
+        } else {
+          const message = `Unknown sidebar command: ${messageValue(command)}.`;
+          if (requestId) {
+            this.postSidebarCommandResult(view, command || "(missing)", requestId, { error: message });
+          } else {
+            this.postToActiveView(view, { type: "error", message });
+          }
         }
         return;
       }
       if (payload.type === "startNativeRecording") {
-        await this.startNativeRecording(normalizePracticeTargetPayload(payload.practiceTarget));
+        const requestId = positiveRequestId(payload.requestId);
+        if (!requestId) {
+          this.pendingPriorTurn = undefined;
+          this.postToActiveView(view, {
+            type: "error",
+            message: "Native recording request id was missing. Refresh the practice view and try again.",
+          });
+          return;
+        }
+        const priorTurn = normalizeCoachPriorTurnPayload(payload.priorTurn) ?? this.pendingPriorTurn;
+        this.pendingPriorTurn = undefined;
+        await this.startNativeRecording(
+          normalizePracticeTargetPayload(payload.practiceTarget),
+          priorTurn,
+          requestId,
+        );
         return;
       }
       if (payload.type === "stopNativeRecording") {
@@ -238,55 +388,103 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (payload.type === "todayTts") {
-        await this.generateTodayTts();
+        const requestId = positiveRequestId(payload.requestId);
+        if (!requestId) {
+          this.postToActiveView(view, {
+            type: "error",
+            message: "Example audio request id was missing. Refresh the practice view and try again.",
+          });
+          return;
+        }
+        await this.generateTodayTts(requestId);
         return;
       }
       if (payload.type === "generateDrillLines") {
-        const count = Number(payload.count);
+        const count = positiveScalarNumber(payload.count);
+        const requestId = positiveRequestId(payload.requestId);
+        if (!requestId) {
+          this.postToActiveView(view, {
+            type: "error",
+            message: "Drill generation request id was missing. Refresh the practice view and try again.",
+          });
+          return;
+        }
         const existing = Array.isArray(payload.existing)
-          ? payload.existing.map((item) => stringValue(item)).filter(Boolean)
+          ? payload.existing.map((item) => stringValue(item).trim()).filter(Boolean)
           : [];
-        await this.generateDrillLines(Number.isFinite(count) && count > 0 ? count : 5, existing);
+        await this.generateDrillLines(
+          count ?? 5,
+          existing,
+          requestId,
+        );
         return;
       }
+      this.postToActiveView(view, {
+        type: "error",
+        message: `Unknown sidebar message: ${messageValue(payload.type)}.`,
+      });
     } catch (error) {
-      this.view.webview.postMessage({ type: "error", message: errorMessage(error) });
+      const requestId = payload.type === "startNativeRecording" ? positiveRequestId(payload.requestId) : 0;
+      if (payload.type === "startNativeRecording" && this.view === view) {
+        this.pendingPriorTurn = undefined;
+      }
+      this.postToActiveView(view, {
+        type: "error",
+        message: errorMessage(error),
+        ...(Number.isFinite(requestId) && requestId > 0 ? { requestId } : {}),
+      });
     }
   }
 
-  private async generateTodayTts(): Promise<void> {
-    if (!this.view) {
+  private async generateTodayTts(requestId?: number): Promise<void> {
+    const view = this.view;
+    if (!view) {
       return;
     }
-    this.view.webview.postMessage({ type: "todayTtsStatus", message: "Generating example audio…" });
-    const result = await synthesizeTodayAudio(this.context);
-    this.view.webview.postMessage({ type: "todayTtsResult", result });
+    const request = requestId ? { requestId } : {};
+    this.postToActiveView(view, { type: "todayTtsStatus", ...request, message: "Generating example audio…" });
+    try {
+      const result = await synthesizeTodayAudio(this.context);
+      this.postToActiveView(view, { type: "todayTtsResult", ...request, result });
+    } catch (error) {
+      this.postToActiveView(view, { type: "todayTtsResult", ...request, error: errorMessage(error) });
+    }
   }
 
-  private async generateDrillLines(count: number, existing: string[]): Promise<void> {
-    if (!this.view) {
+  private async generateDrillLines(count: number, existing: string[], requestId?: number): Promise<void> {
+    const view = this.view;
+    if (!view) {
       return;
     }
-    this.view.webview.postMessage({ type: "drillLinesStatus", message: "Generating new lines…" });
+    const request = requestId ? { requestId } : {};
+    this.postToActiveView(view, { type: "drillLinesStatus", ...request, message: "Generating new lines…" });
     try {
       const state = await loadState(this.context);
       const lines = await coachGenerateDrillLines(this.context, state, count, existing);
-      this.view.webview.postMessage({ type: "drillLinesResult", lines });
+      this.postToActiveView(view, { type: "drillLinesResult", ...request, lines });
     } catch (error) {
-      this.view.webview.postMessage({ type: "drillLinesResult", error: errorMessage(error) });
+      this.postToActiveView(view, { type: "drillLinesResult", ...request, error: errorMessage(error) });
     }
   }
 
-  private async slowReadText(text: string, target: string, speed: number): Promise<void> {
-    if (!this.view) {
+  private async slowReadText(text: string, target: string, speed: number, requestId?: number): Promise<void> {
+    const view = this.view;
+    if (!view) {
       return;
     }
+    const request = requestId ? { requestId } : {};
     const trimmed = text.trim();
     if (!trimmed) {
+      this.postToActiveView(view, {
+        type: "slowReadResult",
+        target,
+        ...request,
+        error: "Slow-read text was missing.",
+      });
       return;
     }
     const slowSpeed = Number.isFinite(speed) && speed > 0 ? Math.max(0.5, Math.min(1.5, speed)) : 0.7;
-    this.view.webview.postMessage({ type: "slowReadStatus", target, message: "Re-reading…" });
+    this.postToActiveView(view, { type: "slowReadStatus", target, ...request, message: "Re-reading…" });
     // For slow re-reads the learner is shadowing word-by-word, so we ask the
     // TTS to over-articulate and pause between sense groups. The OpenAI
     // instructions field carries this directly; Gemini/MiniMax/MiMo ignore
@@ -297,67 +495,69 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
       "a learner can shadow you word by word.";
     try {
       const result = await synthesizeOnDemandText(this.context, trimmed, slowSpeed, slowInstructions);
-      this.view.webview.postMessage({ type: "slowReadResult", target, result });
+      this.postToActiveView(view, { type: "slowReadResult", target, ...request, result });
     } catch (error) {
-      this.view.webview.postMessage({
+      this.postToActiveView(view, {
         type: "slowReadResult",
         target,
+        ...request,
         error: errorMessage(error),
       });
     }
   }
 
-  private stageReporter(): StageReporter {
+  private stageReporter(view = this.view): StageReporter {
     return (stage, status) => {
-      this.view?.webview.postMessage({ type: "stage", stage, status, show: true });
+      if (view) {
+        this.postToActiveView(view, { type: "stage", stage, status, show: true });
+      }
     };
   }
 
   private async runPractice(message: WebviewAudioMessage): Promise<void> {
-    if (!this.view) {
+    const view = this.view;
+    if (!view) {
       return;
     }
-    this.view.webview.postMessage({ type: "stage", stage: "transcribe", status: "active", show: true });
+    this.postToActiveView(view, { type: "stage", stage: "transcribe", status: "active", show: true });
     const priorTurn = message.priorTurn ?? this.pendingPriorTurn;
-    const practiceTarget = normalizePracticeTargetPayload(message.practiceTarget);
-    const result = await processPracticeAudio(this.context, message, this.stageReporter(), priorTurn, practiceTarget);
     this.pendingPriorTurn = undefined;
-    const audioUri = result.audioFile ? this.view.webview.asWebviewUri(vscode.Uri.file(result.audioFile)).toString() : "";
-    const followUpAudioUri = result.followUpAudioFile
-      ? this.view.webview.asWebviewUri(vscode.Uri.file(result.followUpAudioFile)).toString()
-      : "";
-    this.view.webview.postMessage({
-      type: "practiceResult",
-      result: {
-        ...result,
-        audioUri,
-        followUpAudioUri,
-        priorTurn: priorTurn ?? null,
-        practiceTarget: practiceTarget ?? null,
-      },
-    });
-    await refreshAll();
+    const practiceTarget = normalizePracticeTargetPayload(message.practiceTarget);
+    const result = await processPracticeAudio(this.context, message, this.stageReporter(view), priorTurn, practiceTarget);
+    this.postPracticeResult(view, result, { priorTurn, practiceTarget });
+    await this.refreshAfterPracticeResult();
   }
 
-  private async startNativeRecording(practiceTarget?: PracticeTarget): Promise<void> {
-    if (!this.view) {
+  private async startNativeRecording(
+    practiceTarget: PracticeTarget | undefined,
+    priorTurn: CoachPriorTurn | undefined,
+    requestId: number,
+  ): Promise<void> {
+    const view = this.view;
+    if (!view) {
       return;
     }
-    const view = this.view;
+    const request = { requestId };
     // Stream the prep phases so "press record → can speak" is a visible,
     // moving progression instead of one frozen line. Now that device
     // enumeration is async (no spawnSync host freeze), these flush live.
-    const session = await startNativeFfmpegRecording(this.context, practiceTarget, (phase) => {
-      view.webview.postMessage({ type: "nativeRecordingPreparing", phase });
+    const session = await startNativeFfmpegRecording(this.context, practiceTarget, priorTurn, (phase) => {
+      this.postToActiveView(view, { type: "nativeRecordingPreparing", ...request, phase });
     });
-    view.webview.postMessage({
+    if (this.view !== view) {
+      killNativeRecordingSession(session);
+      return;
+    }
+    this.postToActiveView(view, {
       type: "nativeRecordingStarted",
+      ...request,
       sessionDir: session.sessionDir,
     });
   }
 
   private async stopNativeRecording(): Promise<void> {
-    if (!this.view) {
+    const view = this.view;
+    if (!view) {
       return;
     }
     // Do NOT light the "transcribe" stage here: stopNativeFfmpegRecording()
@@ -367,9 +567,11 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     // already shows an honest "Stopping native recorder…" status on the stop
     // press; the strip should appear only when transcription truly starts,
     // which the pipeline's own progress("transcribe","active") reports.
+    let priorTurn = this.pendingPriorTurn;
+    this.pendingPriorTurn = undefined;
     const session = await stopNativeFfmpegRecording();
+    priorTurn = session.priorTurn ?? priorTurn;
     const state = await loadState(this.context);
-    const priorTurn = this.pendingPriorTurn;
     const practiceTarget = session.practiceTarget;
     const result = await processPracticeFile(
       this.context,
@@ -378,32 +580,140 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
       "audio/wav",
       session.sessionDir,
       session.packageDate,
-      this.stageReporter(),
+      this.stageReporter(view),
       priorTurn,
       practiceTarget,
     );
-    this.pendingPriorTurn = undefined;
-    const audioUri = result.audioFile ? this.view.webview.asWebviewUri(vscode.Uri.file(result.audioFile)).toString() : "";
+    this.postPracticeResult(view, result, {
+      localAudioFile: session.filePath,
+      priorTurn,
+      practiceTarget,
+    });
+    await this.refreshAfterPracticeResult();
+  }
+
+  private async refreshAfterPracticeResult(): Promise<void> {
+    try {
+      await refreshAll();
+    } catch (error) {
+      appendOutput(`Practice result posted, but follow-up refresh failed: ${errorMessage(error)}`);
+    }
+  }
+
+  private async runSidebarCommand(
+    view: vscode.WebviewView,
+    command: string,
+    requestId: number,
+    task: () => Promise<unknown>,
+  ): Promise<void> {
+    try {
+      await task();
+      this.postSidebarCommandResult(view, command, requestId, {});
+    } catch (error) {
+      this.postSidebarCommandResult(view, command, requestId, { error: errorMessage(error) });
+    }
+  }
+
+  private async runOptionalSidebarCommand(
+    view: vscode.WebviewView,
+    command: string,
+    requestId: number,
+    task: () => Promise<unknown>,
+  ): Promise<void> {
+    if (requestId) {
+      await this.runSidebarCommand(view, command, requestId, task);
+      return;
+    }
+    await task();
+  }
+
+  private postOptionalSidebarError(
+    view: vscode.WebviewView,
+    command: string,
+    requestId: number,
+    message: string,
+  ): void {
+    if (requestId) {
+      this.postSidebarCommandResult(view, command, requestId, { error: message });
+      return;
+    }
+    this.postToActiveView(view, { type: "error", message });
+  }
+
+  private postSidebarCommandResult(
+    view: vscode.WebviewView,
+    command: string,
+    requestId: number,
+    result: { error?: string },
+  ): void {
+    this.postToActiveView(view, {
+      type: "commandResult",
+      command,
+      ...(requestId ? { requestId } : {}),
+      ...result,
+    });
+  }
+
+  private postPracticeResult(
+    view: vscode.WebviewView,
+    result: PracticeResult,
+    options: {
+      localAudioFile?: string;
+      priorTurn?: CoachPriorTurn;
+      practiceTarget?: PracticeTarget;
+    } = {},
+  ): void {
+    if (this.view !== view) {
+      return;
+    }
+    const audioUri = result.audioFile ? this.webviewFileUri(view, result.audioFile, "audio") ?? "" : "";
     const followUpAudioUri = result.followUpAudioFile
-      ? this.view.webview.asWebviewUri(vscode.Uri.file(result.followUpAudioFile)).toString()
+      ? this.webviewFileUri(view, result.followUpAudioFile, "follow-up audio") ?? ""
       : "";
-    this.view.webview.postMessage({
+    const localAudioUri = options.localAudioFile
+      ? this.webviewFileUri(view, options.localAudioFile, "local recording")
+      : undefined;
+    this.postToActiveView(view, {
       type: "practiceResult",
       result: {
         ...result,
         audioUri,
         followUpAudioUri,
-        localAudioUri: this.view.webview.asWebviewUri(vscode.Uri.file(session.filePath)).toString(),
-        priorTurn: priorTurn ?? null,
-        practiceTarget: practiceTarget ?? null,
+        ...(localAudioUri ? { localAudioUri } : {}),
+        priorTurn: options.priorTurn ?? null,
+        practiceTarget: options.practiceTarget ?? null,
       },
     });
-    await refreshAll();
+  }
+
+  private webviewFileUri(view: vscode.WebviewView, filePath: string, label: string): string | undefined {
+    try {
+      return view.webview.asWebviewUri(vscode.Uri.file(filePath)).toString();
+    } catch (error) {
+      appendOutput(`Practice result ${label} URI unavailable: ${errorMessage(error)}`);
+      return undefined;
+    }
   }
 
   private html(webview: vscode.Webview): string {
     return buildPracticeHtml(webview, this.context.extensionUri);
   }
+
+  private postToActiveView(view: vscode.WebviewView, message: JsonObject): void {
+    if (this.view === view) {
+      try {
+        void Promise.resolve(view.webview.postMessage(message)).catch((error) => {
+          appendOutput(`Practice webview postMessage failed: ${errorMessage(error)}`);
+        });
+      } catch (error) {
+        appendOutput(`Practice webview postMessage failed: ${errorMessage(error)}`);
+      }
+    }
+  }
+}
+
+function messageValue(value: unknown): string {
+  return stringValue(value).trim() || "(missing)";
 }
 
 export async function processPracticeAudio(
@@ -413,21 +723,24 @@ export async function processPracticeAudio(
   priorTurn?: CoachPriorTurn,
   practiceTarget?: PracticeTarget,
 ): Promise<PracticeResult> {
-  const state = await loadState(context);
-  const packageDate = stringValue(state.next.package_date) || state.today;
-  const sessionDir = createSessionDir(state.root, packageDate);
-  const inputExt = extensionFromMime(message.mimeType);
-  const inputPath = path.join(sessionDir, `input.${inputExt}`);
-  const audioBuffer = Buffer.from(message.base64, "base64");
+  const audioBuffer = decodeWebviewAudioBase64(message.base64);
   if (audioBuffer.length < 1000) {
     throw new Error("Recorded audio is empty or too short to process.");
   }
+  const state = await loadState(context);
+  const packageDate = stringValue(state.next.package_date) || state.today;
+  const sessionDir = createSessionDir(state.root, packageDate);
+  const mimeType = typeof message.mimeType === "string" && message.mimeType.trim()
+    ? message.mimeType
+    : "audio/webm";
+  const inputExt = extensionFromMime(mimeType);
+  const inputPath = path.join(sessionDir, `input.${inputExt}`);
   fs.writeFileSync(inputPath, audioBuffer);
   return processPracticeFile(
     context,
     state,
     inputPath,
-    message.mimeType,
+    mimeType,
     sessionDir,
     packageDate,
     progress,
@@ -436,18 +749,76 @@ export async function processPracticeAudio(
   );
 }
 
+export function decodeWebviewAudioBase64(value: unknown): Buffer {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) {
+    throw new Error("Recorded audio payload was missing.");
+  }
+  const commaIndex = raw.indexOf(",");
+  const compact = (raw.startsWith("data:") && commaIndex >= 0 ? raw.slice(commaIndex + 1) : raw)
+    .replace(/\s+/g, "");
+  if (
+    compact.length === 0 ||
+    compact.length % 4 === 1 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)
+  ) {
+    throw new Error("Recorded audio payload was not valid base64.");
+  }
+  const buffer = Buffer.from(compact, "base64");
+  const normalizedInput = compact.replace(/=+$/, "");
+  const normalizedOutput = buffer.toString("base64").replace(/=+$/, "");
+  if (normalizedOutput !== normalizedInput) {
+    throw new Error("Recorded audio payload was not valid base64.");
+  }
+  return buffer;
+}
+
 export function normalizePracticeTargetPayload(value: unknown): PracticeTarget | undefined {
   const obj = (value && typeof value === "object" ? value : undefined) as JsonObject | undefined;
-  const referenceText = stringValue(obj?.referenceText).trim();
+  const referenceText = firstPayloadString(obj, "referenceText", "reference_text");
   if (!referenceText) {
     return undefined;
   }
   return {
     mode: "shadow",
     referenceText,
-    referenceLabel: stringValue(obj?.referenceLabel).trim() || "Reference",
-    followUpQuestion: stringValue(obj?.followUpQuestion).trim(),
+    referenceLabel: firstPayloadString(obj, "referenceLabel", "reference_label") || "Reference",
+    followUpQuestion: firstPayloadString(obj, "followUpQuestion", "follow_up_question"),
   };
+}
+
+function normalizeCoachPriorTurnPayload(value: unknown): CoachPriorTurn | undefined {
+  const obj = (value && typeof value === "object" ? value : undefined) as JsonObject | undefined;
+  const nativeVersion = firstPayloadString(obj, "nativeVersion", "native_version");
+  if (!nativeVersion) {
+    return undefined;
+  }
+  return {
+    nativeVersion,
+    followUpQuestion: firstPayloadString(obj, "followUpQuestion", "follow_up_question"),
+    userTranscript: firstPayloadString(obj, "userTranscript", "user_transcript"),
+  };
+}
+
+function firstPayloadString(obj: JsonObject | undefined, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = stringValue(obj?.[key]).trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function explicitTruePayloadFlag(value: unknown): boolean {
+  if (value === true || value === 1) {
+    return true;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "1";
+  }
+  return false;
 }
 
 function dedupeUris(uris: vscode.Uri[]): vscode.Uri[] {
@@ -461,4 +832,19 @@ function dedupeUris(uris: vscode.Uri[]): vscode.Uri[] {
     }
   }
   return result;
+}
+
+function positiveRequestId(value: unknown): number {
+  const requestId = positiveScalarNumber(value);
+  return requestId !== undefined && Number.isInteger(requestId) ? requestId : 0;
+}
+
+function positiveScalarNumber(value: unknown): number | undefined {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number(value)
+        : undefined;
+  return typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }

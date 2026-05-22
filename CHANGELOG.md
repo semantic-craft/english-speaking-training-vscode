@@ -7,6 +7,356 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.40] — 2026-05-22
+
+### Fixed
+- String settings now ignore malformed non-string values before trimming, so a
+  bad hand edit in `settings.json` falls back instead of throwing a `trim is
+  not a function` error during activation, provider setup, TTS, or recording.
+- Path settings such as `pythonPath`, `nativeRecorderFfmpegPath`, and
+  `localMaterialsRoot` now share the same `~/...` expansion logic, so shells
+  are no longer required to make home-relative executable paths work.
+- MiniMax cloned-voice commands now compare the current voice id and TTS model
+  through the same safe string-setting parser used by provider calls, avoiding
+  redundant rewrites when older settings only differ by whitespace.
+- The status tree now defensively string-normalizes compacted diagnostic
+  fields and has regression coverage for its unavailable-workspace fallback.
+- Local materials root configuration now repairs malformed existing
+  `localMaterialsRoot` settings instead of crashing when comparing the selected
+  folder with a hand-edited value.
+- Shared string-array parsing now trims scalar entries and drops whitespace-only
+  items before they reach prompts, tags, coach problems, or follow-up drill
+  text.
+- Runtime error reporting now extracts trimmed scalar `message`, `error`,
+  `reason`, `statusText`, or `code` fields from non-`Error` failures instead
+  of surfacing `[object Object]` in panels or fallback prompts.
+- Practice webview numeric controls now accept only real numbers or numeric
+  strings, so malformed array/boolean payloads cannot accidentally change TTS
+  speed, request ids, slow-read speed, or generated-drill counts.
+- Practice webview response matching now also rejects non-scalar request ids
+  from host messages, preventing JavaScript's implicit number conversion from
+  finishing the wrong pending audio, drill, setup, or recorder request.
+- Practice webview speed chips now normalize dirty state payloads before
+  deciding the active/custom speed, keeping the UI aligned with the clamped
+  TTS speed used by provider calls.
+- Practice turn history now keeps only the most recent 12 turns and releases
+  pruned local recording object URLs, avoiding a heavier sidebar during long
+  practice sessions.
+- Practice webview status messages now coerce only scalar text, cap very long
+  messages, and no-op safely if the status element is unavailable, avoiding
+  `[object Object]` or oversized status updates from malformed host messages.
+- Practice webview render recovery now restores the setup-blocked recording
+  state after a failed state render, keeping the record button gate aligned
+  with the last good lesson state.
+- Practice result rendering now accepts camelCase and snake_case result fields,
+  so older or diagnostic payloads still populate transcripts, fixes, audio,
+  drill suggestions, and tags instead of rendering as blank cards.
+- Practice context payloads now accept camelCase and snake_case reply/shadow
+  fields, so older or diagnostic webview messages do not silently drop
+  follow-up or shadow-practice context.
+- MiniMax cloned-voice pinning now treats only explicit true-like payload flags
+  as the turbo-model request, so a diagnostic `"false"` string cannot
+  accidentally switch TTS to `speech-2.8-turbo`.
+- String-shaped lesson frames now feed both transcription prompts and next
+  drill suggestions, so hand-authored `frames: ["..."]` materials no longer
+  fall back to a less relevant clean-TTS line.
+- Coach and generated-drill prompts now share the same cleaned lesson-frame
+  extraction, so whitespace-heavy or mixed string/object `frames` stay visible
+  to the model without blank prompt entries.
+- Fallback follow-up drills now choose the first cleaned nonblank frame as
+  their base frame and normalize fallback examples before rendering, avoiding
+  blank substitution prompts from hand-authored frame arrays.
+- Reading-card frame rendering and lesson-reset identity now use the same
+  cleaned frame text list, so malformed frame entries do not show up as empty
+  bullets or noisy reset keys.
+- Reading-card prosody details and drill-plan previews now ignore malformed
+  object entries and render only cleaned scalar text, preventing noisy
+  `[object Object]` chips, labels, and practice lines from dirty package JSON.
+- Today hero, source chips, learner profile, source diagnostics, and lesson
+  identity now read only scalar fields, so malformed package or state metadata
+  no longer leaks object placeholders into the main practice surface.
+- Generated drill-line results and prebuilt drill rounds now normalize labels,
+  text, reasons, and error text before updating the workbench, preventing dirty
+  provider payloads from adding unusable drill items.
+- Webview host messages now normalize status and error text before touching the
+  status bar, setup prompts, or TTS/drill progress labels, so object-shaped
+  errors no longer render as `[object Object]`.
+- Pipeline stage messages and progress heatmaps now whitelist stage/status
+  values and coerce progress counters before rendering, preventing malformed
+  state from breaking selectors or leaking arbitrary CSS classes.
+- Practice, imitate, reply, and slow-read actions now normalize turn text,
+  labels, and follow-up context before queuing a recording or TTS request, so
+  stale or malformed UI state cannot become the next practice target.
+- Setup/provider and practice action controls now normalize DOM dataset values
+  and skip blank actions before posting back to the extension host, preventing
+  malformed buttons or stale UI state from triggering empty provider, setting,
+  command, speed, voice, drill, or slow-read changes.
+- Routine/repair lists and recent-session cards now render only cleaned scalar
+  text and skip malformed entries, preventing `[object Object]` placeholders
+  from dirty local history or drill state.
+- Task-card/package opening now trims hand-edited asset paths and URLs before
+  checking or opening them, including local `~/...` paths.
+- Local lesson completion now reports a clear exit-code message when the
+  progress script fails without writing stdout or stderr.
+- Progress records now trim package dates and case-normalize `completed`
+  statuses before counting completed lessons, so small hand edits in the
+  progress JSON do not make the sidebar lose completion state.
+- Webview asset state now carries trimmed local/remote asset paths alongside
+  generated `_uri` fields, keeping diagnostics and fallback display values
+  aligned with the actual files used.
+- Loose JSON reads now ignore non-object roots, preventing array or null
+  package/manifest files from leaking malformed state into local lesson data.
+- Recent session history now scans backward until it finds the requested number
+  of valid object records, so trailing malformed JSONL lines do not hide useful
+  prior-turn context.
+- Follow-up drill state now accepts only positive-integer `required_frames`
+  values and cleans shadowing chunks before rendering, so malformed local drill
+  JSON cannot show negative frame counts or empty shadowing lines in the
+  sidebar.
+- Coach-generated drill prompts now compact `avoid_texts` before provider
+  calls, keeping repeated drill generation from sending oversized history into
+  the model.
+- `localMaterialsRoot` now trims whitespace before expanding `~/...`, so a
+  hand-edited value like ` ~/EnglishSpeakingTraining ` still resolves and is
+  granted to the practice webview as an allowed local resource root through
+  the same safe string-setting parser; if `HOME` is unavailable, the `~/...`
+  path is left intact rather than rewritten to an accidental relative path.
+- Startup provider/model migrations now trim and lowercase legacy defaults
+  before deciding whether to repair them, so stale hand-edited values such as
+  ` DeepSeek ` or ` GEMINI-2.5-FLASH ` no longer survive activation.
+- Provider model settings and the MiniMax voice id now trim whitespace and fall
+  back on blank values before rendering sidebar state or entering STT/coach/TTS
+  request bodies, avoiding hard-to-spot failures from hand-edited settings.
+- Model-setting pickers now mark those effective fallback defaults as current
+  and repair blank hand-edited model settings when the default is selected.
+- Free-form path, instruction, and microphone settings now trim whitespace
+  before sidebar state or command use, and a blank Python path falls back to
+  `python3` instead of trying to execute whitespace as a command.
+- OpenAI/Gemini text extraction now scans later choices or candidates when an
+  earlier provider candidate is empty or malformed, avoiding unnecessary JSON
+  fallback text in coach/transcription paths.
+- Stored API keys are now trimmed before readiness checks or provider requests,
+  so older SecretStorage values with accidental whitespace no longer look
+  configured but fail authentication at call time.
+- TTS speed controls now repair hand-edited string or clamped speed settings
+  back to numeric canonical values when the effective speed is selected.
+- Provider base URL settings now trim whitespace and fall back on blank values
+  before rendering sidebar state or building MiMo/MiniMax request endpoints,
+  and MiMo chat-completions URLs no longer double-append the endpoint path.
+- TTS provider entry points now read the normalized provider before naming
+  audio files or dispatching synthesis, keeping practice turns, example audio,
+  and slow-read audio aligned when `ttsProvider` was hand-edited.
+- Sidebar API-key setup messages now normalize provider names before routing,
+  so casing or whitespace in the payload no longer turns `OpenAI`/`Gemini`
+  into an unknown provider route.
+- Sidebar closed-enum pickers now use the runtime-normalized effective value
+  when marking `current`, and choosing that value repairs dirty settings such
+  as ` Auto ` back to their canonical form.
+- Recorder backend settings now tolerate hand-edited casing or surrounding
+  whitespace, so values like `Auto` or ` WEBVIEW ` keep their intended
+  recording route instead of falling back to native recording.
+- Provider route settings now tolerate hand-edited casing or surrounding
+  whitespace before computing sidebar state, key readiness, and runtime
+  coach/speech/TTS routing, avoiding accidental fallback to OpenAI.
+- OpenAI transcription mode and TTS response format settings now normalize
+  before sidebar state or provider calls, so hand-edited casing or stale
+  protocol values do not appear as active runtime configuration.
+- Runtime TTS voice resolution now normalizes stale or hand-edited
+  OpenAI/Gemini/MiMo voice settings before rendering sidebar state or calling
+  the providers, instead of letting invalid voice names fail mid-practice.
+- Sidebar voice pickers now stay on provider-declared built-in voice enums
+  instead of accepting arbitrary custom voice names that only fail later during
+  TTS generation.
+- Sidebar configuration pickers no longer offer `Custom...` for closed
+  protocol enums such as recorder backend, OpenAI transcription mode, or
+  OpenAI audio format, avoiding saved values that later silently fall back.
+- The Gemini speech-output voice setting now exposes the same prebuilt voice
+  enum in VS Code Settings that the sidebar already offers, preventing
+  manifest/UI drift around invalid Gemini TTS voice values.
+- Explicit `webview` recording now stays on VS Code's MediaRecorder path
+  instead of silently falling back to native recording; only `auto` may fall
+  back, and stale recorder backend settings now normalize to `macLocal`.
+- Stale or removed `audioUnderstandingProvider` values such as `azure` and
+  `deepseek` now fall back to OpenAI in the actual transcription runtime, not
+  only in the sidebar state/key-readiness UI. This keeps legacy settings from
+  silently routing a take to the wrong speech-input provider.
+- If the native macOS recorder reports `nativeRecordingStarted` after the
+  15-second start watchdog has already released the UI, the sidebar now
+  restores the red button to stop mode so the user can finish or stop that
+  late-started take instead of being left with a running recorder and no
+  visible stop path.
+- Native macOS recorder starts are now serialized at the recorder layer, so a
+  retry after a slow start cannot spawn overlapping ffmpeg processes before
+  the stale first take is reclaimed.
+- Native recorder internals no longer leave raw NUL bytes in source files, so
+  repo search and manifest/runtime drift checks keep seeing the recorder code.
+- Practice webview refreshes and progress messages are now scoped to the
+  webview instance that started them, so disposing an old sidebar view cannot
+  detach a newer one or leak stale progress into it.
+- Practice results now check that their originating webview is still active
+  before converting local audio paths to webview URIs, avoiding stale-view
+  errors after long transcribe/coach/TTS turns.
+- Practice-result payloads are now normalized before rendering, so malformed
+  URI, transcript, history, or drill-example fields cannot leak `[object
+  Object]` into audio players, turn history, or follow-up practice controls.
+- Drill example rendering now accepts only scalar text for labels, reasons,
+  source tags, and lines, preventing malformed lesson or coach data from
+  showing `[object Object]` in the drill workbench.
+- The practice sidebar now registers its host message listener before loading
+  the webview HTML, closing a first-load race where an early `ready` message
+  could be missed on fast reloads.
+- Opening the task card, session folder, or materials guide is now blocked
+  during an active turn and reports request-scoped command results, so a failed
+  open action cannot be mistaken for a practice-pipeline failure.
+- The task-card and session-folder buttons now enter the same disabled
+  in-progress state as setup actions while their open commands are running,
+  avoiding duplicate taps that look like the first click was ignored.
+- The OpenAI speech-input provider card now exposes its file/realtime transport
+  mode, so users can switch transcription mode from the sidebar instead of
+  hunting through settings or Command Palette commands.
+- The OpenAI speech-output provider card now exposes its response format
+  setting, making latency/size tradeoffs like `wav`, `mp3`, or `pcm`
+  adjustable from the sidebar.
+- The OpenAI speech-output provider card now exposes optional TTS style
+  instructions, and that setting can be cleared back to coach-driven automatic
+  style from the same configuration UI.
+- The practice sidebar now shows recorder backend and microphone preference
+  controls, making it easier to switch between native Mac recording and the
+  webview recorder or choose a microphone without leaving the practice panel.
+- MiMo speech-input and speech-output provider cards now expose their model and
+  voice settings, matching the manifest settings instead of leaving MiMo users
+  without sidebar controls for those routes.
+- The practice stage strip now resets only at the start of a new transcription
+  pipeline, so completed stages stay checked while coach, TTS, and save
+  progress messages arrive.
+- Hiding the practice stage strip now clears its active/done classes, avoiding
+  stale progress indicators after an error, reset, or delayed hide.
+- The sidebar refresh button now shows an in-progress state, blocks duplicate
+  refresh clicks and other transient actions while state reloads, and self
+  recovers if no state response arrives.
+- State rendering in the practice sidebar is now fail-soft: a malformed or
+  unexpected state payload reports a render error and releases the refresh
+  button while preserving the previous valid state instead of leaving the UI
+  stuck in a loading state.
+- Failed state renders now also roll back derived sidebar context such as the
+  current example line, lesson key, turn history, pending targets, and drill
+  state, so a bad refresh cannot contaminate the previous usable lesson.
+- Lesson-change cleanup is now committed only after the new state finishes
+  rendering, so a failed refresh cannot revoke old turn audio, clear host reply
+  context, or cancel drill watchdogs for the still-visible previous lesson.
+- Lesson changes now also hide and reset the practice stage strip, preventing a
+  previous turn's completed progress bar from briefly appearing on the next
+  lesson.
+- Example-audio and slow-read watchdogs now show a "still generating" message
+  before the provider timeout window, instead of discarding valid audio that
+  arrives after a normal slow provider call.
+- In-flight example-audio and slow-read requests now keep their disabled/busy
+  button state across sidebar re-renders, so refreshes no longer make pending
+  audio actions look idle or clickable.
+- While example audio is generating, slow-read/listen buttons now become
+  temporarily disabled and are restored when the example request finishes,
+  fails, or times out.
+- Example-audio and slow-read watchdogs now key off the active request id
+  rather than the original button element, so sidebar re-renders cannot split
+  timeout recovery between stale and current DOM nodes.
+- Rejected practice-webview `postMessage` calls are now logged instead of
+  becoming unhandled promise rejections when VS Code closes or recreates the
+  sidebar mid-refresh.
+- Provider responses that come back as invalid JSON now surface contextual
+  errors such as "OpenAI coach returned invalid JSON" or "Gemini TTS returned
+  invalid JSON", with a short body preview, instead of a raw `SyntaxError`.
+- Provider text extraction now skips `null` or malformed nested content parts
+  instead of surfacing low-level property-access errors on dirty JSON shapes.
+- Speech-input and TTS provider extractors now do the same for malformed
+  `segments`, `choices`, `candidates`, and audio `parts` entries.
+- `prebuilt/` lesson scanning now ignores date-shaped files, broken entries,
+  and missing folders defensively instead of letting one bad directory entry
+  crash the sidebar state load.
+- `prebuilt/` lesson scanning now rejects invalid calendar dates such as
+  `2026-02-30`, preventing package-generation date math from crashing on a
+  merely date-shaped folder.
+- Lesson creation and prompt-composition date prompts now reject invalid
+  calendar dates too, so they cannot create invisible `prebuilt/` folders.
+- Lesson overwrite cleanup now removes stale directory-shaped generated
+  artifacts too, so an accidental `english-training.json/` or `daily-card.png/`
+  folder no longer blocks sample or skeleton regeneration after confirmation.
+- `english_training_progress.py next` results now have to reference an
+  existing `prebuilt/` package date; stale or malformed script output falls
+  back to local inventory instead of selecting a missing lesson.
+- `english_training_progress.py next` stdout parsing now tolerates log lines
+  around pretty-printed JSON while still rejecting non-object JSON roots.
+- Valid `english_training_progress.py next` results are now completed with
+  local package metadata and assets, so sparse script output cannot hide
+  reading-card media or today's example text.
+- Broken `followup-drill.json` files now show a Source Diagnostics warning
+  while the drill workbench falls back to safe default lines, instead of
+  silently ignoring the user's drill file.
+- Valid `followup-drill.json` files with malformed `rounds` entries now skip
+  those bad entries before webview rendering, preventing a broken drill panel.
+- If every `followup-drill.json` round is unusable, the drill workbench now
+  falls back to today's training frames instead of showing an empty rounds
+  panel.
+- Drill rounds now also skip malformed `examples` entries such as `null`,
+  arrays, or empty strings before they reach the sidebar renderer.
+- Broken progress JSON now shows a Source Diagnostics warning instead of
+  silently making completed lessons look incomplete.
+- Progress completion now ignores records for invalid or nonexistent lesson
+  dates, so Source Diagnostics cannot count completed packages that are not in
+  `prebuilt/`.
+- Progress completion now skips non-object records such as `null` or accidental
+  arrays instead of letting one malformed progress entry block sidebar state.
+- Broken `manifest.json` files now show a Source Diagnostics warning while
+  reading-card assets fall back to the package's default filenames.
+- JSON diagnostics now flag existing-but-unreadable files such as accidental
+  directories instead of treating them like optional missing files.
+- JSON diagnostics now flag non-object roots such as arrays or `null`, which
+  keeps structurally wrong materials from being treated as valid empty objects.
+- Relative asset paths in `manifest.json` can no longer escape their lesson
+  package folder; invalid escaping paths fall back to the default asset path.
+- Broken or unreadable learner-profile files now degrade to a Profile panel
+  warning instead of blocking the whole sidebar state load.
+- Unreadable recent-session logs now fall back to an empty history instead of
+  blocking the sidebar state load.
+- Recent-session logs now skip malformed lines and non-object JSON entries so
+  one bad history row cannot break the sidebar's Recent Sessions panel.
+- Failed session-log writes are now logged without failing an otherwise
+  completed practice result.
+- Failed per-session artifact writes (`coach.json`, `session.json`, or
+  `session.md`) are now logged per file so one broken artifact path does not
+  discard the rest of a completed practice result.
+- Failed `transcript.txt` writes are now logged without aborting the
+  already-transcribed practice turn.
+- Malformed or empty webview audio payloads are now rejected before workspace
+  state loading, session-directory creation, disk writes, or STT calls.
+- Invalid sidebar control messages now surface explicit errors instead of
+  silently no-oping when a button command, provider, setting, voice, or speed
+  payload drifts.
+- Unknown sidebar message types and empty slow-read requests now return
+  explicit errors, so protocol drift cannot leave a secondary action waiting
+  until the client-side timeout.
+- Sidebar error recovery now clears transient busy states for example audio,
+  slow-read, drill-listen, and drill-generation controls so a failed backend
+  route cannot leave secondary buttons stuck.
+- Startup provider/model migrations now refresh the sidebar only when they
+  actually changed a stale setting, avoiding a redundant activation-time state
+  reload on normal workspaces.
+- UI refresh now attempts every registered refresh handler before surfacing an
+  error, so one failing panel cannot prevent the rest of the sidebar state
+  from updating.
+- Activation-time async tasks now log failures to the English Training output
+  channel instead of risking an unhandled rejection during extension startup.
+- Setting up all active-route API keys now batches the final sidebar/webview
+  refresh, so first-time multi-provider setup no longer reloads after every
+  saved key.
+- Submitting a blank API key now shows the intended warning instead of being
+  treated like a silent cancel.
+- Command Palette failures are now logged and surfaced through a VS Code error
+  message instead of escaping as bare async command rejections.
+- Canceling the optional learner-brief prompt in `Generate Next Package` now
+  cancels the command instead of creating a blank lesson skeleton.
+- `package-lock.json` is aligned with the `0.1.39` package version again, so
+  the manifest regression test starts from a green baseline.
+
 ## [0.1.39] — 2026-05-22
 
 A recording-audio-quality pass. Native macOS recordings stopped sounding

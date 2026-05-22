@@ -5,15 +5,21 @@ import * as vscode from "vscode";
 import WebSocket from "ws";
 
 import {
-  config,
+  chatCompletionsUrl,
+  configString,
   extractGeminiText,
   fetchWithTimeout,
   getRequiredKey,
   MIMO_OPENAI_BASE_URL,
+  parseJsonObject,
   parseLooseJson,
   resolveFfmpegPath,
   stringValue,
 } from "../core.js";
+import {
+  normalizedOpenAITranscriptionMode,
+  normalizedSpeechInputProvider,
+} from "../runtime/settings.js";
 import type { JsonObject } from "../types.js";
 
 export async function transcribeAudio(
@@ -23,9 +29,9 @@ export async function transcribeAudio(
   sessionDir: string,
   promptText = "",
 ): Promise<string> {
-  const provider = config<string>("audioUnderstandingProvider") || "openai";
+  const provider = resolveAudioUnderstandingProvider();
   if (provider === "openai") {
-    const mode = (config<string>("openaiTranscriptionMode") || "file").toLowerCase();
+    const mode = normalizedOpenAITranscriptionMode();
     if (mode === "realtime") {
       return transcribeWithOpenAIRealtime(context, audioPath, sessionDir);
     }
@@ -37,6 +43,10 @@ export async function transcribeAudio(
   return transcribeWithGemini(context, audioPath, mimeType, sessionDir);
 }
 
+export function resolveAudioUnderstandingProvider(): "openai" | "gemini" | "mimo" {
+  return normalizedSpeechInputProvider() as "openai" | "gemini" | "mimo";
+}
+
 async function transcribeWithOpenAIFile(
   context: vscode.ExtensionContext,
   audioPath: string,
@@ -44,8 +54,11 @@ async function transcribeWithOpenAIFile(
   promptText: string,
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "openai");
-  const model = config<string>("openaiFileTranscriptionModel") || "gpt-4o-transcribe";
+  const model = configString("openaiFileTranscriptionModel", "gpt-4o-transcribe");
   const stats = fs.statSync(audioPath);
+  if (stats.size === 0) {
+    throw new Error("Transcription input audio is empty.");
+  }
   // /v1/audio/transcriptions enforces a 25 MB upload cap.
   if (stats.size > 24 * 1024 * 1024) {
     throw new Error(
@@ -84,18 +97,22 @@ async function transcribeWithOpenAIFile(
   if (!response.ok) {
     throw new Error(`OpenAI transcription failed (${response.status}): ${body.slice(0, 1500)}`);
   }
-  const parsed = JSON.parse(body) as JsonObject;
+  const parsed = parseJsonObject(body, "OpenAI transcription");
   return extractOpenAIFileTranscript(parsed);
 }
 
-function extractOpenAIFileTranscript(parsed: JsonObject): string {
+export function extractOpenAIFileTranscript(parsed: JsonObject): string {
   const direct = stringValue(parsed.text).trim();
   if (direct) return direct;
   // gpt-4o-transcribe-diarize returns { segments: [{ speaker, text, ... }] }.
   const segments = parsed.segments;
   if (Array.isArray(segments)) {
     const parts = segments
-      .map((segment) => stringValue((segment as JsonObject).text).trim())
+      .map((segment) =>
+        segment && typeof segment === "object" && !Array.isArray(segment)
+          ? stringValue((segment as JsonObject).text).trim()
+          : "",
+      )
       .filter(Boolean);
     if (parts.length) return parts.join(" ");
   }
@@ -103,7 +120,7 @@ function extractOpenAIFileTranscript(parsed: JsonObject): string {
 }
 
 function mimoEndpoint(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+  return chatCompletionsUrl(baseUrl);
 }
 
 async function transcribeWithMimo(
@@ -113,8 +130,8 @@ async function transcribeWithMimo(
   sessionDir: string,
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "mimo");
-  const baseUrl = config<string>("mimoAudioBaseUrl") || MIMO_OPENAI_BASE_URL;
-  const model = config<string>("mimoAudioUnderstandingModel") || "mimo-v2.5";
+  const baseUrl = configString("mimoAudioBaseUrl", MIMO_OPENAI_BASE_URL);
+  const model = configString("mimoAudioUnderstandingModel", "mimo-v2.5");
   const audio = await prepareInlineAudio(audioPath, mimeType, sessionDir);
   const byteLength = Buffer.byteLength(audio.base64, "base64");
   if (byteLength > 45 * 1024 * 1024) {
@@ -157,19 +174,25 @@ async function transcribeWithMimo(
   if (!response.ok) {
     throw new Error(`MiMo audio understanding failed (${response.status}): ${body.slice(0, 1500)}`);
   }
-  const transcript = extractMimoTranscript(JSON.parse(body) as JsonObject);
+  const transcript = extractMimoTranscript(parseJsonObject(body, "MiMo audio understanding"));
   if (!transcript) {
     throw new Error("MiMo audio understanding returned empty transcript.");
   }
   return transcript;
 }
 
-function extractMimoTranscript(parsed: JsonObject): string {
+export function extractMimoTranscript(parsed: JsonObject): string {
   const choices = parsed.choices;
   if (!Array.isArray(choices) || choices.length === 0) {
     return "";
   }
-  const message = (choices[0] as JsonObject).message as JsonObject | undefined;
+  const message = choices
+    .map((choice) =>
+      choice && typeof choice === "object" && !Array.isArray(choice)
+        ? (choice as JsonObject).message
+        : undefined,
+    )
+    .find((value) => value && typeof value === "object" && !Array.isArray(value)) as JsonObject | undefined;
   const raw =
     stringValue(message?.content).trim() || stringValue(message?.reasoning_content).trim();
   return raw
@@ -189,10 +212,14 @@ export async function prepareInlineAudio(
   if (!/audio\/(?:wav|x-wav)$/i.test(mimeType) || audioPath !== wavPath) {
     await convertAudioToWav(audioPath, wavPath);
   }
+  const audio = fs.readFileSync(wavPath);
+  if (audio.length === 0) {
+    throw new Error("Inline audio input is empty after conversion.");
+  }
   return {
     filePath: wavPath,
     mimeType: "audio/wav",
-    base64: fs.readFileSync(wavPath).toString("base64"),
+    base64: audio.toString("base64"),
   };
 }
 
@@ -280,7 +307,7 @@ async function transcribeWithOpenAIRealtime(
   sessionDir: string,
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "openai");
-  const model = config<string>("openaiRealtimeTranscriptionModel") || "gpt-realtime-whisper";
+  const model = configString("openaiRealtimeTranscriptionModel", "gpt-realtime-whisper");
   const pcmPath = path.join(sessionDir, "openai-realtime-input.pcm");
   await convertAudioToPcm16(audioPath, pcmPath, 24000);
   const pcm = fs.readFileSync(pcmPath);
@@ -417,7 +444,7 @@ async function transcribeWithGemini(
   sessionDir: string,
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "gemini");
-  const model = config<string>("geminiAudioUnderstandingModel") || "gemini-3-flash-preview";
+  const model = configString("geminiAudioUnderstandingModel", "gemini-3-flash-preview");
   const audio = await prepareInlineAudio(audioPath, mimeType, sessionDir);
   const byteLength = Buffer.byteLength(audio.base64, "base64");
   if (byteLength > 18 * 1024 * 1024) {
@@ -460,7 +487,7 @@ async function transcribeWithGemini(
   if (!response.ok) {
     throw new Error(`Gemini audio understanding failed (${response.status}): ${body.slice(0, 1500)}`);
   }
-  const text = extractGeminiText(JSON.parse(body) as JsonObject).trim();
+  const text = extractGeminiText(parseJsonObject(body, "Gemini audio understanding")).trim();
   const transcript = extractGeminiTranscriptText(text);
   if (!transcript) {
     throw new Error("Gemini audio understanding returned empty transcript.");

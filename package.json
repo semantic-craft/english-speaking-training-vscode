@@ -2,7 +2,7 @@
   "name": "english-speaking-training-vscode",
   "displayName": "English Speaking Training",
   "description": "Standalone VS Code speaking-practice cockpit for local EnglishSpeakingTraining files.",
-  "version": "0.1.39",
+  "version": "0.1.40",
   "publisher": "xianwei-zhang",
   "license": "MIT",
   "repository": {
@@ -358,6 +358,16 @@
         "englishTraining.geminiTtsVoice": {
           "type": "string",
           "default": "Kore",
+          "enum": [
+            "Kore",
+            "Puck",
+            "Charon",
+            "Fenrir",
+            "Aoede",
+            "Leda",
+            "Orus",
+            "Zephyr"
+          ],
           "description": "Gemini prebuilt voice name for native-version audio."
         },
         "englishTraining.mimoAnthropicBaseUrl": {

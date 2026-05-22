@@ -6,6 +6,8 @@
  * extension.ts registers the real handlers in activate().
  */
 
+import { errorMessage } from "../core.js";
+
 type RefreshHandler = () => void | Promise<void>;
 
 const refreshHandlers: RefreshHandler[] = [];
@@ -19,8 +21,19 @@ export function clearRefreshHandlers(): void {
 }
 
 export async function refreshAll(): Promise<void> {
-  for (const handler of refreshHandlers) {
-    await handler();
+  const errors: unknown[] = [];
+  for (const handler of [...refreshHandlers]) {
+    try {
+      await handler();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new Error(`Refresh failed in ${errors.length} handlers: ${errors.map(errorMessage).join("; ")}`);
   }
 }
 

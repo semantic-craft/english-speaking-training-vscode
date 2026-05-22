@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-import { appendOutput, config, readJson, stringValue } from "../core.js";
+import { appendOutput, configString, expandHomePath, readJson, readJsonDiagnosed, stringValue } from "../core.js";
 import type { CommandResult, JsonObject } from "../types.js";
 import { pythonPath } from "./settings.js";
 
@@ -11,7 +11,7 @@ export const DEFAULT_TIMEZONE = "Asia/Shanghai";
 
 export async function findTrainingRoot(): Promise<string> {
   const candidates: string[] = [];
-  const configuredRoot = expandHome(config<string>("localMaterialsRoot") || "").trim();
+  const configuredRoot = expandHome(configString("localMaterialsRoot"));
   if (configuredRoot) {
     candidates.push(configuredRoot);
   }
@@ -53,18 +53,20 @@ export function isDirectory(filePath: string): boolean {
   }
 }
 
-export function expandHome(value: string): string {
-  if (value === "~") {
-    return process.env.HOME || value;
+export function isFile(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
   }
-  if (value.startsWith("~/")) {
-    return path.join(process.env.HOME || "", value.slice(2));
-  }
-  return value;
+}
+
+export function expandHome(value: unknown): string {
+  return expandHomePath(value);
 }
 
 export function todayInConfiguredTimezone(): string {
-  const timezone = (config<string>("timezone") || DEFAULT_TIMEZONE).trim() || DEFAULT_TIMEZONE;
+  const timezone = configString("timezone", DEFAULT_TIMEZONE);
   let parts: Intl.DateTimeFormatPart[];
   try {
     parts = new Intl.DateTimeFormat("en-US", {
@@ -111,22 +113,53 @@ export function execFile(root: string, args: string[], timeoutMs = 120_000): Pro
   });
 }
 
-export function readLocalInventory(root: string): { dates: string[]; completed: Set<string> } {
-  const prebuiltRoot = path.join(root, "prebuilt");
-  const dates = fs.existsSync(prebuiltRoot)
-    ? fs.readdirSync(prebuiltRoot)
-        .filter((name) => /^\d{4}-\d{2}-\d{2}$/.test(name) && fs.statSync(path.join(prebuiltRoot, name)).isDirectory())
-        .sort()
-    : [];
-  const progressJson = readJson(path.join(root, "progress", "english-speaking-training-progress.json")) ?? {};
+export function readLocalInventory(root: string): { dates: string[]; completed: Set<string>; progressJsonError?: string } {
+  const dates = listPrebuiltPackageDates(root);
+  const progressRead = readJsonDiagnosed(path.join(root, "progress", "english-speaking-training-progress.json"));
+  const progressJson = progressRead.data ?? {};
+  return { dates, completed: completedPackageDates(progressJson, dates), progressJsonError: progressRead.parseError };
+}
+
+export function completedPackageDates(progressJson: JsonObject, packageDates?: string[]): Set<string> {
+  const allowed = packageDates ? new Set(packageDates) : undefined;
   const completed = new Set<string>();
   for (const record of Array.isArray(progressJson.records) ? progressJson.records : []) {
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      continue;
+    }
     const item = record as JsonObject;
-    if (stringValue(item.status) === "completed") {
-      completed.add(stringValue(item.date));
+    const date = stringValue(item.date).trim();
+    const status = stringValue(item.status).trim().toLowerCase();
+    if (
+      status === "completed" &&
+      isPackageDate(date) &&
+      (!allowed || allowed.has(date))
+    ) {
+      completed.add(date);
     }
   }
-  return { dates, completed };
+  return completed;
+}
+
+export function listPrebuiltPackageDates(root: string): string[] {
+  const prebuiltRoot = path.join(root, "prebuilt");
+  let names: string[];
+  try {
+    names = fs.readdirSync(prebuiltRoot);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((name) => isPackageDate(name) && isDirectory(path.join(prebuiltRoot, name)))
+    .sort();
+}
+
+export function isPackageDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 export function dateRangeLabel(dates: string[]): string {
@@ -139,6 +172,6 @@ export function dateRangeLabel(dates: string[]): string {
   return `${dates[0]} to ${dates[dates.length - 1]}`;
 }
 
-export function isHttpUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value);
+export function isHttpUrl(value: unknown): boolean {
+  return /^https?:\/\//i.test(stringValue(value).trim());
 }

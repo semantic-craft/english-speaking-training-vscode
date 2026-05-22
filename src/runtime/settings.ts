@@ -1,95 +1,153 @@
 import {
   config,
+  configString,
+  expandHomePath,
   isCoachProvider,
   isTtsProvider,
   MIMO_ANTHROPIC_BASE_URL,
   MIMO_OPENAI_BASE_URL,
+  normalizedProviderName,
   normalizeTtsSpeed,
 } from "../core.js";
 import type { TrainingState } from "../types.js";
 
 export const DEFAULT_BLOCKED_MICROPHONE_PATTERN = "iphone|ipad|continuity|karios";
+const OPENAI_TTS_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse", "marin", "cedar"] as const;
+const OPENAI_TRANSCRIPTION_MODES = ["file", "realtime"] as const;
+const OPENAI_TTS_RESPONSE_FORMATS = ["wav", "mp3", "opus", "aac", "flac", "pcm"] as const;
+const GEMINI_TTS_VOICES = ["Kore", "Puck", "Charon", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"] as const;
+const MIMO_TTS_VOICES = ["Mia", "Chloe", "Milo", "Dean", "mimo_default"] as const;
 
 export type ProviderSettingName = "coachProvider" | "audioUnderstandingProvider" | "ttsProvider";
 export type ConfigSettingName =
   | "mimoCoachModel"
+  | "openaiTranscriptionMode"
   | "openaiRealtimeTranscriptionModel"
   | "openaiFileTranscriptionModel"
   | "openaiCoachModel"
   | "geminiCoachModel"
   | "geminiAudioUnderstandingModel"
+  | "mimoAudioUnderstandingModel"
   | "minimaxTtsModel"
+  | "mimoTtsModel"
+  | "mimoTtsVoice"
   | "openaiTtsModel"
   | "openaiTtsVoice"
+  | "openaiTtsInstructions"
+  | "openaiTtsResponseFormat"
+  | "recorderBackend"
   | "geminiTtsModel"
   | "geminiTtsVoice";
 
 export function pythonPath(): string {
-  return config<string>("pythonPath") || "python3";
+  return expandHomePath(configString("pythonPath", "python3"));
 }
 
 export function trainingSettings(): TrainingState["settings"] {
   return {
-    localMaterialsRoot: config<string>("localMaterialsRoot") || "",
+    localMaterialsRoot: configString("localMaterialsRoot"),
     coachProvider: normalizedCoachProvider(),
     audioUnderstandingProvider: normalizedSpeechInputProvider(),
     ttsProvider: normalizedTtsProvider(),
-    openaiRealtimeTranscriptionModel: config<string>("openaiRealtimeTranscriptionModel") || "gpt-realtime-whisper",
-    openaiTranscriptionMode: config<string>("openaiTranscriptionMode") || "file",
-    openaiFileTranscriptionModel: config<string>("openaiFileTranscriptionModel") || "gpt-4o-transcribe",
-    openaiCoachModel: config<string>("openaiCoachModel") || "gpt-4o",
-    openaiTtsModel: config<string>("openaiTtsModel") || "gpt-4o-mini-tts",
-    openaiTtsVoice: config<string>("openaiTtsVoice") || "marin",
-    openaiTtsInstructions: config<string>("openaiTtsInstructions") || "",
-    openaiTtsResponseFormat: config<string>("openaiTtsResponseFormat") || "wav",
-    geminiCoachModel: config<string>("geminiCoachModel") || "gemini-3-flash-preview",
-    geminiTtsModel: config<string>("geminiTtsModel") || "gemini-3.1-flash-tts-preview",
-    geminiTtsVoice: config<string>("geminiTtsVoice") || "Kore",
-    geminiAudioUnderstandingModel: config<string>("geminiAudioUnderstandingModel") || "gemini-3-flash-preview",
-    mimoAnthropicBaseUrl: config<string>("mimoAnthropicBaseUrl") || MIMO_ANTHROPIC_BASE_URL,
-    mimoCoachModel: config<string>("mimoCoachModel") || "mimo-v2.5-pro",
-    mimoAudioBaseUrl: config<string>("mimoAudioBaseUrl") || MIMO_OPENAI_BASE_URL,
-    mimoAudioUnderstandingModel: config<string>("mimoAudioUnderstandingModel") || "mimo-v2.5",
-    mimoTtsBaseUrl: config<string>("mimoTtsBaseUrl") || MIMO_OPENAI_BASE_URL,
-    mimoTtsModel: config<string>("mimoTtsModel") || "mimo-v2.5-tts",
-    mimoTtsVoice: config<string>("mimoTtsVoice") || "Mia",
-    minimaxTtsModel: config<string>("minimaxTtsModel") || "speech-2.8-hd",
-    minimaxTtsVoiceId: config<string>("minimaxTtsVoiceId") || "English_expressive_narrator",
+    openaiRealtimeTranscriptionModel: configString("openaiRealtimeTranscriptionModel", "gpt-realtime-whisper"),
+    openaiTranscriptionMode: normalizedOpenAITranscriptionMode(),
+    openaiFileTranscriptionModel: configString("openaiFileTranscriptionModel", "gpt-4o-transcribe"),
+    openaiCoachModel: configString("openaiCoachModel", "gpt-4o"),
+    openaiTtsModel: configString("openaiTtsModel", "gpt-4o-mini-tts"),
+    openaiTtsVoice: normalizedOpenAITtsVoice(),
+    openaiTtsInstructions: configString("openaiTtsInstructions"),
+    openaiTtsResponseFormat: normalizedOpenAITtsResponseFormat(),
+    geminiCoachModel: configString("geminiCoachModel", "gemini-3-flash-preview"),
+    geminiTtsModel: configString("geminiTtsModel", "gemini-3.1-flash-tts-preview"),
+    geminiTtsVoice: normalizedGeminiTtsVoice(),
+    geminiAudioUnderstandingModel: configString("geminiAudioUnderstandingModel", "gemini-3-flash-preview"),
+    mimoAnthropicBaseUrl: configString("mimoAnthropicBaseUrl", MIMO_ANTHROPIC_BASE_URL),
+    mimoCoachModel: configString("mimoCoachModel", "mimo-v2.5-pro"),
+    mimoAudioBaseUrl: configString("mimoAudioBaseUrl", MIMO_OPENAI_BASE_URL),
+    mimoAudioUnderstandingModel: configString("mimoAudioUnderstandingModel", "mimo-v2.5"),
+    mimoTtsBaseUrl: configString("mimoTtsBaseUrl", MIMO_OPENAI_BASE_URL),
+    mimoTtsModel: configString("mimoTtsModel", "mimo-v2.5-tts"),
+    mimoTtsVoice: normalizedMimoTtsVoice(),
+    minimaxTtsModel: configString("minimaxTtsModel", "speech-2.8-hd"),
+    minimaxTtsVoiceId: configString("minimaxTtsVoiceId", "English_expressive_narrator"),
     ttsSpeed: normalizeTtsSpeed(config<unknown>("ttsSpeed"), 0.9),
-    recorderBackend: config<string>("recorderBackend") || "macLocal",
-    preferredMicrophoneName: config<string>("preferredMicrophoneName") || "",
-    blockedMicrophoneNamePattern: config<string>("blockedMicrophoneNamePattern") || DEFAULT_BLOCKED_MICROPHONE_PATTERN,
+    recorderBackend: normalizedRecorderBackend(),
+    preferredMicrophoneName: configString("preferredMicrophoneName"),
+    blockedMicrophoneNamePattern: configString("blockedMicrophoneNamePattern", DEFAULT_BLOCKED_MICROPHONE_PATTERN),
   };
 }
 
 export function normalizedSpeechInputProvider(): string {
-  const provider = config<string>("audioUnderstandingProvider") || "openai";
+  const provider = normalizedProviderName(config<string>("audioUnderstandingProvider"));
   return provider === "openai" || provider === "gemini" || provider === "mimo"
     ? provider
     : "openai";
 }
 
 export function normalizedCoachProvider(): string {
-  const provider = config<string>("coachProvider") || "openai";
+  const provider = normalizedProviderName(config<string>("coachProvider"));
   return isCoachProvider(provider) ? provider : "openai";
 }
 
 export function normalizedTtsProvider(): string {
-  const provider = config<string>("ttsProvider") || "openai";
+  const provider = normalizedProviderName(config<string>("ttsProvider"));
   return isTtsProvider(provider) ? provider : "openai";
+}
+
+export function normalizedRecorderBackend(): string {
+  const backend = configString("recorderBackend", "macLocal").toLowerCase();
+  if (backend === "maclocal") return "macLocal";
+  if (backend === "webview" || backend === "auto") return backend;
+  return "macLocal";
+}
+
+export function normalizedOpenAITranscriptionMode(): string {
+  const mode = configString("openaiTranscriptionMode", "file").toLowerCase();
+  return includesValue(OPENAI_TRANSCRIPTION_MODES, mode) ? mode : "file";
+}
+
+export function normalizedOpenAITtsResponseFormat(): string {
+  const format = configString("openaiTtsResponseFormat", "wav").toLowerCase();
+  return includesValue(OPENAI_TTS_RESPONSE_FORMATS, format) ? format : "wav";
+}
+
+export function normalizedOpenAITtsVoice(): string {
+  const voice = configString("openaiTtsVoice", "marin");
+  return includesValue(OPENAI_TTS_VOICES, voice) ? voice : "marin";
+}
+
+export function normalizedGeminiTtsVoice(): string {
+  const voice = configString("geminiTtsVoice", "Kore");
+  return includesValue(GEMINI_TTS_VOICES, voice) ? voice : "Kore";
+}
+
+export function normalizedMimoTtsVoice(): string {
+  const voice = configString("mimoTtsVoice", "Mia");
+  return includesValue(MIMO_TTS_VOICES, voice) ? voice : "Mia";
+}
+
+function includesValue(values: readonly string[], value: string): boolean {
+  return values.includes(value);
 }
 
 export function isConfigSettingName(value: unknown): value is ConfigSettingName {
   return (
     value === "mimoCoachModel" ||
+    value === "openaiTranscriptionMode" ||
     value === "openaiRealtimeTranscriptionModel" ||
     value === "openaiFileTranscriptionModel" ||
     value === "openaiCoachModel" ||
     value === "geminiCoachModel" ||
     value === "geminiAudioUnderstandingModel" ||
+    value === "mimoAudioUnderstandingModel" ||
     value === "minimaxTtsModel" ||
+    value === "mimoTtsModel" ||
+    value === "mimoTtsVoice" ||
     value === "openaiTtsModel" ||
     value === "openaiTtsVoice" ||
+    value === "openaiTtsInstructions" ||
+    value === "openaiTtsResponseFormat" ||
+    value === "recorderBackend" ||
     value === "geminiTtsModel" ||
     value === "geminiTtsVoice"
   );

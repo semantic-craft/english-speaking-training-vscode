@@ -41,6 +41,30 @@ export function config<T>(key: string): T {
   return vscode.workspace.getConfiguration("englishTraining").get<T>(key) as T;
 }
 
+export function configString(key: string, fallback = ""): string {
+  const raw = config<unknown>(key);
+  const value = typeof raw === "string" ? raw.trim() : "";
+  return value || fallback.trim();
+}
+
+export function expandHomePath(value: unknown): string {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  const home = process.env.HOME;
+  if (trimmed === "~") {
+    return home || trimmed;
+  }
+  if (trimmed.startsWith("~/")) {
+    return home ? path.join(home, trimmed.slice(2)) : trimmed;
+  }
+  return trimmed;
+}
+
+export function userConfigurationTarget(): vscode.ConfigurationTarget {
+  const hasWorkspace = Boolean(vscode.workspace.workspaceFile)
+    || ((vscode.workspace.workspaceFolders?.length ?? 0) > 0);
+  return hasWorkspace ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+}
+
 export function stamp(): string {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 }
@@ -77,19 +101,39 @@ export async function fetchWithTimeout(
 
 export function readJson(filePath: string): JsonObject | undefined {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as JsonObject;
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as JsonObject
+      : undefined;
   } catch {
     return undefined;
   }
 }
 
+export function parseJsonObject(text: string, label = "JSON response"): JsonObject {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new Error(
+      `${label} returned invalid JSON: ${errorMessage(error)}. Body: ${text.slice(0, 600)}`,
+    );
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const kind = parsed === null ? "null" : Array.isArray(parsed) ? "an array" : typeof parsed;
+    throw new Error(`${label} returned ${kind} instead of a JSON object. Body: ${text.slice(0, 600)}`);
+  }
+  return parsed as JsonObject;
+}
+
 /**
  * Like readJson, but distinguishes "file is absent" (legitimately empty,
- * fall back silently) from "file exists but is malformed JSON" (the user
- * has materials and made a typo — must NOT degrade silently). The plain
- * readJson swallows both as undefined; for the core lesson package that
- * conflation shows an enabled record button over a totally empty lesson
- * with no hint that a trailing comma / markdown fence broke the JSON.
+ * fall back silently) from "file exists but is unreadable or malformed JSON"
+ * (the user has materials and made a typo / path mistake — must NOT degrade
+ * silently). The plain readJson swallows both as undefined; for the core
+ * lesson package that conflation shows an enabled record button over a totally
+ * empty lesson with no hint that a trailing comma / markdown fence broke the
+ * JSON.
  */
 export function readJsonDiagnosed(
   filePath: string,
@@ -97,11 +141,19 @@ export function readJsonDiagnosed(
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, "utf8");
-  } catch {
+  } catch (error) {
+    if (fs.existsSync(filePath)) {
+      return { data: undefined, parseError: `Could not read JSON: ${errorMessage(error)}` };
+    }
     return { data: undefined };
   }
   try {
-    return { data: JSON.parse(raw) as JsonObject };
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      const kind = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
+      return { data: undefined, parseError: `JSON root must be an object; got ${kind}` };
+    }
+    return { data: parsed as JsonObject };
   } catch (error) {
     return { data: undefined, parseError: errorMessage(error) };
   }
@@ -113,7 +165,7 @@ export function writeJson(filePath: string, value: unknown): void {
 }
 
 export function resolveFfmpegPath(): string {
-  const configured = (config<string>("nativeRecorderFfmpegPath") || "ffmpeg").trim() || "ffmpeg";
+  const configured = expandHomePath(configString("nativeRecorderFfmpegPath", "ffmpeg"));
   if (configured.includes("/") || configured.includes("\\")) {
     return configured;
   }
@@ -129,7 +181,7 @@ export async function getRequiredKey(
   context: vscode.ExtensionContext,
   provider: ProviderName,
 ): Promise<string> {
-  const key = await context.secrets.get(secretKeys[provider]);
+  const key = (await context.secrets.get(secretKeys[provider]) || "").trim();
   if (!key) {
     throw new Error(
       `Missing ${providerLabel(provider)} API key. Open the Command Palette and run “${providerKeyCommandTitle(provider)}”.`,
@@ -165,6 +217,11 @@ export function isProviderName(value: unknown): value is ProviderName {
     value === "minimax" ||
     value === "mimo"
   );
+}
+
+export function normalizedProviderName(value: unknown): ProviderName | undefined {
+  const provider = stringValue(value).trim().toLowerCase();
+  return isProviderName(provider) ? provider : undefined;
 }
 
 export function isCoachProvider(value: unknown): value is ProviderName {
@@ -528,17 +585,12 @@ export function parseFirstJson(stdout: string): JsonObject | undefined {
     if (!trimmed.startsWith("{")) {
       continue;
     }
-    try {
-      return JSON.parse(trimmed) as JsonObject;
-    } catch {
-      continue;
+    const parsed = tryParseJsonObject(trimmed);
+    if (parsed) {
+      return parsed;
     }
   }
-  try {
-    return JSON.parse(stdout) as JsonObject;
-  } catch {
-    return undefined;
-  }
+  return tryParseJsonObject(stdout) ?? tryParseJsonObject(extractCompleteJsonObject(stdout) ?? "");
 }
 
 export function extractOpenAIText(parsed: JsonObject): string {
@@ -546,23 +598,42 @@ export function extractOpenAIText(parsed: JsonObject): string {
   if (direct) return direct;
   const choices = parsed.choices;
   if (Array.isArray(choices)) {
-    const first = choices[0] as JsonObject | undefined;
-    const message = first?.message as JsonObject | undefined;
-    const content = message?.content;
-    const textContent = typeof content === "string" ? content : "";
-    if (textContent) return textContent;
-    if (Array.isArray(content)) {
-      const parts = content.map((part) => stringValue((part as JsonObject).text)).filter(Boolean);
-      if (parts.length) return parts.join("\n");
+    for (const choice of choices) {
+      if (!choice || typeof choice !== "object" || Array.isArray(choice)) {
+        continue;
+      }
+      const messageValue = (choice as JsonObject).message;
+      const message = messageValue && typeof messageValue === "object" && !Array.isArray(messageValue)
+        ? messageValue as JsonObject
+        : undefined;
+      const content = message?.content;
+      const textContent = typeof content === "string" ? content : "";
+      if (textContent) return textContent;
+      if (Array.isArray(content)) {
+        const parts = content
+          .map((part) =>
+            part && typeof part === "object" && !Array.isArray(part)
+              ? stringValue((part as JsonObject).text)
+              : "",
+          )
+          .filter(Boolean);
+        if (parts.length) return parts.join("\n");
+      }
     }
   }
   const output = parsed.output;
   if (Array.isArray(output)) {
     const parts: string[] = [];
     for (const item of output) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        continue;
+      }
       const content = (item as JsonObject).content;
       if (Array.isArray(content)) {
         for (const part of content) {
+          if (!part || typeof part !== "object" || Array.isArray(part)) {
+            continue;
+          }
           const partObj = part as JsonObject;
           const text = stringValue(partObj.text) || stringValue(partObj.output_text);
           if (text) parts.push(text);
@@ -577,11 +648,29 @@ export function extractOpenAIText(parsed: JsonObject): string {
 export function extractGeminiText(parsed: JsonObject): string {
   const candidates = parsed.candidates;
   if (!Array.isArray(candidates)) return JSON.stringify(parsed);
-  const first = candidates[0] as JsonObject | undefined;
-  const content = first?.content as JsonObject | undefined;
-  const parts = content?.parts;
-  if (!Array.isArray(parts)) return JSON.stringify(parsed);
-  return parts.map((part) => stringValue((part as JsonObject).text)).filter(Boolean).join("\n");
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      continue;
+    }
+    const contentValue = (candidate as JsonObject).content;
+    const content = contentValue && typeof contentValue === "object" && !Array.isArray(contentValue)
+      ? contentValue as JsonObject
+      : undefined;
+    const parts = content?.parts;
+    if (!Array.isArray(parts)) {
+      continue;
+    }
+    const text = parts
+      .map((part) =>
+        part && typeof part === "object" && !Array.isArray(part)
+          ? stringValue((part as JsonObject).text)
+          : "",
+      )
+      .filter(Boolean)
+      .join("\n");
+    if (text) return text;
+  }
+  return JSON.stringify(parsed);
 }
 
 export function stringValue(value: unknown): string {
@@ -592,11 +681,27 @@ export function stringValue(value: unknown): string {
 
 export function arrayOfStrings(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.map((item) => stringValue(item)).filter(Boolean);
+  return value.map((item) => stringValue(item).trim()).filter(Boolean);
 }
 
 export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) {
+    return error.message.trim() || error.name || "Unknown error";
+  }
+  const direct = stringValue(error).trim();
+  if (direct) {
+    return direct;
+  }
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    const obj = error as JsonObject;
+    for (const key of ["message", "error", "reason", "statusText", "code"]) {
+      const value = stringValue(obj[key]).trim();
+      if (value) {
+        return value;
+      }
+    }
+  }
+  return "Unknown error";
 }
 
 export function normalizeTtsSpeed(value: unknown, fallback = 0.9): number {

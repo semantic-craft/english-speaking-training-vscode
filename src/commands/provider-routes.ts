@@ -3,36 +3,45 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 import {
+  configString,
   isAudioUnderstandingProvider,
   isCoachProvider,
   isTtsProvider,
+  normalizedProviderName,
   normalizeTtsSpeed,
   providerLabel,
   secretKeys,
+  stringValue,
+  userConfigurationTarget,
 } from "../core.js";
 import type { KeyAvailability, ProviderName } from "../types.js";
 import { refreshAll, runProviderSetupHint } from "../runtime/host.js";
 import type { ProviderSettingName } from "../runtime/settings.js";
+import { expandHome } from "../runtime/training-root.js";
 
-export async function migrateGeminiModelDefaults(): Promise<void> {
+export async function migrateGeminiModelDefaults(): Promise<boolean> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
-  await migrateProviderSetting(settings, "coachProvider", "minimax", "openai");
-  await migrateProviderSetting(settings, "coachProvider", "kimi", "openai");
+  let changed = false;
+  changed = (await migrateProviderSetting(settings, "coachProvider", "minimax", "openai")) || changed;
+  changed = (await migrateProviderSetting(settings, "coachProvider", "kimi", "openai")) || changed;
   // DeepSeek was removed as a coach provider; fall existing users back to
   // the current default so a now-unrouteable value can't wedge the coach step.
-  await migrateProviderSetting(settings, "coachProvider", "deepseek", "openai");
-  await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "openai");
+  changed = (await migrateProviderSetting(settings, "coachProvider", "deepseek", "openai")) || changed;
+  changed = (await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "openai")) || changed;
   // NOTE: do not migrate `ttsProvider: minimax`. MiniMax is a currently
   // supported, UI-selectable speech-output provider. Migrating it here ran on
   // every activation and silently reverted a user's deliberate MiniMax TTS
   // choice back to Gemini after each VS Code restart.
-  await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-flash", "gemini-3-flash-preview");
-  await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-pro", "gemini-3.1-pro-preview");
-  await migrateGeminiSetting(settings, "geminiAudioUnderstandingModel", "gemini-2.5-flash", "gemini-3-flash-preview");
-  await migrateGeminiSetting(settings, "geminiAudioUnderstandingModel", "gemini-2.5-pro", "gemini-3.1-pro-preview");
-  await migrateGeminiSetting(settings, "geminiTtsModel", "gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview");
-  await migrateGeminiSetting(settings, "geminiTtsModel", "gemini-2.5-pro-preview-tts", "gemini-3.1-flash-tts-preview");
-  await refreshAll();
+  changed = (await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-flash", "gemini-3-flash-preview")) || changed;
+  changed = (await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-pro", "gemini-3.1-pro-preview")) || changed;
+  changed = (await migrateGeminiSetting(settings, "geminiAudioUnderstandingModel", "gemini-2.5-flash", "gemini-3-flash-preview")) || changed;
+  changed = (await migrateGeminiSetting(settings, "geminiAudioUnderstandingModel", "gemini-2.5-pro", "gemini-3.1-pro-preview")) || changed;
+  changed = (await migrateGeminiSetting(settings, "geminiTtsModel", "gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview")) || changed;
+  changed = (await migrateGeminiSetting(settings, "geminiTtsModel", "gemini-2.5-pro-preview-tts", "gemini-3.1-flash-tts-preview")) || changed;
+  if (changed) {
+    await refreshAll();
+  }
+  return changed;
 }
 
 export async function migrateProviderSetting(
@@ -40,15 +49,18 @@ export async function migrateProviderSetting(
   setting: ProviderSettingName,
   oldDefault: string,
   nextDefault: string,
-): Promise<void> {
+): Promise<boolean> {
   const inspection = settings.inspect<string>(setting);
-  const targets: Array<[string, vscode.ConfigurationTarget]> = [
+  const oldDefaultKey = normalizedMigrationValue(oldDefault);
+  const candidates: Array<[unknown, vscode.ConfigurationTarget]> = [
     [inspection?.workspaceValue, vscode.ConfigurationTarget.Workspace],
     [inspection?.globalValue, vscode.ConfigurationTarget.Global],
-  ].filter((entry): entry is [string, vscode.ConfigurationTarget] => entry[0] === oldDefault);
+  ];
+  const targets = candidates.filter((entry) => normalizedMigrationValue(entry[0]) === oldDefaultKey);
   for (const [, target] of targets) {
     await settings.update(setting, nextDefault, target);
   }
+  return targets.length > 0;
 }
 
 export async function migrateGeminiSetting(
@@ -56,27 +68,38 @@ export async function migrateGeminiSetting(
   setting: "geminiCoachModel" | "geminiAudioUnderstandingModel" | "geminiTtsModel",
   oldDefault: string,
   nextDefault: string,
-): Promise<void> {
+): Promise<boolean> {
   const inspection = settings.inspect<string>(setting);
-  const targets: Array<[string, vscode.ConfigurationTarget]> = [
+  const oldDefaultKey = normalizedMigrationValue(oldDefault);
+  const candidates: Array<[unknown, vscode.ConfigurationTarget]> = [
     [inspection?.workspaceValue, vscode.ConfigurationTarget.Workspace],
     [inspection?.globalValue, vscode.ConfigurationTarget.Global],
-  ].filter((entry): entry is [string, vscode.ConfigurationTarget] => entry[0] === oldDefault);
+  ];
+  const targets = candidates.filter((entry) => normalizedMigrationValue(entry[0]) === oldDefaultKey);
   for (const [, target] of targets) {
     await settings.update(setting, nextDefault, target);
   }
+  return targets.length > 0;
+}
+
+function normalizedMigrationValue(value: unknown): string {
+  return stringValue(value).trim().toLowerCase();
 }
 
 export async function apiKeyAvailability(context: vscode.ExtensionContext): Promise<KeyAvailability> {
   return {
-    openai: Boolean(await context.secrets.get(secretKeys.openai)),
-    gemini: Boolean(await context.secrets.get(secretKeys.gemini)),
-    minimax: Boolean(await context.secrets.get(secretKeys.minimax)),
-    mimo: Boolean(await context.secrets.get(secretKeys.mimo)),
+    openai: Boolean((await context.secrets.get(secretKeys.openai) || "").trim()),
+    gemini: Boolean((await context.secrets.get(secretKeys.gemini) || "").trim()),
+    minimax: Boolean((await context.secrets.get(secretKeys.minimax) || "").trim()),
+    mimo: Boolean((await context.secrets.get(secretKeys.mimo) || "").trim()),
   };
 }
 
-export async function configureApiKey(context: vscode.ExtensionContext, provider: ProviderName): Promise<boolean> {
+export async function configureApiKey(
+  context: vscode.ExtensionContext,
+  provider: ProviderName,
+  options: { refresh?: boolean } = {},
+): Promise<boolean> {
   const label = providerLabel(provider);
   const value = await vscode.window.showInputBox({
     title: `Configure ${label} API Key`,
@@ -84,7 +107,7 @@ export async function configureApiKey(context: vscode.ExtensionContext, provider
     password: true,
     ignoreFocusOut: true,
   });
-  if (!value) {
+  if (value === undefined) {
     return false;
   }
   const trimmed = value.trim();
@@ -92,9 +115,15 @@ export async function configureApiKey(context: vscode.ExtensionContext, provider
     vscode.window.showWarningMessage(`${label} API key was empty; nothing was saved.`);
     return false;
   }
+  if (((await context.secrets.get(secretKeys[provider])) || "").trim() === trimmed) {
+    vscode.window.showInformationMessage(`${label} API key is already saved.`);
+    return true;
+  }
   await context.secrets.store(secretKeys[provider], trimmed);
   vscode.window.showInformationMessage(`${label} API key saved.`);
-  await refreshAll();
+  if (options.refresh !== false) {
+    await refreshAll();
+  }
   return true;
 }
 
@@ -126,11 +155,19 @@ export async function configureCoreRouteKeys(context: vscode.ExtensionContext): 
     vscode.window.showInformationMessage("English Training active route API keys are already saved.");
     return;
   }
+  let savedAny = false;
   for (const provider of missing) {
-    const saved = await configureApiKey(context, provider);
+    const saved = await configureApiKey(context, provider, { refresh: false });
     if (!saved) {
+      if (savedAny) {
+        await refreshAll();
+      }
       return;
     }
+    savedAny = true;
+  }
+  if (savedAny) {
+    await refreshAll();
   }
 }
 
@@ -149,16 +186,22 @@ export function normalizeProviderForSetting(
   setting: ProviderSettingName,
   raw: unknown,
 ): ProviderName {
+  const provider = normalizedProviderName(raw);
   if (setting === "coachProvider") {
-    return isCoachProvider(raw) ? raw : "openai";
+    return isCoachProvider(provider) ? provider : "openai";
   }
   if (setting === "audioUnderstandingProvider") {
-    return isAudioUnderstandingProvider(raw) ? raw : "openai";
+    return isAudioUnderstandingProvider(provider) ? provider : "openai";
   }
-  return isTtsProvider(raw) ? raw : "openai";
+  return isTtsProvider(provider) ? provider : "openai";
 }
 
 export async function clearApiKeys(context: vscode.ExtensionContext): Promise<void> {
+  const availability = await apiKeyAvailability(context);
+  if (!Object.values(availability).some(Boolean)) {
+    vscode.window.showInformationMessage("No English Training API keys are saved.");
+    return;
+  }
   const choice = await vscode.window.showWarningMessage("Clear all English Training API keys from VS Code SecretStorage?", { modal: true }, "Clear");
   if (choice !== "Clear") {
     return;
@@ -168,7 +211,7 @@ export async function clearApiKeys(context: vscode.ExtensionContext): Promise<vo
   await refreshAll();
 }
 
-export async function configureLocalMaterialsRoot(): Promise<void> {
+export async function configureLocalMaterialsRoot(options: { onChanged?: () => void } = {}): Promise<boolean> {
   const picked = await vscode.window.showOpenDialog({
     canSelectFiles: false,
     canSelectFolders: true,
@@ -177,84 +220,182 @@ export async function configureLocalMaterialsRoot(): Promise<void> {
     title: "Choose Local English Training Materials Folder",
   });
   if (!picked || picked.length === 0) {
-    return;
+    return false;
   }
   const root = picked[0].fsPath;
-  fs.mkdirSync(path.join(root, "prebuilt"), { recursive: true });
-  fs.mkdirSync(path.join(root, "progress"), { recursive: true });
+  const prebuiltDir = path.join(root, "prebuilt");
+  const progressDir = path.join(root, "progress");
+  const hadScaffold = fs.existsSync(prebuiltDir) && fs.existsSync(progressDir);
+  fs.mkdirSync(prebuiltDir, { recursive: true });
+  fs.mkdirSync(progressDir, { recursive: true });
   const config = vscode.workspace.getConfiguration("englishTraining");
-  await config.update("localMaterialsRoot", root, vscode.ConfigurationTarget.Global);
-  vscode.window.showInformationMessage(`English Training local materials folder set to ${root}.`);
+  const configuredRoot = configString("localMaterialsRoot");
+  const sameRoot = Boolean(configuredRoot) && path.resolve(expandHome(configuredRoot)) === path.resolve(root);
+  if (sameRoot && hadScaffold) {
+    vscode.window.showInformationMessage(`English Training local materials folder is already ${root}.`);
+    return false;
+  }
+  if (!sameRoot) {
+    await updateLocalMaterialsRootSetting(config, root);
+  }
+  options.onChanged?.();
+  vscode.window.showInformationMessage(
+    sameRoot
+      ? `English Training local materials folder is already ${root}; created missing prebuilt/progress folders.`
+      : `English Training local materials folder set to ${root}.`,
+  );
+  await refreshAll();
+  return true;
+}
+
+export async function setProviderSetting(setting: ProviderSettingName, value: unknown): Promise<void> {
+  const provider = normalizedProviderName(value);
+  if (!provider || !isValidProviderForSetting(setting, provider)) {
+    const display = provider ?? stringValue(value).trim();
+    vscode.window.showWarningMessage(
+      `English Training ${providerSettingLabel(setting)} provider cannot use ${display || "(missing)"}.`,
+    );
+    return;
+  }
+  const settings = vscode.workspace.getConfiguration("englishTraining");
+  const currentRaw = settings.get<string>(setting);
+  const current = normalizeProviderForSetting(setting, currentRaw);
+  const currentIsCanonical = stringValue(currentRaw).trim() === provider;
+  if (current === provider && currentIsCanonical) {
+    vscode.window.showInformationMessage(`English Training ${providerSettingLabel(setting)} provider is already ${provider}.`);
+    return;
+  }
+  await settings.update(setting, provider, userConfigurationTarget());
+  vscode.window.showInformationMessage(`English Training ${providerSettingLabel(setting)} provider set to ${provider}.`);
   await refreshAll();
 }
 
-export async function setProviderSetting(setting: ProviderSettingName, value: string): Promise<void> {
-  await vscode.workspace.getConfiguration("englishTraining").update(setting, value, vscode.ConfigurationTarget.Workspace);
-  vscode.window.showInformationMessage(`English Training ${providerSettingLabel(setting)} provider set to ${value}.`);
-  await refreshAll();
+function isValidProviderForSetting(setting: ProviderSettingName, provider: string): provider is ProviderName {
+  if (setting === "coachProvider") {
+    return isCoachProvider(provider);
+  }
+  if (setting === "audioUnderstandingProvider") {
+    return isAudioUnderstandingProvider(provider);
+  }
+  return isTtsProvider(provider);
 }
 
 export async function setOpenAIRealtimeSpeechInput(): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
-  await settings.update("audioUnderstandingProvider", "openai", vscode.ConfigurationTarget.Workspace);
-  await settings.update("openaiTranscriptionMode", "realtime", vscode.ConfigurationTarget.Workspace);
+  let changed = false;
+  changed = (await updateUserSettingIfChanged(settings, "audioUnderstandingProvider", "openai")) || changed;
+  changed = (await updateUserSettingIfChanged(settings, "openaiTranscriptionMode", "realtime")) || changed;
+  if (!changed) {
+    vscode.window.showInformationMessage("English Training OpenAI Realtime speech input is already enabled.");
+    return;
+  }
   vscode.window.showInformationMessage("English Training OpenAI Realtime speech input enabled.");
   await refreshAll();
 }
 
 export async function setGeminiOnlyProviders(): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
-  await settings.update("coachProvider", "gemini", vscode.ConfigurationTarget.Workspace);
-  await settings.update("audioUnderstandingProvider", "gemini", vscode.ConfigurationTarget.Workspace);
-  await settings.update("ttsProvider", "gemini", vscode.ConfigurationTarget.Workspace);
+  let changed = false;
+  changed = (await updateUserSettingIfChanged(settings, "coachProvider", "gemini")) || changed;
+  changed = (await updateUserSettingIfChanged(settings, "audioUnderstandingProvider", "gemini")) || changed;
+  changed = (await updateUserSettingIfChanged(settings, "ttsProvider", "gemini")) || changed;
+  if (!changed) {
+    vscode.window.showInformationMessage("English Training Gemini-only mode is already enabled.");
+    return;
+  }
   vscode.window.showInformationMessage("English Training Gemini-only mode enabled: Gemini coach + speech input + speech output.");
   await refreshAll();
 }
 
 export async function setRecommendedHybridProviders(): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
-  await settings.update("coachProvider", "gemini", vscode.ConfigurationTarget.Workspace);
-  await settings.update("audioUnderstandingProvider", "gemini", vscode.ConfigurationTarget.Workspace);
-  await settings.update("ttsProvider", "gemini", vscode.ConfigurationTarget.Workspace);
+  let changed = false;
+  changed = (await updateUserSettingIfChanged(settings, "coachProvider", "gemini")) || changed;
+  changed = (await updateUserSettingIfChanged(settings, "audioUnderstandingProvider", "gemini")) || changed;
+  changed = (await updateUserSettingIfChanged(settings, "ttsProvider", "gemini")) || changed;
+  if (!changed) {
+    vscode.window.showInformationMessage("English Training Gemini core route is already enabled.");
+    return;
+  }
   vscode.window.showInformationMessage("English Training Gemini core route enabled: Gemini coach + Gemini speech input + Gemini speech output.");
   await refreshAll();
 }
 
 export async function setOpenAIStackProviders(): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
-  await settings.update("coachProvider", "openai", vscode.ConfigurationTarget.Workspace);
-  await settings.update("audioUnderstandingProvider", "openai", vscode.ConfigurationTarget.Workspace);
-  await settings.update("ttsProvider", "openai", vscode.ConfigurationTarget.Workspace);
+  let changed = false;
+  changed = (await updateUserSettingIfChanged(settings, "coachProvider", "openai")) || changed;
+  changed = (await updateUserSettingIfChanged(settings, "audioUnderstandingProvider", "openai")) || changed;
+  changed = (await updateUserSettingIfChanged(settings, "ttsProvider", "openai")) || changed;
   // file mode benefits from the domain prompt and is more accurate for
   // bounded recordings; users can switch back to realtime in settings.
-  await settings.update("openaiTranscriptionMode", "file", vscode.ConfigurationTarget.Workspace);
+  changed = (await updateUserSettingIfChanged(settings, "openaiTranscriptionMode", "file")) || changed;
+  if (!changed) {
+    vscode.window.showInformationMessage("English Training OpenAI stack is already enabled.");
+    return;
+  }
   vscode.window.showInformationMessage(
     "English Training OpenAI stack enabled: coach (gpt-4o) + transcribe (gpt-4o-transcribe, domain prompt) + TTS (gpt-4o-mini-tts, marin, coach-driven style).",
   );
   await refreshAll();
 }
 
-export async function setTtsSpeedConfig(speed: number): Promise<void> {
-  const clamped = normalizeTtsSpeed(speed, 0.9);
-  await vscode.workspace.getConfiguration("englishTraining").update("ttsSpeed", clamped, vscode.ConfigurationTarget.Workspace);
+export async function setTtsSpeedConfig(speed: unknown): Promise<void> {
+  const parsedSpeed = parseTtsSpeedInput(speed);
+  if (parsedSpeed === undefined) {
+    vscode.window.showWarningMessage("English Training TTS speed must be a positive number.");
+    return;
+  }
+  const clamped = normalizeTtsSpeed(parsedSpeed, 0.9);
+  const settings = vscode.workspace.getConfiguration("englishTraining");
+  const rawCurrent = settings.get<unknown>("ttsSpeed");
+  const current = normalizeTtsSpeed(rawCurrent, 0.9);
+  const currentIsCanonical = typeof rawCurrent === "number" && rawCurrent === clamped;
+  if (current === clamped && currentIsCanonical) {
+    vscode.window.showInformationMessage(`English Training TTS speed is already ${clamped}.`);
+    return;
+  }
+  await settings.update("ttsSpeed", clamped, userConfigurationTarget());
+  vscode.window.showInformationMessage(`English Training TTS speed set to ${clamped}.`);
   await refreshAll();
 }
 
-export async function setMinimaxVoiceId(voiceId: string, pinTurbo: boolean): Promise<void> {
+function parseTtsSpeedInput(speed: unknown): number | undefined {
+  const parsed =
+    typeof speed === "number"
+      ? speed
+      : typeof speed === "string" && speed.trim()
+        ? Number(speed)
+        : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+export async function setMinimaxVoiceId(voiceId: unknown, pinTurbo: boolean): Promise<void> {
+  const trimmedVoiceId = stringValue(voiceId).trim();
+  if (!trimmedVoiceId) {
+    vscode.window.showWarningMessage("MiniMax voice id cannot be empty.");
+    return;
+  }
   const settings = vscode.workspace.getConfiguration("englishTraining");
-  await settings.update("minimaxTtsVoiceId", voiceId, vscode.ConfigurationTarget.Workspace);
+  const currentVoice = configString("minimaxTtsVoiceId");
+  const currentModel = configString("minimaxTtsModel", "speech-2.8-hd");
+  if (currentVoice === trimmedVoiceId && (!pinTurbo || currentModel === "speech-2.8-turbo")) {
+    vscode.window.showInformationMessage(`MiniMax voice is already ${trimmedVoiceId}.`);
+    return;
+  }
+  const target = userConfigurationTarget();
+  await settings.update("minimaxTtsVoiceId", trimmedVoiceId, target);
   if (pinTurbo) {
-    const currentModel = settings.get<string>("minimaxTtsModel") || "speech-2.8-hd";
     if (currentModel !== "speech-2.8-turbo") {
-      await settings.update("minimaxTtsModel", "speech-2.8-turbo", vscode.ConfigurationTarget.Workspace);
+      await settings.update("minimaxTtsModel", "speech-2.8-turbo", target);
       vscode.window.showInformationMessage(
-        `MiniMax voice set to ${voiceId} (cloned voice — pinned model to speech-2.8-turbo to avoid HD billing).`,
+        `MiniMax voice set to ${trimmedVoiceId} (cloned voice — pinned model to speech-2.8-turbo to avoid HD billing).`,
       );
       await refreshAll();
       return;
     }
   }
-  vscode.window.showInformationMessage(`MiniMax voice set to ${voiceId}.`);
+  vscode.window.showInformationMessage(`MiniMax voice set to ${trimmedVoiceId}.`);
   await refreshAll();
 }
 
@@ -262,4 +403,28 @@ export function providerSettingLabel(setting: ProviderSettingName): string {
   if (setting === "coachProvider") return "coach";
   if (setting === "audioUnderstandingProvider") return "speech input";
   return "speech output";
+}
+
+async function updateUserSettingIfChanged<T>(
+  settings: vscode.WorkspaceConfiguration,
+  setting: string,
+  value: T,
+): Promise<boolean> {
+  if (settings.get<T>(setting) === value) {
+    return false;
+  }
+  await settings.update(setting, value, userConfigurationTarget());
+  return true;
+}
+
+export async function updateLocalMaterialsRootSetting(
+  settings: vscode.WorkspaceConfiguration,
+  root: string,
+): Promise<vscode.ConfigurationTarget> {
+  const inspection = settings.inspect<string>("localMaterialsRoot");
+  const target = inspection?.workspaceValue !== undefined
+    ? vscode.ConfigurationTarget.Workspace
+    : vscode.ConfigurationTarget.Global;
+  await settings.update("localMaterialsRoot", root, target);
+  return target;
 }

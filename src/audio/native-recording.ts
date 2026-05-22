@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-import { appendOutput, config, resolveFfmpegPath, stringValue } from "../core.js";
-import type { AvfoundationAudioDevice, NativeRecordingSession, PracticeTarget } from "../types.js";
+import { appendOutput, config, configString, resolveFfmpegPath, stringValue } from "../core.js";
+import type { AvfoundationAudioDevice, CoachPriorTurn, NativeRecordingSession, PracticeTarget } from "../types.js";
 import { createSessionDir } from "../practice/pipeline.js";
 import { loadState } from "../runtime/state.js";
 
@@ -12,10 +12,24 @@ const DEFAULT_BLOCKED_MICROPHONE_PATTERN = "iphone|ipad|continuity|karios";
 const LOCAL_MICROPHONE_PATTERN = /\b(imac|macbook|mac mini|mac studio|studio display|built[- ]?in|internal)\b/i;
 
 let nativeRecording: NativeRecordingSession | undefined;
+let nativeStartLock: Promise<void> = Promise.resolve();
 
 export function killActiveNativeRecording(): void {
-  if (nativeRecording && !nativeRecording.process.killed) {
-    nativeRecording.process.kill("SIGTERM");
+  if (nativeRecording) {
+    killNativeRecordingSession(nativeRecording);
+  }
+}
+
+export function killNativeRecordingSession(session: NativeRecordingSession): void {
+  if (nativeRecording === session) {
+    nativeRecording = undefined;
+  }
+  if (
+    !session.process.killed &&
+    session.process.exitCode === null &&
+    session.process.signalCode === null
+  ) {
+    session.process.kill("SIGTERM");
   }
 }
 
@@ -27,6 +41,26 @@ export type NativeStartPhase = "reclaim" | "mic" | "arming";
 export async function startNativeFfmpegRecording(
   context: vscode.ExtensionContext,
   practiceTarget?: PracticeTarget,
+  priorTurn?: CoachPriorTurn,
+  onPhase?: (phase: NativeStartPhase) => void,
+): Promise<NativeRecordingSession> {
+  let releaseStartLock: () => void = () => undefined;
+  const previousStart = nativeStartLock;
+  nativeStartLock = new Promise((resolve) => {
+    releaseStartLock = resolve;
+  });
+  await previousStart;
+  try {
+    return await startNativeFfmpegRecordingLocked(context, practiceTarget, priorTurn, onPhase);
+  } finally {
+    releaseStartLock();
+  }
+}
+
+async function startNativeFfmpegRecordingLocked(
+  context: vscode.ExtensionContext,
+  practiceTarget?: PracticeTarget,
+  priorTurn?: CoachPriorTurn,
   onPhase?: (phase: NativeStartPhase) => void,
 ): Promise<NativeRecordingSession> {
   if (nativeRecording) {
@@ -108,6 +142,7 @@ export async function startNativeFfmpegRecording(
     filePath,
     sessionDir,
     packageDate,
+    priorTurn,
     practiceTarget,
     startedAt: Date.now(),
     stderr,
@@ -300,10 +335,10 @@ export function invalidateResolvedAudioDevice(): void {
 }
 
 function audioDeviceCacheKey(ffmpegPath: string): string {
-  const configured = (config<string>("nativeRecorderFfmpegAudioDevice") || "auto").trim() || "auto";
-  const preferred = (config<string>("preferredMicrophoneName") || "").trim();
-  const blocked = (config<string>("blockedMicrophoneNamePattern") || DEFAULT_BLOCKED_MICROPHONE_PATTERN).trim();
-  return [ffmpegPath, configured, preferred, blocked].join(" ");
+  const configured = configString("nativeRecorderFfmpegAudioDevice", "auto");
+  const preferred = configString("preferredMicrophoneName");
+  const blocked = configString("blockedMicrophoneNamePattern", DEFAULT_BLOCKED_MICROPHONE_PATTERN);
+  return [ffmpegPath, configured, preferred, blocked].join("\u0000");
 }
 
 export async function resolveNativeFfmpegAudioDevice(ffmpegPath: string): Promise<string> {
@@ -311,7 +346,7 @@ export async function resolveNativeFfmpegAudioDevice(ffmpegPath: string): Promis
   if (resolvedAudioDevice && resolvedAudioDevice.key === key) {
     return resolvedAudioDevice.device;
   }
-  const configured = (config<string>("nativeRecorderFfmpegAudioDevice") || "auto").trim() || "auto";
+  const configured = configString("nativeRecorderFfmpegAudioDevice", "auto");
   if (configured.toLowerCase() !== "auto") {
     appendOutput(`Using configured native audio device: ${configured}`);
     resolvedAudioDevice = { key, device: configured };
@@ -396,7 +431,7 @@ export function parseAvfoundationAudioDevices(text: string): AvfoundationAudioDe
 export function chooseLocalAvfoundationAudioDevice(devices: AvfoundationAudioDevice[]): AvfoundationAudioDevice | undefined {
   const blocked = blockedMicrophoneRegex();
   const allowed = devices.filter((device) => !blocked.test(device.name));
-  const preferredName = (config<string>("preferredMicrophoneName") || "").trim().toLowerCase();
+  const preferredName = configString("preferredMicrophoneName").toLowerCase();
   if (preferredName) {
     const preferred = allowed.find((device) => device.name.toLowerCase().includes(preferredName));
     if (preferred) {
@@ -428,8 +463,7 @@ export function resolveRecordingSampleRate(): number {
 }
 
 export function blockedMicrophoneRegex(): RegExp {
-  const pattern = (config<string>("blockedMicrophoneNamePattern") || DEFAULT_BLOCKED_MICROPHONE_PATTERN).trim()
-    || DEFAULT_BLOCKED_MICROPHONE_PATTERN;
+  const pattern = configString("blockedMicrophoneNamePattern", DEFAULT_BLOCKED_MICROPHONE_PATTERN);
   try {
     return new RegExp(pattern, "i");
   } catch {

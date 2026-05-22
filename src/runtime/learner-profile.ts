@@ -1,20 +1,46 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { readJson, stringValue } from "../core.js";
+import { errorMessage, readJsonDiagnosed, stringValue } from "../core.js";
 import type { JsonObject, LearnerProfile } from "../types.js";
 
 export function loadLocalLearnerProfile(root: string): LearnerProfile {
   const markdownPath = path.join(root, "profile", "learner-profile.md");
   if (fs.existsSync(markdownPath)) {
-    return learnerProfileFromMarkdown(markdownPath, fs.readFileSync(markdownPath, "utf8"));
+    try {
+      return learnerProfileFromMarkdown(markdownPath, fs.readFileSync(markdownPath, "utf8"));
+    } catch (error) {
+      return unavailableLearnerProfile(
+        markdownPath,
+        `Could not read profile/learner-profile.md: ${errorMessage(error)}`,
+      );
+    }
   }
 
   const jsonPath = path.join(root, "profile", "learner-profile.json");
   if (fs.existsSync(jsonPath)) {
-    const profile = readJson(jsonPath);
-    if (profile) {
-      return learnerProfileFromJson(jsonPath, profile);
+    try {
+      if (!fs.statSync(jsonPath).isFile()) {
+        return unavailableLearnerProfile(
+          jsonPath,
+          "Could not read profile/learner-profile.json: path is not a file.",
+        );
+      }
+    } catch (error) {
+      return unavailableLearnerProfile(
+        jsonPath,
+        `Could not read profile/learner-profile.json: ${errorMessage(error)}`,
+      );
+    }
+    const profile = readJsonDiagnosed(jsonPath);
+    if (profile.data) {
+      return learnerProfileFromJson(jsonPath, profile.data);
+    }
+    if (profile.parseError) {
+      return unavailableLearnerProfile(
+        jsonPath,
+        `Could not parse profile/learner-profile.json: ${profile.parseError}`,
+      );
     }
   }
 
@@ -75,6 +101,16 @@ export function missingLearnerProfile(source: string): LearnerProfile {
     source,
     format: "missing",
     summary: "Add profile/learner-profile.md or profile/learner-profile.json to personalize coaching.",
+    content: "",
+  };
+}
+
+export function unavailableLearnerProfile(source: string, summary: string): LearnerProfile {
+  return {
+    loaded: false,
+    source,
+    format: "missing",
+    summary: shortenText(summary, 260),
     content: "",
   };
 }
