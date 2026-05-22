@@ -11,46 +11,57 @@ import {
 import { openMaterialsGuide } from "../materials-guide.js";
 import { refreshAll } from "../runtime/host.js";
 import { invalidateNextPackageCache } from "../runtime/state.js";
-import { findTrainingRoot, readLocalInventory, todayInConfiguredTimezone } from "../runtime/training-root.js";
+import { findTrainingRoot, isPackageDate, readLocalInventory, todayInConfiguredTimezone } from "../runtime/training-root.js";
+import { updateLocalMaterialsRootSetting } from "../commands/provider-routes.js";
 import { sampleFollowupDrillPackage, sampleTrainingPackage } from "./sample-package.js";
 
 export async function createSamplePackage(context: vscode.ExtensionContext): Promise<void> {
-  const root = await resolveOrBootstrapLocalRoot();
-  if (!root) {
+  const resolved = await resolveOrBootstrapLocalRoot();
+  if (!resolved) {
     return;
   }
-  const today = todayInConfiguredTimezone();
-  const dateInput = await vscode.window.showInputBox({
-    title: "Create Sample Package",
-    prompt: "Lesson date (YYYY-MM-DD). Defaults to today.",
-    value: today,
-    ignoreFocusOut: true,
-    validateInput: (value) => /^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? null : "Use YYYY-MM-DD format.",
-  });
-  if (!dateInput) {
-    return;
-  }
-  const targetDate = dateInput.trim();
-  const packageDir = path.join(root, "prebuilt", targetDate);
-  const targetFile = path.join(packageDir, "english-training.json");
-  if (fs.existsSync(targetFile)) {
-    const overwrite = await vscode.window.showWarningMessage(
-      `${targetDate}/english-training.json already exists. Overwrite?`,
-      { modal: true },
-      "Overwrite",
-    );
-    if (overwrite !== "Overwrite") {
+  const { root } = resolved;
+  let packageChanged = false;
+  try {
+    const today = todayInConfiguredTimezone();
+    const dateInput = await vscode.window.showInputBox({
+      title: "Create Sample Package",
+      prompt: "Lesson date (YYYY-MM-DD). Defaults to today.",
+      value: today,
+      ignoreFocusOut: true,
+      validateInput: validateLessonDateInput,
+    });
+    if (!dateInput) {
       return;
     }
+    const targetDate = dateInput.trim();
+    if (!ensureValidLessonDate(targetDate)) {
+      return;
+    }
+    const packageDir = path.join(root, "prebuilt", targetDate);
+    const targetFile = path.join(packageDir, "english-training.json");
+    const targetDrillFile = path.join(packageDir, "followup-drill.json");
+    const existingFiles = existingLessonFileNames(packageDir);
+    if (existingFiles.length > 0) {
+      const overwrite = await vscode.window.showWarningMessage(
+        `${targetDate}/${existingFiles.join(" and ")} already exists. Overwrite?`,
+        { modal: true },
+        "Overwrite",
+      );
+      if (overwrite !== "Overwrite") {
+        return;
+      }
+      removeGeneratedPackageArtifacts(packageDir);
+    }
+    fs.mkdirSync(packageDir, { recursive: true });
+    packageChanged = true;
+    writeJson(targetFile, sampleTrainingPackage(targetDate));
+    writeJson(targetDrillFile, sampleFollowupDrillPackage(targetDate));
+    vscode.window.showInformationMessage(`Sample lesson and FSI drill written to prebuilt/${targetDate}. Edit them and refresh the sidebar.`);
+    await vscode.window.showTextDocument(vscode.Uri.file(targetFile));
+  } finally {
+    await refreshMaterialsIfChanged(resolved.materialsChanged || packageChanged);
   }
-  fs.mkdirSync(packageDir, { recursive: true });
-  writeJson(targetFile, sampleTrainingPackage(targetDate));
-  writeJson(path.join(packageDir, "followup-drill.json"), sampleFollowupDrillPackage(targetDate));
-  vscode.window.showInformationMessage(`Sample lesson and FSI drill written to prebuilt/${targetDate}. Edit them and refresh the sidebar.`);
-  await vscode.window.showTextDocument(vscode.Uri.file(targetFile));
-  // A new prebuilt/<date> can change which package is "next".
-  invalidateNextPackageCache();
-  await refreshAll();
 }
 
 function nextPackageDate(root: string): string {
@@ -72,63 +83,124 @@ function nextPackageDate(root: string): string {
 }
 
 export async function generateNextPackage(context: vscode.ExtensionContext): Promise<void> {
-  const root = await resolveOrBootstrapLocalRoot();
-  if (!root) {
+  const resolved = await resolveOrBootstrapLocalRoot();
+  if (!resolved) {
     return;
   }
-  const suggested = nextPackageDate(root);
-  const dateInput = await vscode.window.showInputBox({
-    title: "Generate Next Package",
-    prompt: "Lesson date (YYYY-MM-DD). Defaults to the day after your latest lesson.",
-    value: suggested,
-    ignoreFocusOut: true,
-    validateInput: (value) => (/^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? null : "Use YYYY-MM-DD format."),
-  });
-  if (!dateInput) {
-    return;
-  }
-  const targetDate = dateInput.trim();
-  const brief = await vscode.window.showInputBox({
-    title: "Generate Next Package — Learner Brief",
-    prompt: "Optional: topic / material / situation to practice. Leave blank to fill in the prompt later.",
-    ignoreFocusOut: true,
-  });
-  const packageDir = path.join(root, "prebuilt", targetDate);
-  const targetFile = path.join(packageDir, "english-training.json");
-  if (fs.existsSync(targetFile)) {
-    const overwrite = await vscode.window.showWarningMessage(
-      `${targetDate}/english-training.json already exists. Overwrite with a blank skeleton?`,
-      { modal: true },
-      "Overwrite",
-    );
-    if (overwrite !== "Overwrite") {
+  const { root } = resolved;
+  let packageChanged = false;
+  try {
+    const suggested = nextPackageDate(root);
+    const dateInput = await vscode.window.showInputBox({
+      title: "Generate Next Package",
+      prompt: "Lesson date (YYYY-MM-DD). Defaults to the day after your latest lesson.",
+      value: suggested,
+      ignoreFocusOut: true,
+      validateInput: validateLessonDateInput,
+    });
+    if (!dateInput) {
       return;
     }
+    const targetDate = dateInput.trim();
+    if (!ensureValidLessonDate(targetDate)) {
+      return;
+    }
+    const packageDir = path.join(root, "prebuilt", targetDate);
+    const targetFile = path.join(packageDir, "english-training.json");
+    const targetDrillFile = path.join(packageDir, "followup-drill.json");
+    const existingFiles = existingLessonFileNames(packageDir);
+    if (existingFiles.length > 0) {
+      const overwrite = await vscode.window.showWarningMessage(
+        `${targetDate}/${existingFiles.join(" and ")} already exists. Overwrite with a blank skeleton?`,
+        { modal: true },
+        "Overwrite",
+      );
+      if (overwrite !== "Overwrite") {
+        return;
+      }
+      removeGeneratedPackageArtifacts(packageDir);
+    }
+    const brief = await vscode.window.showInputBox({
+      title: "Generate Next Package — Learner Brief",
+      prompt: "Optional: topic / material / situation to practice. Leave blank to fill in the prompt later.",
+      ignoreFocusOut: true,
+    });
+    if (brief === undefined) {
+      return;
+    }
+    fs.mkdirSync(packageDir, { recursive: true });
+    packageChanged = true;
+    writeJson(targetFile, blankTrainingPackage(targetDate));
+    writeJson(targetDrillFile, blankFollowupDrillPackage(targetDate));
+    const prompt = buildGenerationPrompt({
+      date: targetDate,
+      brief: brief ?? "",
+      sampleTraining: sampleTrainingPackage(targetDate),
+      sampleDrill: sampleFollowupDrillPackage(targetDate),
+    });
+    const promptDoc = await vscode.workspace.openTextDocument({ language: "markdown", content: prompt });
+    await vscode.window.showTextDocument(promptDoc, { preview: false });
+    await vscode.window.showTextDocument(vscode.Uri.file(targetFile), { preview: false });
+    vscode.window.showInformationMessage(
+      `Blank skeleton written to prebuilt/${targetDate}. Feed the generation prompt to any LLM ` +
+        "(MiniMax / Gemini / Kimi / ...), paste its two JSON blocks back into the skeleton files, then Refresh.",
+    );
+  } finally {
+    await refreshMaterialsIfChanged(resolved.materialsChanged || packageChanged);
   }
-  fs.mkdirSync(packageDir, { recursive: true });
-  writeJson(targetFile, blankTrainingPackage(targetDate));
-  writeJson(path.join(packageDir, "followup-drill.json"), blankFollowupDrillPackage(targetDate));
-  const prompt = buildGenerationPrompt({
-    date: targetDate,
-    brief: brief ?? "",
-    sampleTraining: sampleTrainingPackage(targetDate),
-    sampleDrill: sampleFollowupDrillPackage(targetDate),
-  });
-  const promptDoc = await vscode.workspace.openTextDocument({ language: "markdown", content: prompt });
-  await vscode.window.showTextDocument(promptDoc, { preview: false });
-  await vscode.window.showTextDocument(vscode.Uri.file(targetFile), { preview: false });
-  vscode.window.showInformationMessage(
-    `Blank skeleton written to prebuilt/${targetDate}. Feed the generation prompt to any LLM ` +
-      "(MiniMax / Gemini / Kimi / ...), paste its two JSON blocks back into the skeleton files, then Refresh.",
-  );
-  // A new prebuilt/<date> can change which package is "next".
-  invalidateNextPackageCache();
-  await refreshAll();
 }
 
-async function resolveOrBootstrapLocalRoot(): Promise<string | undefined> {
+export function validateLessonDateInput(value: string): string | null {
+  return isPackageDate(value.trim()) ? null : "Use a real calendar date in YYYY-MM-DD format.";
+}
+
+export function ensureValidLessonDate(value: string): boolean {
+  const message = validateLessonDateInput(value);
+  if (!message) {
+    return true;
+  }
+  vscode.window.showWarningMessage(message);
+  return false;
+}
+
+function existingLessonFileNames(packageDir: string): string[] {
+  return [
+    "english-training.json",
+    "followup-drill.json",
+    "manifest.json",
+    "telegram-task-card.md",
+    "daily-card.png",
+    "prosody-detail.png",
+    path.join("audio", "demo.ogg"),
+    "audio-queue.json",
+    "validation-report.json",
+  ].filter((name) =>
+    fs.existsSync(path.join(packageDir, name)),
+  );
+}
+
+function removeGeneratedPackageArtifacts(packageDir: string): void {
+  for (const name of existingLessonFileNames(packageDir)) {
+    const filePath = path.join(packageDir, name);
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.rmSync(filePath, { recursive: true, force: true });
+      }
+    } catch {
+      // Best-effort cleanup only; the JSON writes below still surface real
+      // filesystem failures if the package cannot be replaced.
+    }
+  }
+}
+
+interface LocalRootResolution {
+  root: string;
+  materialsChanged: boolean;
+}
+
+async function resolveOrBootstrapLocalRoot(): Promise<LocalRootResolution | undefined> {
   try {
-    return await findTrainingRoot();
+    return { root: await findTrainingRoot(), materialsChanged: false };
   } catch {
     // fall through to bootstrap flow
   }
@@ -157,7 +229,15 @@ async function resolveOrBootstrapLocalRoot(): Promise<string | undefined> {
   const root = picked[0].fsPath;
   fs.mkdirSync(path.join(root, "prebuilt"), { recursive: true });
   fs.mkdirSync(path.join(root, "progress"), { recursive: true });
-  await vscode.workspace.getConfiguration().update("englishTraining.localMaterialsRoot", root, vscode.ConfigurationTarget.Global);
+  await updateLocalMaterialsRootSetting(vscode.workspace.getConfiguration("englishTraining"), root);
   vscode.window.showInformationMessage(`English Training materials root set to ${root}.`);
-  return root;
+  return { root, materialsChanged: true };
+}
+
+async function refreshMaterialsIfChanged(changed: boolean): Promise<void> {
+  if (!changed) {
+    return;
+  }
+  invalidateNextPackageCache();
+  await refreshAll();
 }

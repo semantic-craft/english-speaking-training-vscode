@@ -28,8 +28,14 @@ import type {
 import {
   appendOutput,
   arrayOfStrings,
+  chatCompletionsUrl,
   config,
+  configString,
   errorMessage,
+  expandHomePath,
+  extractGeminiText,
+  extractOpenAIText,
+  getRequiredKey,
   isAudioUnderstandingProvider,
   isCoachProvider,
   isProviderName,
@@ -39,6 +45,7 @@ import {
   normalizeTtsSpeed,
   parseLooseJson,
   parseFirstJson,
+  parseJsonObject,
   providerLabel,
   readJson,
   readJsonDiagnosed,
@@ -48,10 +55,22 @@ import {
   showOutput,
   stamp,
   stringValue,
+  userConfigurationTarget,
   writeJson,
 } from "./core.js";
-import { extensionFromMime } from "./practice/transcribe.js";
 import {
+  extensionFromMime,
+  extractMimoTranscript,
+  extractOpenAIFileTranscript,
+  prepareInlineAudio,
+  resolveAudioUnderstandingProvider,
+} from "./practice/transcribe.js";
+import {
+  decodeBase64AudioData,
+  decodeMiniMaxAudioHex,
+  ensureNonEmptyAudioData,
+  extractGeminiInlineAudio,
+  extractMimoTtsAudioData,
   mimeTypeForAudioPath,
   normalizeSpeechOutputProvider,
   resolveOpenAITtsVoice,
@@ -59,14 +78,24 @@ import {
   synthesizeWithConfiguredTts,
 } from "./practice/tts.js";
 import {
+  buildTranscriptionPrompt,
   createSessionDir,
   drillExamplesFromState,
+  firstNonBlankString,
+  nextDrillFromState,
   normalizeDrillExamples,
   processPracticeFile,
   readRecentSessionLog,
   splitPracticeText,
+  appendSessionLog,
+  writePracticeArtifacts,
+  writeTextArtifact,
 } from "./practice/pipeline.js";
-import { generateDrillLines as coachGenerateDrillLines } from "./practice/coach.js";
+import {
+  coachingUserPrompt,
+  drillGenUserPrompt,
+  generateDrillLines as coachGenerateDrillLines,
+} from "./practice/coach.js";
 import { buildPracticeHtml } from "./webview/html.js";
 import { openMaterialsGuide } from "./materials-guide.js";
 import {
@@ -81,6 +110,12 @@ import {
   type ProviderSettingName,
   isConfigSettingName,
   normalizedCoachProvider,
+  normalizedGeminiTtsVoice,
+  normalizedMimoTtsVoice,
+  normalizedOpenAITranscriptionMode,
+  normalizedOpenAITtsResponseFormat,
+  normalizedOpenAITtsVoice,
+  normalizedRecorderBackend,
   normalizedSpeechInputProvider,
   normalizedTtsProvider,
   pythonPath,
@@ -93,7 +128,9 @@ import {
   configureApiKey,
   configureCoreRouteKeys,
   configureLocalMaterialsRoot,
+  migrateGeminiSetting,
   migrateGeminiModelDefaults,
+  migrateProviderSetting,
   normalizeProviderForSetting,
   setGeminiOnlyProviders,
   setMinimaxVoiceId,
@@ -105,6 +142,9 @@ import {
 } from "./commands/provider-routes.js";
 import {
   completeLocalPackage,
+  existingDirectoryPath,
+  existingFilePath,
+  microphoneQuickPickItems,
   openCurrentTaskCard,
   openSessionFolder,
   revealCurrentPackage,
@@ -112,10 +152,13 @@ import {
 } from "./commands/local-actions.js";
 import {
   dateRangeLabel,
+  completedPackageDates,
   execFile,
   expandHome,
   findTrainingRoot,
   isHttpUrl,
+  isPackageDate,
+  listPrebuiltPackageDates,
   looksLikeTrainingRoot,
   readLocalInventory,
   todayInConfiguredTimezone,
@@ -123,9 +166,12 @@ import {
 import { loadLocalLearnerProfile } from "./runtime/learner-profile.js";
 import {
   buildProgressSnapshot,
+  buildLocalSourceDiagnostics,
   invalidateNextPackageCache,
+  loadDrillPlan,
   loadState,
   packageAssets,
+  resolveNextPackage,
   todayExampleText,
   toWebviewState,
 } from "./runtime/state.js";
@@ -136,15 +182,21 @@ import {
   listAvfoundationAudioDevices,
   parseAvfoundationAudioDevices,
   resolveNativeFfmpegAudioDevice,
+  resolveRecordingSampleRate,
   startNativeFfmpegRecording,
   stopNativeFfmpegRecording,
 } from "./audio/native-recording.js";
 import { synthesizeOnDemandText, synthesizeTodayAudio } from "./audio/synthesis.js";
 import { sampleFollowupDrillPackage, sampleTrainingPackage } from "./materials/sample-package.js";
-import { createSamplePackage, generateNextPackage } from "./materials/scaffold.js";
+import { createSamplePackage, generateNextPackage, validateLessonDateInput } from "./materials/scaffold.js";
 import { composeMaterialPrompt } from "./materials/prompt-composer.js";
-import { StatusProvider } from "./status/status-tree.js";
-import { PracticeViewProvider, normalizePracticeTargetPayload } from "./webview/practice-view.js";
+import { compactStatusValue, StatusProvider } from "./status/status-tree.js";
+import {
+  decodeWebviewAudioBase64,
+  PracticeViewProvider,
+  normalizePracticeTargetPayload,
+  processPracticeAudio,
+} from "./webview/practice-view.js";
 import {
   blankFollowupDrillPackage,
   blankTrainingPackage,
@@ -197,7 +249,10 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const register = (command: string, callback: (...args: unknown[]) => unknown) => {
-    context.subscriptions.push(vscode.commands.registerCommand(command, callback));
+    context.subscriptions.push(vscode.commands.registerCommand(
+      command,
+      (...args: unknown[]) => runCommandTask(command, () => callback(...args)),
+    ));
   };
 
   register("englishTraining.openPractice", async () => {
@@ -211,7 +266,7 @@ export function activate(context: vscode.ExtensionContext): void {
     await refreshAll();
   });
   register("englishTraining.configureLocalMaterials", async () => {
-    await configureLocalMaterialsRoot();
+    await configureLocalMaterialsRoot({ onChanged: invalidateNextPackageCache });
   });
   register("englishTraining.configureOpenAIKey", async () => {
     await configureApiKey(context, "openai");
@@ -286,52 +341,159 @@ export function activate(context: vscode.ExtensionContext): void {
     await selectRecordingMicrophone();
   });
 
-  void refreshAll();
-  void migrateGeminiModelDefaults();
+  runStartupTask("initial refresh", refreshAll);
+  runStartupTask("provider/model migration", migrateGeminiModelDefaults);
 }
 
 export function deactivate(): void {
   killActiveNativeRecording();
 }
 
+export function runStartupTask(label: string, task: () => Promise<unknown>): void {
+  void task().catch((error) => {
+    appendOutput(`English Training startup task failed (${label}): ${errorMessage(error)}`);
+  });
+}
+
+export async function runCommandTask(label: string, task: () => unknown): Promise<unknown | undefined> {
+  try {
+    return await task();
+  } catch (error) {
+    const message = errorMessage(error);
+    appendOutput(`English Training command failed (${label}): ${message}`);
+    void vscode.window.showErrorMessage(`English Training: ${message}`);
+    return undefined;
+  }
+}
+
 export const __test__ = {
   activeRouteProviders,
+  apiKeyAvailability,
+  appendSessionLog,
+  arrayOfStrings,
   blankFollowupDrillPackage,
   blankTrainingPackage,
   buildGenerationPrompt,
+  buildTranscriptionPrompt,
   buildProgressSnapshot,
+  buildLocalSourceDiagnostics,
   CARD_SCHEMA_VERSION,
   cardSchemaContractJson,
+  chatCompletionsUrl,
   chooseLocalAvfoundationAudioDevice,
+  coachingUserPrompt,
+  configString,
+  compactStatusValue,
+  clearApiKeys,
+  clearRefreshHandlers,
+  completedPackageDates,
+  configureSetting,
+  composeMaterialPrompt,
+  completeLocalPackage,
+  configureApiKey,
+  configureCoreRouteKeys,
+  configureLocalMaterialsRoot,
+  createSamplePackage,
   dateRangeLabel,
+  decodeBase64AudioData,
+  decodeMiniMaxAudioHex,
+  decodeWebviewAudioBase64,
   drillExamplesFromState,
+  drillGenUserPrompt,
+  ensureNonEmptyAudioData,
+  existingDirectoryPath,
+  existingFilePath,
+  expandHome,
+  expandHomePath,
   extensionFromMime,
+  extractGeminiText,
+  extractOpenAIText,
+  extractGeminiInlineAudio,
+  errorMessage,
+  extractMimoTranscript,
+  extractMimoTtsAudioData,
+  extractOpenAIFileTranscript,
+  firstNonBlankString,
+  findTrainingRoot,
+  generateNextPackage,
+  getRequiredKey,
+  invalidateNextPackageCache,
   invalidateResolvedAudioDevice,
+  killActiveNativeRecording,
+  isPackageDate,
+  isHttpUrl,
   listAvfoundationAudioDevices,
+  listPrebuiltPackageDates,
+  loadLocalLearnerProfile,
+  loadDrillPlan,
   looksLikeTrainingRoot,
   mimeTypeForAudioPath,
+  migrateGeminiSetting,
+  migrateProviderSetting,
+  microphoneQuickPickItems,
   normalizedCoachProvider,
+  normalizedGeminiTtsVoice,
+  normalizedMimoTtsVoice,
+  normalizedOpenAITranscriptionMode,
+  normalizedOpenAITtsResponseFormat,
+  normalizedOpenAITtsVoice,
+  normalizedRecorderBackend,
   normalizedSpeechInputProvider,
   normalizedTtsProvider,
+  nextDrillFromState,
   normalizeProviderForSetting,
   normalizeSpeechOutputProvider,
   normalizePracticeTargetPayload,
   normalizeDrillExamples,
   normalizeTtsSpeed,
+  openCurrentTaskCard,
+  openSessionFolder,
   packageAssets,
   parseAvfoundationAudioDevices,
+  parseFirstJson,
+  parseJsonObject,
   parseLooseJson,
+  prepareInlineAudio,
+  PracticeViewProvider,
+  processPracticeAudio,
+  pythonPath,
+  readJson,
   readJsonDiagnosed,
+  readLocalInventory,
+  readRecentSessionLog,
+  refreshAll,
+  registerRefreshHandler,
+  revealCurrentPackage,
+  resolveAudioUnderstandingProvider,
   resolveNativeFfmpegAudioDevice,
+  resolveFfmpegPath,
+  resolveNextPackage,
   resolveOpenAITtsVoice,
+  resolveRecordingSampleRate,
+  runCommandTask,
+  runStartupTask,
+  selectRecordingMicrophone,
+  setOpenAIRealtimeSpeechInput,
+  setMinimaxVoiceId,
+  setProviderSetting,
+  setTtsSpeedConfig,
+  setOpenAIStackProviders,
   speechOutputExtension,
+  startNativeFfmpegRecording,
+  StatusProvider,
+  stopNativeFfmpegRecording,
   todayExampleText,
+  trainingSettings,
   toWebviewState,
+  validateLessonDateInput,
+  writePracticeArtifacts,
+  writeTextArtifact,
 };
 
 async function configureSetting(setting: ConfigSettingName): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
-  const current = stringValue(settings.get(setting)).trim();
+  const rawCurrent = stringValue(settings.get(setting));
+  const current = configSettingEffectiveValue(setting, rawCurrent.trim());
   const options = configSettingOptions(setting);
   let nextValue: string | undefined;
 
@@ -341,11 +503,13 @@ async function configureSetting(setting: ConfigSettingName): Promise<void> {
       value,
       description: value === current ? "current" : undefined,
     }));
-    items.push({
-      label: "Custom...",
-      description: current ? `current: ${current}` : undefined,
-      custom: true,
-    });
+    if (configSettingAllowsCustom(setting)) {
+      items.push({
+        label: "Custom...",
+        description: current ? `current: ${current}` : undefined,
+        custom: true,
+      });
+    }
     const picked = await vscode.window.showQuickPick(items, {
       title: `Set ${configSettingLabel(setting)}`,
       placeHolder: current || "Pick a value",
@@ -361,13 +525,69 @@ async function configureSetting(setting: ConfigSettingName): Promise<void> {
     nextValue = await promptForConfigValue(setting, current);
   }
 
-  const trimmed = stringValue(nextValue).trim();
-  if (!trimmed || trimmed === current) {
+  if (nextValue === undefined) {
     return;
   }
-  await settings.update(setting, trimmed, vscode.ConfigurationTarget.Workspace);
-  vscode.window.showInformationMessage(`English Training ${configSettingLabel(setting)} set to ${trimmed}.`);
+  const trimmed = stringValue(nextValue).trim();
+  const allowBlank = configSettingAllowsBlank(setting);
+  if (!trimmed && !allowBlank) {
+    vscode.window.showWarningMessage(`English Training ${configSettingLabel(setting)} cannot be empty.`);
+    return;
+  }
+  if (trimmed === current && rawCurrent === trimmed) {
+    vscode.window.showInformationMessage(
+      trimmed
+        ? `English Training ${configSettingLabel(setting)} is already ${current}.`
+        : `English Training ${configSettingLabel(setting)} is already blank.`,
+    );
+    return;
+  }
+  await settings.update(setting, trimmed, userConfigurationTarget());
+  vscode.window.showInformationMessage(
+    trimmed
+      ? `English Training ${configSettingLabel(setting)} set to ${trimmed}.`
+      : `English Training ${configSettingLabel(setting)} cleared.`,
+  );
   await refreshAll();
+}
+
+function configSettingEffectiveValue(setting: ConfigSettingName, fallback: string): string {
+  const settings = trainingSettings();
+  switch (setting) {
+    case "mimoCoachModel": return settings.mimoCoachModel;
+    case "openaiRealtimeTranscriptionModel": return settings.openaiRealtimeTranscriptionModel;
+    case "openaiFileTranscriptionModel": return settings.openaiFileTranscriptionModel;
+    case "openaiCoachModel": return settings.openaiCoachModel;
+    case "geminiCoachModel": return settings.geminiCoachModel;
+    case "geminiAudioUnderstandingModel": return settings.geminiAudioUnderstandingModel;
+    case "mimoAudioUnderstandingModel": return settings.mimoAudioUnderstandingModel;
+    case "minimaxTtsModel": return settings.minimaxTtsModel;
+    case "mimoTtsModel": return settings.mimoTtsModel;
+    case "openaiTtsModel": return settings.openaiTtsModel;
+    case "geminiTtsModel": return settings.geminiTtsModel;
+    case "openaiTranscriptionMode": return normalizedOpenAITranscriptionMode();
+    case "openaiTtsResponseFormat": return normalizedOpenAITtsResponseFormat();
+    case "recorderBackend": return normalizedRecorderBackend();
+    case "openaiTtsVoice": return normalizedOpenAITtsVoice();
+    case "geminiTtsVoice": return normalizedGeminiTtsVoice();
+    case "mimoTtsVoice": return normalizedMimoTtsVoice();
+    default: return fallback;
+  }
+}
+
+function configSettingAllowsBlank(setting: ConfigSettingName): boolean {
+  return setting === "openaiTtsInstructions";
+}
+
+function configSettingAllowsCustom(setting: ConfigSettingName): boolean {
+  return (
+    setting !== "openaiTranscriptionMode" &&
+    setting !== "openaiTtsResponseFormat" &&
+    setting !== "recorderBackend" &&
+    setting !== "openaiTtsVoice" &&
+    setting !== "geminiTtsVoice" &&
+    setting !== "mimoTtsVoice"
+  );
 }
 
 async function promptForConfigValue(setting: ConfigSettingName, current: string): Promise<string | undefined> {
@@ -382,14 +602,21 @@ async function promptForConfigValue(setting: ConfigSettingName, current: string)
 function configSettingLabel(setting: ConfigSettingName): string {
   switch (setting) {
     case "mimoCoachModel": return "MiMo coach model";
+    case "openaiTranscriptionMode": return "OpenAI speech-input mode";
     case "openaiRealtimeTranscriptionModel": return "OpenAI Realtime speech-input model";
     case "openaiFileTranscriptionModel": return "OpenAI file speech-input model";
     case "openaiCoachModel": return "OpenAI coach model";
     case "geminiCoachModel": return "Gemini coach model";
     case "geminiAudioUnderstandingModel": return "Gemini speech-input model";
+    case "mimoAudioUnderstandingModel": return "MiMo speech-input model";
     case "minimaxTtsModel": return "MiniMax speech-output model";
+    case "mimoTtsModel": return "MiMo speech-output model";
+    case "mimoTtsVoice": return "MiMo voice";
     case "openaiTtsModel": return "OpenAI speech-output model";
     case "openaiTtsVoice": return "OpenAI voice";
+    case "openaiTtsInstructions": return "OpenAI speech style";
+    case "openaiTtsResponseFormat": return "OpenAI audio format";
+    case "recorderBackend": return "recording backend";
     case "geminiTtsModel": return "Gemini speech-output model";
     case "geminiTtsVoice": return "Gemini voice";
   }
@@ -398,8 +625,13 @@ function configSettingLabel(setting: ConfigSettingName): string {
 function configSettingPrompt(setting: ConfigSettingName): string {
   switch (setting) {
     case "openaiRealtimeTranscriptionModel": return "OpenAI Realtime transcription model id.";
+    case "openaiTranscriptionMode": return "Choose file for accurate bounded recordings or realtime for low-latency transcription.";
     case "openaiTtsVoice": return "OpenAI TTS voice name.";
+    case "openaiTtsInstructions": return "Optional OpenAI TTS instructions. Leave blank to let the coach choose per turn.";
+    case "openaiTtsResponseFormat": return "OpenAI TTS audio container.";
+    case "recorderBackend": return "Choose macLocal for ffmpeg/AVFoundation, webview for VS Code MediaRecorder, or auto for webview fallback.";
     case "geminiTtsVoice": return "Gemini prebuilt voice name.";
+    case "mimoTtsVoice": return "MiMo built-in voice name.";
     default: return "Model id used by this provider.";
   }
 }
@@ -407,14 +639,21 @@ function configSettingPrompt(setting: ConfigSettingName): string {
 function configSettingOptions(setting: ConfigSettingName): string[] {
   switch (setting) {
     case "mimoCoachModel": return ["mimo-v2.5-pro", "mimo-v2.5-flash"];
+    case "openaiTranscriptionMode": return ["file", "realtime"];
     case "openaiRealtimeTranscriptionModel": return ["gpt-realtime-whisper"];
     case "openaiFileTranscriptionModel": return ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize", "whisper-1"];
     case "openaiCoachModel": return ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"];
     case "geminiCoachModel": return GEMINI_TEXT_MODEL_OPTIONS;
     case "geminiAudioUnderstandingModel": return GEMINI_TEXT_MODEL_OPTIONS;
+    case "mimoAudioUnderstandingModel": return ["mimo-v2.5", "mimo-v2-omni"];
     case "minimaxTtsModel": return ["speech-2.8-hd", "speech-2.8-turbo"];
+    case "mimoTtsModel": return ["mimo-v2.5-tts"];
+    case "mimoTtsVoice": return ["Mia", "Chloe", "Milo", "Dean", "mimo_default"];
+    case "openaiTtsInstructions": return [];
     case "openaiTtsModel": return ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"];
     case "openaiTtsVoice": return ["marin", "cedar", "coral", "alloy", "ash", "ballad", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"];
+    case "openaiTtsResponseFormat": return ["wav", "mp3", "opus", "aac", "flac", "pcm"];
+    case "recorderBackend": return ["macLocal", "webview", "auto"];
     case "geminiTtsModel": return GEMINI_TTS_MODEL_OPTIONS;
     case "geminiTtsVoice": return ["Kore", "Puck", "Charon", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
   }

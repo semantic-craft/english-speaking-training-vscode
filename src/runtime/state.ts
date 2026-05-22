@@ -3,7 +3,9 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 import {
+  appendOutput,
   arrayOfStrings,
+  errorMessage,
   parseFirstJson,
   readJson,
   readJsonDiagnosed,
@@ -24,6 +26,9 @@ import {
   execFile,
   findTrainingRoot,
   isHttpUrl,
+  isFile,
+  listPrebuiltPackageDates,
+  completedPackageDates,
   readLocalInventory,
   todayInConfiguredTimezone,
 } from "./training-root.js";
@@ -47,7 +52,13 @@ export async function loadLocalState(
     ? readJsonDiagnosed(path.join(root, "prebuilt", packageDate, "english-training.json"))
     : { data: undefined as JsonObject | undefined };
   const training = trainingRead.data ?? {};
-  const drill = packageDate ? buildDrillPlan(root, packageDate, training) : {};
+  const drillRead = packageDate
+    ? loadDrillPlan(root, packageDate, training)
+    : { drill: {} as JsonObject, parseError: undefined as string | undefined };
+  const drill = drillRead.drill;
+  const manifestRead = packageDate
+    ? readJsonDiagnosed(path.join(root, "prebuilt", packageDate, "manifest.json"))
+    : { data: undefined as JsonObject | undefined };
   const trainingForState = packageDate
     ? { ...training, tts_example_text: todayExampleText(training, next) }
     : training;
@@ -59,6 +70,9 @@ export async function loadLocalState(
     inventory,
     packageDate,
     trainingRead.parseError,
+    drillRead.parseError,
+    manifestRead.parseError,
+    inventory.progressJsonError,
   );
 
   return {
@@ -85,6 +99,9 @@ export function buildLocalSourceDiagnostics(
   inventory: { dates: string[]; completed: Set<string> },
   packageDate: string,
   packageJsonError?: string,
+  drillJsonError?: string,
+  manifestJsonError?: string,
+  progressJsonError?: string,
 ): SourceDiagnostics {
   return {
     mode: "local",
@@ -92,11 +109,17 @@ export function buildLocalSourceDiagnostics(
     configuredRoot: settings.localMaterialsRoot,
     packageDir: packageDate ? path.join(root, "prebuilt", packageDate) : "",
     currentJson: packageDate ? path.join(root, "prebuilt", packageDate, "english-training.json") : "",
+    followupDrillJson: packageDate ? path.join(root, "prebuilt", packageDate, "followup-drill.json") : "",
+    manifestJson: packageDate ? path.join(root, "prebuilt", packageDate, "manifest.json") : "",
+    progressJson: path.join(root, "progress", "english-speaking-training-progress.json"),
     currentPackageDate: packageDate,
     lessonCount: inventory.dates.length,
     completedCount: inventory.completed.size,
     dateRange: dateRangeLabel(inventory.dates),
     ...(packageJsonError ? { packageJsonError } : {}),
+    ...(drillJsonError ? { drillJsonError } : {}),
+    ...(manifestJsonError ? { manifestJsonError } : {}),
+    ...(progressJsonError ? { progressJsonError } : {}),
   };
 }
 
@@ -197,29 +220,38 @@ export async function resolveNextPackage(root: string, today: string): Promise<J
 
 async function computeNextPackage(root: string, today: string): Promise<JsonObject> {
   const script = path.join(root, "scripts", "english_training_progress.py");
-  if (fs.existsSync(script)) {
+  const prebuiltRoot = path.join(root, "prebuilt");
+  const dates = listPrebuiltPackageDates(root);
+  if (isFile(script)) {
     const result = await execFile(root, ["scripts/english_training_progress.py", "next", "--as-of", today], 60_000);
     const parsed = parseFirstJson(result.stdout);
-    const next = ((parsed?.result as JsonObject | undefined) ?? {}) as JsonObject;
-    if (stringValue(next.package_date)) {
-      return next;
+    const resultValue = parsed?.result;
+    const next = resultValue && typeof resultValue === "object" && !Array.isArray(resultValue)
+      ? resultValue as JsonObject
+      : {};
+    const packageDate = stringValue(next.package_date);
+    if (packageDate && dates.includes(packageDate)) {
+      return mergeScriptNextWithLocalPackage(
+        nextPackageFromLocalPackage(root, prebuiltRoot, dates, today, packageDate),
+        next,
+        packageDate,
+      );
     }
   }
 
-  const prebuiltRoot = path.join(root, "prebuilt");
-  const dates = fs
-    .readdirSync(prebuiltRoot)
-    .filter((name) => /^\d{4}-\d{2}-\d{2}$/.test(name) && fs.statSync(path.join(prebuiltRoot, name)).isDirectory())
-    .sort();
-  const progress = readJson(path.join(root, "progress", "english-speaking-training-progress.json")) ?? {};
-  const completed = new Set<string>();
-  for (const record of Array.isArray(progress.records) ? progress.records : []) {
-    const item = record as JsonObject;
-    if (stringValue(item.status) === "completed") {
-      completed.add(stringValue(item.date));
-    }
-  }
+  const progress = readJsonDiagnosed(path.join(root, "progress", "english-speaking-training-progress.json")).data ?? {};
+  const completed = completedPackageDates(progress, dates);
   const packageDate = dates.find((date) => !completed.has(date)) ?? dates[dates.length - 1] ?? "";
+  return nextPackageFromLocalPackage(root, prebuiltRoot, dates, today, packageDate);
+}
+
+function nextPackageFromLocalPackage(
+  root: string,
+  prebuiltRoot: string,
+  dates: string[],
+  today: string,
+  packageDate: string,
+): JsonObject {
   const training = packageDate ? readJson(path.join(prebuiltRoot, packageDate, "english-training.json")) ?? {} : {};
   return {
     send_date: today,
@@ -232,6 +264,30 @@ async function computeNextPackage(root: string, today: string): Promise<JsonObje
     clean_tts_text: stringValue(training.clean_tts_text) || stringValue(training.audio_text),
     assets: packageDate ? packageAssets(root, packageDate) : {},
   };
+}
+
+function mergeScriptNextWithLocalPackage(local: JsonObject, scripted: JsonObject, packageDate: string): JsonObject {
+  const merged: JsonObject = {
+    ...local,
+    ...scripted,
+    package_date: packageDate,
+  };
+  for (const key of ["send_date", "completion_label", "training_type", "goal", "scenario", "clean_tts_text"]) {
+    if (!stringValue(merged[key])) {
+      merged[key] = local[key];
+    }
+  }
+  if (merged.package_day_index === undefined || merged.package_day_index === null || merged.package_day_index === "") {
+    merged.package_day_index = local.package_day_index;
+  }
+  const localAssets = local.assets && typeof local.assets === "object" && !Array.isArray(local.assets)
+    ? local.assets as JsonObject
+    : {};
+  const scriptedAssets = scripted.assets && typeof scripted.assets === "object" && !Array.isArray(scripted.assets)
+    ? scripted.assets as JsonObject
+    : {};
+  merged.assets = { ...localAssets, ...scriptedAssets };
+  return merged;
 }
 
 export function packageAssets(root: string, packageDate: string): JsonObject {
@@ -269,7 +325,12 @@ export function resolvePackageAsset(
   if (isHttpUrl(candidate) || path.isAbsolute(candidate)) {
     return candidate;
   }
-  return path.join(packageDir, candidate);
+  const resolved = path.resolve(packageDir, candidate);
+  const packageRoot = path.resolve(packageDir);
+  if (resolved === packageRoot || resolved.startsWith(`${packageRoot}${path.sep}`)) {
+    return resolved;
+  }
+  return path.join(packageDir, fallbackRelativePath);
 }
 
 export function todayExampleText(training: JsonObject, next: JsonObject = {}): string {
@@ -305,56 +366,169 @@ export function spokenFrameTexts(value: unknown): string[] {
     .filter(Boolean);
 }
 
-export function buildDrillPlan(root: string, packageDate: string, training: JsonObject): JsonObject {
+export function loadDrillPlan(
+  root: string,
+  packageDate: string,
+  training: JsonObject,
+): { drill: JsonObject; parseError?: string } {
   const followupPath = path.join(root, "prebuilt", packageDate, "followup-drill.json");
-  const followup = readJson(followupPath) ?? {};
+  const followupRead = readJsonDiagnosed(followupPath);
+  return {
+    drill: buildDrillPlanFromFollowup(packageDate, training, followupRead.data ?? {}),
+    parseError: followupRead.parseError,
+  };
+}
+
+export function buildDrillPlan(root: string, packageDate: string, training: JsonObject): JsonObject {
+  return loadDrillPlan(root, packageDate, training).drill;
+}
+
+function buildDrillPlanFromFollowup(
+  packageDate: string,
+  training: JsonObject,
+  followup: JsonObject,
+): JsonObject {
   const task = (training.task as JsonObject | undefined) ?? {};
   const primaryTags = arrayOfStrings(training.primary_tags);
+  const routine = arrayOfStrings(followup.routine_zh);
+  const fallbackFrameExamples = cleanDrillExamples(training.frames);
+  const fallbackFrameText =
+    spokenFrameTexts(training.frames)[0] ||
+    stringValue(training.clean_tts_text).replace(/\s+/g, " ").trim();
   const fallbackFrames = Array.isArray(training.frames)
     ? [
         {
           id: "A",
           label: "Substitution: today's frames",
-          base_frame: stringValue((training.frames[0] as JsonObject | undefined)?.text) || stringValue(training.clean_tts_text),
+          base_frame: fallbackFrameText,
           slot: "frame",
-          examples: training.frames,
+          examples: fallbackFrameExamples,
         },
       ]
     : [];
+  const followupRounds = Array.isArray(followup.rounds)
+    ? followup.rounds
+        .map(cleanDrillRound)
+        .filter((round): round is JsonObject => Boolean(round))
+    : undefined;
+  const rounds = followupRounds && followupRounds.length ? followupRounds : fallbackFrames;
 
   return {
     title: stringValue(followup.title) || `FSI Drill - ${packageDate}`,
     method: stringValue(followup.method) || "FSI-style substitution + shadowing",
-    routine_zh: arrayOfStrings(followup.routine_zh).length
-      ? arrayOfStrings(followup.routine_zh)
+    routine_zh: routine.length
+      ? routine
       : [
           "先听一遍，不分析语法。",
           "用完整句快速替换 cue。",
           "延迟 0.5-1 秒跟读，复制节奏和停顿。",
           "最后不看文本说两句。",
         ],
-    rounds: Array.isArray(followup.rounds) ? followup.rounds : fallbackFrames,
-    shadowing_loop: (followup.shadowing_loop as JsonObject | undefined) ?? {
-      chunks: splitPracticeText(stringValue(training.clean_tts_text) || stringValue(training.audio_text)).slice(0, 4),
-      instruction_zh: "每个 chunk 跟读两遍；卡住的 chunk 单独循环三遍。",
-    },
+    rounds,
+    shadowing_loop: cleanShadowingLoop(followup.shadowing_loop, training),
     source_principles: arrayOfStrings(followup.source_principles),
     repair_drills: arrayOfStrings(training.repair_drills),
     primary_tags: primaryTags,
-    required_frames: Number(task.required_frames ?? 0) || undefined,
+    required_frames: positiveInteger(task.required_frames),
     training_type: stringValue(training.training_type),
   };
+}
+
+function cleanShadowingLoop(value: unknown, training: JsonObject): JsonObject {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const obj = value as JsonObject;
+    const chunks = cleanShadowingChunks(obj.chunks);
+    if (chunks.length) {
+      return {
+        ...obj,
+        chunks,
+        instruction_zh: stringValue(obj.instruction_zh).trim()
+          || "每个 chunk 跟读两遍；卡住的 chunk 单独循环三遍。",
+      };
+    }
+  }
+  return {
+    chunks: splitPracticeText(stringValue(training.clean_tts_text) || stringValue(training.audio_text)).slice(0, 4),
+    instruction_zh: "每个 chunk 跟读两遍；卡住的 chunk 单独循环三遍。",
+  };
+}
+
+function cleanShadowingChunks(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        return stringValue((item as JsonObject).text);
+      }
+      return stringValue(item);
+    })
+    .map((text) => text.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number(value)
+        : undefined;
+  return typeof parsed === "number" && Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function cleanDrillRound(round: unknown): JsonObject | undefined {
+  if (!round || typeof round !== "object" || Array.isArray(round)) {
+    return undefined;
+  }
+  const obj = round as JsonObject;
+  const examples = cleanDrillExamples(obj.examples);
+  const baseFrame = stringValue(obj.base_frame);
+  if (!examples.length && !baseFrame.trim()) {
+    return undefined;
+  }
+  return {
+    ...obj,
+    examples,
+  };
+}
+
+function cleanDrillExamples(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item): unknown | undefined => {
+      if (typeof item === "string") {
+        const text = item.replace(/\s+/g, " ").trim();
+        return text ? text : undefined;
+      }
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return undefined;
+      }
+      const obj = item as JsonObject;
+      const text = stringValue(obj.text).replace(/\s+/g, " ").trim();
+      return text ? { ...obj, text } : undefined;
+    })
+    .filter((item): item is string | JsonObject => item !== undefined);
 }
 
 export function toWebviewState(webview: vscode.Webview, state: TrainingState): JsonObject {
   const next = { ...state.next };
   const assets = { ...((next.assets as JsonObject | undefined) ?? {}) };
   for (const [key, value] of Object.entries(assets)) {
-    const filePath = stringValue(value);
+    const filePath = stringValue(value).trim();
+    if (filePath) {
+      assets[key] = filePath;
+    }
     if (isHttpUrl(filePath) && /\.(png|jpe?g|gif|webp|ogg|mp3|wav|flac)$/i.test(filePath)) {
       assets[`${key}_uri`] = filePath;
     } else if (filePath && fs.existsSync(filePath) && /\.(png|jpe?g|gif|webp|ogg|mp3|wav|flac)$/i.test(filePath)) {
-      assets[`${key}_uri`] = webview.asWebviewUri(vscode.Uri.file(filePath)).toString();
+      const uri = webviewAssetUri(webview, filePath, key);
+      if (uri) {
+        assets[`${key}_uri`] = uri;
+      }
     }
   }
   next.assets = assets;
@@ -362,4 +536,13 @@ export function toWebviewState(webview: vscode.Webview, state: TrainingState): J
     ...state,
     next,
   };
+}
+
+function webviewAssetUri(webview: vscode.Webview, filePath: string, key: string): string | undefined {
+  try {
+    return webview.asWebviewUri(vscode.Uri.file(filePath)).toString();
+  } catch (error) {
+    appendOutput(`Webview asset URI unavailable for ${key}: ${errorMessage(error)}`);
+    return undefined;
+  }
 }

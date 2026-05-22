@@ -1,14 +1,16 @@
 import * as vscode from "vscode";
 
 import {
-  config,
+  configString,
   extractGeminiText,
   fetchWithTimeout,
   getRequiredKey,
   MIMO_ANTHROPIC_BASE_URL,
+  parseJsonObject,
   parseLooseJson,
   stringValue,
 } from "../core.js";
+import { normalizedCoachProvider } from "../runtime/settings.js";
 import type {
   CoachPriorTurn,
   DrillExample,
@@ -57,13 +59,7 @@ export function coachingUserPrompt(
   practiceTarget?: PracticeTarget,
 ): string {
   const training = state.training;
-  const frames = Array.isArray(training.frames)
-    ? training.frames
-        .map((item) =>
-          typeof item === "object" && item ? stringValue((item as JsonObject).text) : stringValue(item),
-        )
-        .filter(Boolean)
-    : [];
+  const frames = promptFrameTexts(training);
   const payload: JsonObject = {
     task: {
       package_date: stringValue(state.next.package_date),
@@ -195,13 +191,7 @@ export function drillGenSystemPrompt(): string {
 
 export function drillGenUserPrompt(state: TrainingState, count: number, existing: string[]): string {
   const training = state.training;
-  const frames = Array.isArray(training.frames)
-    ? training.frames
-        .map((item) =>
-          typeof item === "object" && item ? stringValue((item as JsonObject).text) : stringValue(item),
-        )
-        .filter(Boolean)
-    : [];
+  const frames = promptFrameTexts(training);
   const payload: JsonObject = {
     task: {
       package_date: stringValue(state.next.package_date),
@@ -220,7 +210,7 @@ export function drillGenUserPrompt(state: TrainingState, count: number, existing
       instruction:
         "Produce fresh FSI substitution lines that extend the existing drill without repeating it.",
     },
-    avoid_texts: existing.filter(Boolean).slice(0, 40),
+    avoid_texts: compactPromptTexts(existing, 40, 240),
     output_shape: {
       lines: [
         {
@@ -235,6 +225,35 @@ export function drillGenUserPrompt(state: TrainingState, count: number, existing
     payload.fsi_drill = state.drill;
   }
   return JSON.stringify(payload, null, 2);
+}
+
+function promptFrameTexts(training: JsonObject): string[] {
+  if (!Array.isArray(training.frames)) {
+    return [];
+  }
+  return training.frames
+    .map((item) =>
+      typeof item === "object" && item && !Array.isArray(item)
+        ? stringValue((item as JsonObject).text)
+        : stringValue(item),
+    )
+    .map((item) => item.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function compactPromptTexts(values: unknown[], maxItems: number, maxLength: number): string[] {
+  const items: string[] = [];
+  for (const value of values) {
+    const text = stringValue(value).replace(/\s+/g, " ").trim();
+    if (!text) {
+      continue;
+    }
+    items.push(text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 3))}...` : text);
+    if (items.length >= maxItems) {
+      break;
+    }
+  }
+  return items;
 }
 
 export async function composeMaterialBrief(
@@ -322,23 +341,23 @@ async function requestProviderJson(
   system: string,
   user: string,
 ): Promise<JsonObject> {
-  const provider = config<string>("coachProvider") || "openai";
+  const provider = normalizedCoachProvider();
   if (provider === "mimo") {
     const apiKey = await getRequiredKey(context, "mimo");
     return callAnthropicJson(system, user, {
       provider: "MiMo",
       apiKey,
-      baseUrl: config<string>("mimoAnthropicBaseUrl") || MIMO_ANTHROPIC_BASE_URL,
-      model: config<string>("mimoCoachModel") || "mimo-v2.5-pro",
+      baseUrl: configString("mimoAnthropicBaseUrl", MIMO_ANTHROPIC_BASE_URL),
+      model: configString("mimoCoachModel", "mimo-v2.5-pro"),
     });
   }
   if (provider === "gemini") {
     const apiKey = await getRequiredKey(context, "gemini");
-    return callGeminiJson(apiKey, config<string>("geminiCoachModel") || "gemini-3-flash-preview", system, user);
+    return callGeminiJson(apiKey, configString("geminiCoachModel", "gemini-3-flash-preview"), system, user);
   }
   // OpenAI is the default coach and the fallback for any stale/removed value.
   const apiKey = await getRequiredKey(context, "openai");
-  return callOpenAIJson(apiKey, config<string>("openaiCoachModel") || "gpt-4o", system, user);
+  return callOpenAIJson(apiKey, configString("openaiCoachModel", "gpt-4o"), system, user);
 }
 
 async function callAnthropicJson(
@@ -375,7 +394,7 @@ async function callAnthropicJson(
   if (!response.ok) {
     throw new Error(`${options.provider} request failed (${response.status}): ${body.slice(0, 1200)}`);
   }
-  const parsed = JSON.parse(body) as JsonObject;
+  const parsed = parseJsonObject(body, `${options.provider} coach`);
   const text = extractAnthropicText(parsed);
   return parseLooseJson(stripThinkBlocks(text));
 }
@@ -411,7 +430,7 @@ async function callGeminiJson(
   if (!response.ok) {
     throw new Error(`Gemini request failed (${response.status}): ${body.slice(0, 1200)}`);
   }
-  const parsed = JSON.parse(body) as JsonObject;
+  const parsed = parseJsonObject(body, "Gemini coach");
   return parseLooseJson(extractGeminiText(parsed));
 }
 
@@ -440,10 +459,13 @@ async function callOpenAIJson(
   if (!response.ok) {
     throw new Error(`OpenAI request failed (${response.status}): ${body.slice(0, 1200)}`);
   }
-  const parsed = JSON.parse(body) as JsonObject;
+  const parsed = parseJsonObject(body, "OpenAI coach");
   const choices = parsed.choices;
-  const message = Array.isArray(choices) && choices.length
-    ? ((choices[0] as JsonObject).message as JsonObject | undefined)
+  const firstChoice = Array.isArray(choices) && choices.length && choices[0] && typeof choices[0] === "object"
+    ? choices[0] as JsonObject
+    : undefined;
+  const message = firstChoice?.message && typeof firstChoice.message === "object" && !Array.isArray(firstChoice.message)
+    ? firstChoice.message as JsonObject
     : undefined;
   return parseLooseJson(stringValue(message?.content));
 }
@@ -455,6 +477,9 @@ function extractAnthropicText(parsed: JsonObject): string {
   }
   const parts: string[] = [];
   for (const block of content) {
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      continue;
+    }
     const blockObj = block as JsonObject;
     const type = stringValue(blockObj.type);
     if (type === "text") {

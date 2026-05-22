@@ -2,9 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-import { config, stamp, stringValue } from "../core.js";
+import { stamp, stringValue } from "../core.js";
 import type { JsonObject } from "../types.js";
 import { mimeTypeForAudioPath, speechOutputExtension, synthesizeWithConfiguredTts } from "../practice/tts.js";
+import { normalizedTtsProvider } from "../runtime/settings.js";
 import { loadState, todayExampleText } from "../runtime/state.js";
 
 export function createReferenceAudioDir(root: string, packageDate: string): string {
@@ -20,7 +21,7 @@ export async function synthesizeTodayAudio(context: vscode.ExtensionContext): Pr
   if (!text.trim()) {
     throw new Error("No example text is available for today's package. Add clean_tts_text, audio_text, demo_line, or frames[].text.");
   }
-  const provider = config<string>("ttsProvider") || "openai";
+  const provider = normalizedTtsProvider();
   const outDir = createReferenceAudioDir(state.root, packageDate);
   const outPath = path.join(outDir, `today-${stamp()}.${speechOutputExtension(provider)}`);
   const result = await synthesizeWithConfiguredTts(context, text, outPath, provider);
@@ -44,7 +45,7 @@ export async function synthesizeOnDemandText(
 ): Promise<JsonObject> {
   const state = await loadState(context);
   const packageDate = stringValue(state.next.package_date) || state.today;
-  const provider = config<string>("ttsProvider") || "openai";
+  const provider = normalizedTtsProvider();
   const outDir = createReferenceAudioDir(state.root, packageDate);
   const outPath = path.join(outDir, `slow-${stamp()}.${speechOutputExtension(provider)}`);
   const result = await synthesizeWithConfiguredTts(context, text, outPath, provider, {

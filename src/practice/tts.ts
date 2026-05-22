@@ -3,13 +3,23 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 import {
+  normalizedGeminiTtsVoice,
+  normalizedMimoTtsVoice,
+  normalizedOpenAITtsResponseFormat,
+  normalizedOpenAITtsVoice,
+  normalizedTtsProvider,
+} from "../runtime/settings.js";
+import {
+  chatCompletionsUrl,
   config,
+  configString,
   fetchWithTimeout,
   getRequiredKey,
-  isTtsProvider,
   MIMO_OPENAI_BASE_URL,
   MINIMAX_TTS_BASE_URL,
+  normalizedProviderName,
   normalizeTtsSpeed,
+  parseJsonObject,
   stringValue,
 } from "../core.js";
 import type { JsonObject } from "../types.js";
@@ -19,7 +29,10 @@ export function speechOutputFileName(provider: string): string {
 }
 
 export function normalizeSpeechOutputProvider(provider: unknown): string {
-  return isTtsProvider(provider) ? provider : "openai";
+  const normalized = normalizedProviderName(provider);
+  return normalized === "minimax" || normalized === "gemini" || normalized === "openai" || normalized === "mimo"
+    ? normalized
+    : "openai";
 }
 
 export function speechOutputExtension(provider: string): string {
@@ -44,32 +57,21 @@ export function mimeTypeForAudioPath(filePath: string): string {
 }
 
 function openaiResponseFormat(): string {
-  const raw = (config<string>("openaiTtsResponseFormat") || "wav").toLowerCase();
-  if (
-    raw === "wav" ||
-    raw === "mp3" ||
-    raw === "opus" ||
-    raw === "aac" ||
-    raw === "flac" ||
-    raw === "pcm"
-  ) {
-    return raw;
-  }
-  return "wav";
+  return normalizedOpenAITtsResponseFormat();
 }
 
 export const DEFAULT_OPENAI_TTS_INSTRUCTIONS =
   "Speak in clear, patient academic English with measured pace; emphasize key legal or scholarly terms; keep a warm, encouraging tone suitable for a learner shadowing the sentence.";
 
 function resolveOpenAIInstructions(overrideStyle?: string): string {
-  const explicit = (config<string>("openaiTtsInstructions") || "").trim();
+  const explicit = configString("openaiTtsInstructions");
   const fromCoach = (overrideStyle || "").trim();
   return explicit || fromCoach || DEFAULT_OPENAI_TTS_INSTRUCTIONS;
 }
 
 export function resolveOpenAITtsVoice(model: string): string {
   void model;
-  return (config<string>("openaiTtsVoice") || "marin").trim() || "marin";
+  return normalizedOpenAITtsVoice();
 }
 
 export interface SynthesizeOptions {
@@ -87,7 +89,7 @@ export async function synthesizeWithConfiguredTts(
   context: vscode.ExtensionContext,
   text: string,
   outPath: string,
-  provider = config<string>("ttsProvider") || "openai",
+  provider = normalizedTtsProvider(),
   optionsOrSpeed?: number | SynthesizeOptions,
 ): Promise<{ provider: string; filePath: string }> {
   const selectedProvider = normalizeSpeechOutputProvider(provider);
@@ -121,7 +123,7 @@ async function synthesizeOpenAI(
   options: SynthesizeOptions = {},
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "openai");
-  const model = config<string>("openaiTtsModel") || "gpt-4o-mini-tts";
+  const model = configString("openaiTtsModel", "gpt-4o-mini-tts");
   const voice = resolveOpenAITtsVoice(model);
   const responseFormat = openaiResponseFormat();
   // gpt-4o-mini-tts supports instructions; the older tts-1 / tts-1-hd do not.
@@ -149,14 +151,15 @@ async function synthesizeOpenAI(
   if (!response.ok) {
     throw new Error(`OpenAI TTS failed (${response.status}): ${payload.toString("utf8").slice(0, 1200)}`);
   }
+  const audioPayload = ensureNonEmptyAudioData(payload, "OpenAI TTS");
   if (responseFormat === "pcm") {
     // OpenAI documents pcm as raw 24kHz 16-bit signed little-endian mono.
     // Wrap it in a RIFF/WAVE header so VS Code's media element (HTMLAudio)
     // can play it back without an external decoder.
-    writePcm16Wav(outPath, payload, 24000, 1);
+    writePcm16Wav(outPath, audioPayload, 24000, 1);
     return outPath;
   }
-  fs.writeFileSync(outPath, payload);
+  fs.writeFileSync(outPath, audioPayload);
   return outPath;
 }
 
@@ -166,8 +169,8 @@ async function synthesizeGemini(
   outPath: string,
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "gemini");
-  const model = config<string>("geminiTtsModel") || "gemini-3.1-flash-tts-preview";
-  const voiceName = config<string>("geminiTtsVoice") || "Kore";
+  const model = configString("geminiTtsModel", "gemini-3.1-flash-tts-preview");
+  const voiceName = normalizedGeminiTtsVoice();
   const response = await fetchWithTimeout(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
@@ -196,7 +199,7 @@ async function synthesizeGemini(
   if (!response.ok) {
     throw new Error(`Gemini TTS failed (${response.status}): ${body.slice(0, 1200)}`);
   }
-  const audio = extractGeminiInlineAudio(JSON.parse(body) as JsonObject);
+  const audio = extractGeminiInlineAudio(parseJsonObject(body, "Gemini TTS"));
   if (audio.mimeType.includes("wav")) {
     fs.writeFileSync(outPath, audio.data);
   } else {
@@ -212,7 +215,7 @@ async function synthesizeMiniMax(
   speedOverride?: number,
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "minimax");
-  const ttsBaseUrl = config<string>("minimaxTtsBaseUrl") || MINIMAX_TTS_BASE_URL;
+  const ttsBaseUrl = configString("minimaxTtsBaseUrl", MINIMAX_TTS_BASE_URL);
   const response = await fetchWithTimeout(ttsBaseUrl, {
     method: "POST",
     headers: {
@@ -220,13 +223,13 @@ async function synthesizeMiniMax(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: config<string>("minimaxTtsModel") || "speech-2.8-hd",
+      model: configString("minimaxTtsModel", "speech-2.8-hd"),
       text,
       stream: false,
       output_format: "hex",
       language_boost: "auto",
       voice_setting: {
-        voice_id: config<string>("minimaxTtsVoiceId") || "English_expressive_narrator",
+        voice_id: configString("minimaxTtsVoiceId", "English_expressive_narrator"),
         speed: resolveSpeed(speedOverride),
         vol: 1,
         pitch: 0,
@@ -243,7 +246,7 @@ async function synthesizeMiniMax(
   if (!response.ok) {
     throw new Error(`MiniMax TTS failed (${response.status}): ${body.slice(0, 1200)}`);
   }
-  const parsed = JSON.parse(body) as JsonObject;
+  const parsed = parseJsonObject(body, "MiniMax TTS");
   const baseResp = (parsed.base_resp as JsonObject | undefined) ?? {};
   if (Number(baseResp.status_code ?? 0) !== 0) {
     const statusCode = stringValue(baseResp.status_code);
@@ -257,11 +260,20 @@ async function synthesizeMiniMax(
     throw new Error(`MiniMax TTS API error ${statusCode}: ${statusMsg}`);
   }
   const audioHex = stringValue((parsed.data as JsonObject | undefined)?.audio);
-  if (!audioHex) {
+  fs.writeFileSync(outPath, decodeMiniMaxAudioHex(audioHex));
+  return outPath;
+}
+
+export function decodeMiniMaxAudioHex(audioHex: string): Buffer {
+  const trimmed = audioHex.trim();
+  if (!trimmed) {
     throw new Error("MiniMax TTS returned empty audio data.");
   }
-  fs.writeFileSync(outPath, Buffer.from(audioHex, "hex"));
-  return outPath;
+  if (trimmed.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(trimmed)) {
+    throw new Error("MiniMax TTS returned invalid hex audio data.");
+  }
+  const audio = Buffer.from(trimmed, "hex");
+  return ensureNonEmptyAudioData(audio, "MiniMax TTS");
 }
 
 async function synthesizeMiMo(
@@ -270,10 +282,10 @@ async function synthesizeMiMo(
   outPath: string,
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "mimo");
-  const baseUrl = config<string>("mimoTtsBaseUrl") || MIMO_OPENAI_BASE_URL;
-  const model = config<string>("mimoTtsModel") || "mimo-v2.5-tts";
-  const voice = config<string>("mimoTtsVoice") || "Mia";
-  const response = await fetchWithTimeout(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+  const baseUrl = configString("mimoTtsBaseUrl", MIMO_OPENAI_BASE_URL);
+  const model = configString("mimoTtsModel", "mimo-v2.5-tts");
+  const voice = normalizedMimoTtsVoice();
+  const response = await fetchWithTimeout(chatCompletionsUrl(baseUrl), {
     method: "POST",
     headers: {
       "api-key": apiKey,
@@ -293,39 +305,88 @@ async function synthesizeMiMo(
   if (!response.ok) {
     throw new Error(`MiMo TTS failed (${response.status}): ${body.slice(0, 1200)}`);
   }
-  const parsed = JSON.parse(body) as JsonObject;
+  const parsed = parseJsonObject(body, "MiMo TTS");
+  fs.writeFileSync(outPath, extractMimoTtsAudioData(parsed));
+  return outPath;
+}
+
+export function extractMimoTtsAudioData(parsed: JsonObject): Buffer {
   const choices = parsed.choices;
-  const message = Array.isArray(choices) && choices.length
-    ? ((choices[0] as JsonObject).message as JsonObject | undefined)
+  const message = Array.isArray(choices)
+    ? choices
+        .map((choice) =>
+          choice && typeof choice === "object" && !Array.isArray(choice)
+            ? (choice as JsonObject).message
+            : undefined,
+        )
+        .find((value) => value && typeof value === "object" && !Array.isArray(value)) as JsonObject | undefined
     : undefined;
-  const audio = message?.audio as JsonObject | undefined;
+  const audioValue = message?.audio;
+  const audio = audioValue && typeof audioValue === "object" && !Array.isArray(audioValue)
+    ? audioValue as JsonObject
+    : undefined;
   const data = stringValue(audio?.data);
   if (!data) {
     throw new Error("MiMo TTS returned empty audio data.");
   }
-  fs.writeFileSync(outPath, Buffer.from(data, "base64"));
-  return outPath;
+  return decodeBase64AudioData(data, "MiMo TTS");
 }
 
-function extractGeminiInlineAudio(parsed: JsonObject): { data: Buffer; mimeType: string } {
+export function decodeBase64AudioData(data: string, label: string): Buffer {
+  const compact = data.trim().replace(/\s+/g, "");
+  if (!compact) {
+    throw new Error(`${label} returned empty audio data.`);
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(compact) || compact.length % 4 === 1) {
+    throw new Error(`${label} returned invalid base64 audio data.`);
+  }
+  const audio = Buffer.from(compact, "base64");
+  ensureNonEmptyAudioData(audio, label);
+  const normalizedInput = compact.replace(/=+$/, "");
+  const normalizedOutput = audio.toString("base64").replace(/=+$/, "");
+  if (normalizedInput !== normalizedOutput) {
+    throw new Error(`${label} returned invalid base64 audio data.`);
+  }
+  return audio;
+}
+
+export function ensureNonEmptyAudioData(audio: Buffer, label: string): Buffer {
+  if (!audio.length) {
+    throw new Error(`${label} returned empty audio data.`);
+  }
+  return audio;
+}
+
+export function extractGeminiInlineAudio(parsed: JsonObject): { data: Buffer; mimeType: string } {
   const candidates = parsed.candidates;
   if (!Array.isArray(candidates)) {
     throw new Error("Gemini TTS returned no candidates.");
   }
   for (const candidate of candidates) {
-    const content = (candidate as JsonObject).content as JsonObject | undefined;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      continue;
+    }
+    const contentValue = (candidate as JsonObject).content;
+    const content = contentValue && typeof contentValue === "object" && !Array.isArray(contentValue)
+      ? contentValue as JsonObject
+      : undefined;
     const parts = content?.parts;
     if (!Array.isArray(parts)) {
       continue;
     }
     for (const part of parts) {
+      if (!part || typeof part !== "object" || Array.isArray(part)) {
+        continue;
+      }
       const partObj = part as JsonObject;
-      const inlineData =
-        (partObj.inlineData as JsonObject | undefined) ?? (partObj.inline_data as JsonObject | undefined);
+      const inlineDataValue = partObj.inlineData ?? partObj.inline_data;
+      const inlineData = inlineDataValue && typeof inlineDataValue === "object" && !Array.isArray(inlineDataValue)
+        ? inlineDataValue as JsonObject
+        : undefined;
       const data = stringValue(inlineData?.data);
       if (data) {
         return {
-          data: Buffer.from(data, "base64"),
+          data: decodeBase64AudioData(data, "Gemini TTS"),
           mimeType:
             stringValue(inlineData?.mimeType) ||
             stringValue(inlineData?.mime_type) ||

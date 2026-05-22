@@ -62,8 +62,9 @@ export class StatusProvider implements vscode.TreeDataProvider<StatusItem> {
   }
 }
 
-export function compactStatusValue(value: string, maxLength = 48): string {
-  if (!value) return "";
-  if (value.length <= maxLength) return value;
-  return `${value.slice(0, 22)}...${value.slice(-23)}`;
+export function compactStatusValue(value: unknown, maxLength = 48): string {
+  const text = stringValue(value);
+  if (!text) return "";
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, 22)}...${text.slice(-23)}`;
 }

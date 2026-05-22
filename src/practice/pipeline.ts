@@ -5,7 +5,6 @@ import * as vscode from "vscode";
 import {
   appendOutput,
   arrayOfStrings,
-  config,
   errorMessage,
   stamp,
   stringValue,
@@ -27,6 +26,7 @@ import {
   speechOutputFileName,
   synthesizeWithConfiguredTts,
 } from "./tts.js";
+import { normalizedTtsProvider } from "../runtime/settings.js";
 
 export async function processPracticeFile(
   context: vscode.ExtensionContext,
@@ -43,7 +43,7 @@ export async function processPracticeFile(
   progress?.("transcribe", "active");
   const transcriptionPrompt = buildTranscriptionPrompt(state, target);
   const transcript = await transcribeAudio(context, inputPath, mimeType, sessionDir, transcriptionPrompt);
-  fs.writeFileSync(path.join(sessionDir, "transcript.txt"), `${transcript}\n`, "utf8");
+  writeTextArtifact(path.join(sessionDir, "transcript.txt"), "transcript.txt", `${transcript}\n`);
   progress?.("transcribe", "done");
 
   progress?.("coach", "active");
@@ -73,29 +73,33 @@ export async function processPracticeFile(
   }
   const nativeVersion =
     target?.referenceText ||
-    stringValue(coaching.native_version) ||
-    stringValue(coaching.nativeVersion) ||
-    transcript;
+    firstNonBlankString(coaching.native_version, coaching.nativeVersion, transcript);
   const problems = normalizeProblems(transcript, nativeVersion, target, coaching);
   const quickFix =
     (target
-      ? stringValue(coaching.quick_fix) ||
-        stringValue(coaching.quickFix) ||
-        "以右侧 Reference 为准，先慢速跟读差异词，再完整读一遍。"
-      : stringValue(coaching.quick_fix) || stringValue(coaching.quickFix));
+      ? firstNonBlankString(
+        coaching.quick_fix,
+        coaching.quickFix,
+        "以右侧 Reference 为准，先慢速跟读差异词，再完整读一遍。",
+      )
+      : firstNonBlankString(coaching.quick_fix, coaching.quickFix));
   const followUpQuestion =
     target
-      ? stringValue(target.followUpQuestion)
-      : stringValue(coaching.follow_up_question) || stringValue(coaching.followUpQuestion);
+      ? firstNonBlankString(target.followUpQuestion)
+      : firstNonBlankString(coaching.follow_up_question, coaching.followUpQuestion);
   const shadowingInstruction =
-    stringValue(coaching.shadowing_instruction) ||
-    stringValue(coaching.shadowingInstruction) ||
-    (target ? `Repeat the reference once: ${nativeVersion}` : `Repeat once: ${nativeVersion}`);
+    firstNonBlankString(
+      coaching.shadowing_instruction,
+      coaching.shadowingInstruction,
+      target ? `Repeat the reference once: ${nativeVersion}` : `Repeat once: ${nativeVersion}`,
+    );
   const errorTags = normalizeErrorTags(coaching.error_tags ?? coaching.errorTags);
   const nextDrill =
-    stringValue(coaching.next_drill) ||
-    stringValue(coaching.nextDrill) ||
-    nextDrillFromState(state, errorTags);
+    firstNonBlankString(
+      coaching.next_drill,
+      coaching.nextDrill,
+      nextDrillFromState(state, errorTags),
+    );
   const drillExamples = normalizeDrillExamples(coaching.drill_examples ?? coaching.drillExamples)
     .concat(drillExamplesFromState(state, nativeVersion))
     .filter(uniqueDrillExample())
@@ -105,8 +109,8 @@ export async function processPracticeFile(
   progress?.("coach", "done");
 
   progress?.("tts", "active");
-  const ttsProvider = config<string>("ttsProvider") || "openai";
-  const ttsStyle = stringValue(coaching.tts_style ?? coaching.ttsStyle).trim();
+  const ttsProvider = normalizedTtsProvider();
+  const ttsStyle = firstNonBlankString(coaching.tts_style, coaching.ttsStyle);
   const outputAudio = path.join(sessionDir, speechOutputFileName(ttsProvider));
   // The native-version and follow-up syntheses are independent round-trips
   // to the same provider; awaiting them in series doubled the "Speak" stage
@@ -161,10 +165,50 @@ export async function processPracticeFile(
     sessionDir,
     packageDate,
   };
-  writeJson(path.join(sessionDir, "coach.json"), coaching);
-  writeJson(path.join(sessionDir, "session.json"), {
+  writePracticeArtifacts(state, inputPath, result, coaching, priorTurn, target);
+  appendSessionLog(state, inputPath, result, coaching);
+  progress?.("save", "done");
+  return result;
+}
+
+export function firstNonBlankString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = stringValue(value).trim();
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
+
+export function writeTextArtifact(filePath: string, label: string, content: string): void {
+  try {
+    fs.writeFileSync(filePath, content, "utf8");
+  } catch (error) {
+    appendOutput(`Could not write ${label}: ${errorMessage(error)}`);
+  }
+}
+
+export function writePracticeArtifacts(
+  state: TrainingState,
+  inputPath: string,
+  result: PracticeResult,
+  coaching: JsonObject,
+  priorTurn?: CoachPriorTurn,
+  target?: PracticeTarget,
+): void {
+  const safeWrite = (label: string, writer: () => void) => {
+    try {
+      writer();
+    } catch (error) {
+      appendOutput(`Could not write ${label}: ${errorMessage(error)}`);
+    }
+  };
+
+  safeWrite("coach.json", () => writeJson(path.join(result.sessionDir, "coach.json"), coaching));
+  safeWrite("session.json", () => writeJson(path.join(result.sessionDir, "session.json"), {
     createdAt: new Date().toISOString(),
-    packageDate,
+    packageDate: result.packageDate,
     input: inputPath,
     result,
     settings: state.settings,
@@ -177,11 +221,8 @@ export async function processPracticeFile(
     },
     priorTurn: priorTurn ?? null,
     practiceTarget: target ?? null,
-  });
-  writeSessionMarkdown(path.join(sessionDir, "session.md"), state, result);
-  appendSessionLog(state, inputPath, result, coaching);
-  progress?.("save", "done");
-  return result;
+  }));
+  safeWrite("session.md", () => writeSessionMarkdown(path.join(result.sessionDir, "session.md"), state, result));
 }
 
 export function appendSessionLog(
@@ -190,44 +231,48 @@ export function appendSessionLog(
   result: PracticeResult,
   coaching: JsonObject,
 ): void {
-  const entry = {
-    schema_version: "vscode-session-log-v1",
-    session_id: path.basename(result.sessionDir),
-    created_at: new Date().toISOString(),
-    date: state.today,
-    package_date: result.packageDate,
-    engine_type: "voice-5min",
-    training_type: stringValue(state.training.training_type),
-    scene: inferScene(state.training),
-    primary_tags: arrayOfStrings(state.training.primary_tags),
-    drill_types_used: drillTypesUsed(state),
-    providers: {
-      speech_in: state.settings.audioUnderstandingProvider,
-      coach: state.settings.coachProvider,
-      speech_out: state.settings.ttsProvider,
-    },
-    input_audio: inputPath,
-    transcript: result.transcript,
-    native_version: result.nativeVersion,
-    problems: result.problems,
-    error_tags: result.errorTags,
-    scores: result.scores,
-    quick_fix: result.quickFix,
-    follow_up_question: result.followUpQuestion,
-    shadowing_instruction: result.shadowingInstruction,
-    next_drill: result.nextDrill,
-    drill_examples: result.drillExamples ?? [],
-    mode: result.mode,
-    reference_text: result.referenceText,
-    reference_label: result.referenceLabel,
-    audio_file: result.audioFile,
-    session_dir: result.sessionDir,
-    raw_coaching: coaching,
-  };
-  const logPath = sessionLogPath(state.root);
-  fs.mkdirSync(path.dirname(logPath), { recursive: true });
-  fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, "utf8");
-  writeJson(path.join(state.root, "runtime", "vscode-sessions", "session-log-latest.json"), entry);
+  try {
+    const entry = {
+      schema_version: "vscode-session-log-v1",
+      session_id: path.basename(result.sessionDir),
+      created_at: new Date().toISOString(),
+      date: state.today,
+      package_date: result.packageDate,
+      engine_type: "voice-5min",
+      training_type: stringValue(state.training.training_type),
+      scene: inferScene(state.training),
+      primary_tags: arrayOfStrings(state.training.primary_tags),
+      drill_types_used: drillTypesUsed(state),
+      providers: {
+        speech_in: state.settings.audioUnderstandingProvider,
+        coach: state.settings.coachProvider,
+        speech_out: state.settings.ttsProvider,
+      },
+      input_audio: inputPath,
+      transcript: result.transcript,
+      native_version: result.nativeVersion,
+      problems: result.problems,
+      error_tags: result.errorTags,
+      scores: result.scores,
+      quick_fix: result.quickFix,
+      follow_up_question: result.followUpQuestion,
+      shadowing_instruction: result.shadowingInstruction,
+      next_drill: result.nextDrill,
+      drill_examples: result.drillExamples ?? [],
+      mode: result.mode,
+      reference_text: result.referenceText,
+      reference_label: result.referenceLabel,
+      audio_file: result.audioFile,
+      session_dir: result.sessionDir,
+      raw_coaching: coaching,
+    };
+    const logPath = sessionLogPath(state.root);
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, "utf8");
+    writeJson(path.join(state.root, "runtime", "vscode-sessions", "session-log-latest.json"), entry);
+  } catch (error) {
+    appendOutput(`Could not append session log: ${errorMessage(error)}`);
+  }
 }
 
 function normalizePracticeTarget(target: PracticeTarget | undefined): PracticeTarget | undefined {
@@ -298,15 +343,32 @@ function normalizeComparableText(text: string): string {
 }
 
 export function readRecentSessionLog(root: string, limit: number): JsonObject[] {
+  const maxItems = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 0;
+  if (!maxItems) {
+    return [];
+  }
   const logPath = sessionLogPath(root);
   if (!fs.existsSync(logPath)) {
     return [];
   }
-  const lines = fs.readFileSync(logPath, "utf8").split(/\r?\n/).filter(Boolean);
+  let lines: string[];
+  try {
+    lines = fs.readFileSync(logPath, "utf8").split(/\r?\n/);
+  } catch (error) {
+    appendOutput(`Could not read recent session log: ${errorMessage(error)}`);
+    return [];
+  }
   const recent: JsonObject[] = [];
-  for (const line of lines.slice(-limit).reverse()) {
+  for (let index = lines.length - 1; index >= 0 && recent.length < maxItems; index -= 1) {
+    const line = lines[index].trim();
+    if (!line) {
+      continue;
+    }
     try {
-      recent.push(JSON.parse(line) as JsonObject);
+      const parsed = JSON.parse(line) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        recent.push(parsed as JsonObject);
+      }
     } catch {
       continue;
     }
@@ -354,9 +416,7 @@ export function normalizeErrorTags(value: unknown): string[] {
 }
 
 export function nextDrillFromState(state: TrainingState, errorTags: string[]): string {
-  const frames = Array.isArray(state.training.frames)
-    ? state.training.frames.map((item) => stringValue((item as JsonObject).text)).filter(Boolean)
-    : [];
+  const frames = frameTextsFromTraining(state.training);
   const frame =
     frames[0] ||
     splitPracticeText(stringValue(state.training.clean_tts_text) || stringValue(state.training.audio_text))[0] ||
@@ -473,15 +533,7 @@ export function buildTranscriptionPrompt(state: TrainingState, target?: Practice
     parts.push(`Key terms: ${keyExpressions.slice(0, 8).join("; ")}.`);
   }
 
-  const frames = Array.isArray(state.training.frames)
-    ? state.training.frames
-        .map((item) =>
-          typeof item === "object" && item
-            ? stringValue((item as JsonObject).text)
-            : stringValue(item),
-        )
-        .filter(Boolean)
-    : [];
+  const frames = frameTextsFromTraining(state.training);
   if (frames.length) {
     parts.push(`Example sentences: ${frames.slice(0, 3).join(" / ")}.`);
   }
@@ -491,6 +543,20 @@ export function buildTranscriptionPrompt(state: TrainingState, target?: Practice
   }
 
   return parts.join(" ");
+}
+
+function frameTextsFromTraining(training: JsonObject): string[] {
+  if (!Array.isArray(training.frames)) {
+    return [];
+  }
+  return training.frames
+    .map((item) =>
+      typeof item === "object" && item && !Array.isArray(item)
+        ? stringValue((item as JsonObject).text)
+        : stringValue(item),
+    )
+    .map((item) => item.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 }
 
 export function splitPracticeText(text: string): string[] {

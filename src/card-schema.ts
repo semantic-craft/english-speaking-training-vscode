@@ -121,7 +121,7 @@ export const CARD_SCHEMA: JsonObject = {
   assets: {
     note:
       "Images are OPTIONAL. The sidebar shows them only when the file exists. Paths in manifest.json may be " +
-      "relative to prebuilt/<date>/ or absolute. With no manifest the default paths below are used.",
+      "absolute or relative inside prebuilt/<date>/. Escaping relative paths are ignored. With no manifest the default paths below are used.",
     manifestShape: { files: "object mapping the keys below to a path string." },
     keys: {
       daily_card: "Default daily-card.png. The TODAY reading-card image (sentence + setup).",

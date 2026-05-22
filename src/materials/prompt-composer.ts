@@ -3,11 +3,14 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 import { buildGenerationPrompt } from "../card-schema.js";
+import { errorMessage } from "../core.js";
 import { composeMaterialBrief } from "../practice/coach.js";
 import { findTrainingRoot, todayInConfiguredTimezone } from "../runtime/training-root.js";
+import { ensureValidLessonDate, validateLessonDateInput } from "./scaffold.js";
 import { sampleFollowupDrillPackage, sampleTrainingPackage } from "./sample-package.js";
 
 const PROMPT_FILE_NAME = "material-generation-prompt.md";
+const TOPIC_INPUT_MESSAGE = "Describe the topic in a few words.";
 
 /**
  * Coach-assisted prompt composer. The learner types a terse topic; the
@@ -21,9 +24,16 @@ export async function composeMaterialPrompt(context: vscode.ExtensionContext): P
     title: "Compose Material Prompt — Topic",
     prompt: "What do you want to practice? e.g. 'defending a research claim to a skeptical discussant'.",
     ignoreFocusOut: true,
-    validateInput: (value) => (value.trim().length >= 4 ? null : "Describe the topic in a few words."),
+    validateInput: validateMaterialPromptTopic,
   });
-  if (!topic || !topic.trim()) {
+  if (!topic) {
+    return;
+  }
+  const trimmedTopic = topic.trim();
+  if (!trimmedTopic) {
+    return;
+  }
+  if (!ensureValidMaterialPromptTopic(trimmedTopic)) {
     return;
   }
 
@@ -32,21 +42,15 @@ export async function composeMaterialPrompt(context: vscode.ExtensionContext): P
     prompt: "Lesson date (YYYY-MM-DD). The generated package must live in prebuilt/<date>/.",
     value: todayInConfiguredTimezone(),
     ignoreFocusOut: true,
-    validateInput: (value) => (/^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? null : "Use YYYY-MM-DD format."),
+    validateInput: validateLessonDateInput,
   });
   if (!dateInput) {
     return;
   }
   const targetDate = dateInput.trim();
-
-  const brief = await resolveBrief(context, topic.trim());
-
-  const prompt = buildGenerationPrompt({
-    date: targetDate,
-    brief,
-    sampleTraining: sampleTrainingPackage(targetDate),
-    sampleDrill: sampleFollowupDrillPackage(targetDate),
-  });
+  if (!ensureValidLessonDate(targetDate)) {
+    return;
+  }
 
   const targetDir = await pickTargetDirectory();
   if (!targetDir) {
@@ -63,6 +67,16 @@ export async function composeMaterialPrompt(context: vscode.ExtensionContext): P
       return;
     }
   }
+
+  const brief = await resolveBrief(context, trimmedTopic);
+
+  const prompt = buildGenerationPrompt({
+    date: targetDate,
+    brief,
+    sampleTraining: sampleTrainingPackage(targetDate),
+    sampleDrill: sampleFollowupDrillPackage(targetDate),
+  });
+
   fs.mkdirSync(targetDir, { recursive: true });
   fs.writeFileSync(targetFile, `${prompt}\n`, "utf8");
   await vscode.window.showTextDocument(vscode.Uri.file(targetFile), { preview: false });
@@ -72,6 +86,19 @@ export async function composeMaterialPrompt(context: vscode.ExtensionContext): P
   );
 }
 
+function validateMaterialPromptTopic(value: string): string | null {
+  return value.trim().length >= 4 ? null : TOPIC_INPUT_MESSAGE;
+}
+
+function ensureValidMaterialPromptTopic(value: string): boolean {
+  const message = validateMaterialPromptTopic(value);
+  if (!message) {
+    return true;
+  }
+  vscode.window.showWarningMessage(message);
+  return false;
+}
+
 async function resolveBrief(context: vscode.ExtensionContext, topic: string): Promise<string> {
   try {
     return await vscode.window.withProgress(
@@ -79,9 +106,8 @@ async function resolveBrief(context: vscode.ExtensionContext, topic: string): Pr
       () => composeMaterialBrief(context, topic),
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
     vscode.window.showWarningMessage(
-      `Coach could not compose a brief (${message}). Using your raw topic in the prompt instead.`,
+      `Coach could not compose a brief (${errorMessage(error)}). Using your raw topic in the prompt instead.`,
     );
     return topic;
   }
