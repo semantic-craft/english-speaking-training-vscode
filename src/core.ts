@@ -95,8 +95,45 @@ export async function fetchWithTimeout(
           `did not respond. Check your connection and press ↻ to retry.`,
       );
     }
+    if (error instanceof TypeError && looksLikeFetchNetworkFailure(error)) {
+      throw new Error(
+        `Network request to ${fetchTargetLabel(url)} failed before a response arrived ` +
+          `(${fetchFailureDetail(error)}). Check your VPN/proxy/DNS connection and press ↻ to retry.`,
+      );
+    }
     throw error;
   }
+}
+
+function looksLikeFetchNetworkFailure(error: Error): boolean {
+  return /fetch failed|failed to fetch|network/i.test(error.message);
+}
+
+function fetchTargetLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.host || parsed.hostname || "configured provider";
+  } catch {
+    return "configured provider";
+  }
+}
+
+function fetchFailureDetail(error: Error): string {
+  const parts: string[] = [];
+  const push = (value: unknown) => {
+    const text = stringValue(value).trim();
+    if (text && !parts.includes(text)) parts.push(text);
+  };
+  push(error.message);
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (cause && typeof cause === "object" && !Array.isArray(cause)) {
+    const obj = cause as Record<string, unknown>;
+    push(obj.code);
+    push(obj.syscall);
+    push(obj.hostname || obj.host);
+    push(obj.message);
+  }
+  return parts.slice(0, 4).join("; ") || "fetch failed";
 }
 
 export function readJson(filePath: string): JsonObject | undefined {

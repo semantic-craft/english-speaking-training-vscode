@@ -9,6 +9,17 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.1.43] — 2026-05-22
+
+### Fixed
+- MiMo speech output now sends the selected line as the assistant message and
+  only uses a user message for optional style prompts, so drill-line Listen,
+  slow reads, and follow-along audio read the chosen sentence instead of
+  drifting back to a generic practice prompt.
+- Provider network failures now include the target host and retry guidance
+  instead of surfacing a bare `fetch failed` message during transcription,
+  coaching, or TTS calls.
+
 ## [0.1.42] — 2026-05-22
 
 ### Fixed

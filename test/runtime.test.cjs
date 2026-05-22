@@ -1388,6 +1388,24 @@ test("error messages prefer trimmed scalar fields over object placeholders", () 
   assert.equal(api.errorMessage(null), "Unknown error");
 });
 
+test("fetch network failures include the provider host and retry guidance", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    const error = new TypeError("fetch failed");
+    error.cause = { code: "ENOTFOUND", hostname: "api.openai.com" };
+    throw error;
+  };
+
+  try {
+    await assert.rejects(
+      () => api.fetchWithTimeout("https://api.openai.com/v1/audio/transcriptions?key=secret", {}, 100),
+      /Network request to api\.openai\.com failed before a response arrived \(fetch failed; ENOTFOUND; api\.openai\.com\)\. Check your VPN\/proxy\/DNS connection and press ↻ to retry\./,
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("reply context does not survive a rebuilt practice webview", async () => {
   const previousLocalMaterialsRoot = configValues.localMaterialsRoot;
   const previousWorkspaceFolders = mockVscode.workspace.workspaceFolders;
@@ -4848,6 +4866,65 @@ test("provider TTS voices are normalized before UI state or provider calls", () 
   configValues.openaiTtsVoice = "";
   configValues.geminiTtsVoice = "";
   configValues.mimoTtsVoice = "";
+});
+
+test("MiMo TTS reads the selected text instead of a generic prompt", async () => {
+  const previous = {
+    mimoTtsBaseUrl: configValues.mimoTtsBaseUrl,
+    mimoTtsModel: configValues.mimoTtsModel,
+    mimoTtsVoice: configValues.mimoTtsVoice,
+  };
+  const originalFetch = global.fetch;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "english-training-mimo-tts-"));
+  const calls = [];
+  configValues.mimoTtsBaseUrl = " https://custom.mimo/v1/ ";
+  configValues.mimoTtsModel = " mimo-v2.5-tts ";
+  configValues.mimoTtsVoice = " Dean ";
+  global.fetch = async (url, init) => {
+    calls.push({
+      url: String(url),
+      headers: init.headers,
+      body: JSON.parse(init.body),
+    });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        choices: [{ message: { audio: { data: Buffer.from("mimo-selected-audio").toString("base64") } } }],
+      }),
+    };
+  };
+  const context = {
+    secrets: {
+      get: async (key) => key === "englishTraining.mimoKey" ? " tp-mimo-test " : "",
+    },
+  };
+
+  try {
+    const firstOut = path.join(tmpDir, "first.wav");
+    const secondOut = path.join(tmpDir, "second.wav");
+    await api.synthesizeWithConfiguredTts(context, "  Selected drill line.  ", firstOut, "mimo");
+    await api.synthesizeWithConfiguredTts(context, "  Slow selected line.  ", secondOut, "mimo", {
+      ttsStyle: "Read slowly and clearly.",
+    });
+
+    assert.equal(calls[0].url, "https://custom.mimo/v1/chat/completions");
+    assert.equal(calls[0].headers["api-key"], "tp-mimo-test");
+    assert.equal(calls[0].body.model, "mimo-v2.5-tts");
+    assert.equal(calls[0].body.audio.voice, "Dean");
+    assert.deepEqual(calls[0].body.messages, [
+      { role: "assistant", content: "Selected drill line." },
+    ]);
+    assert.deepEqual(calls[1].body.messages, [
+      { role: "user", content: "Read slowly and clearly." },
+      { role: "assistant", content: "Slow selected line." },
+    ]);
+    assert.equal(fs.readFileSync(firstOut, "utf8"), "mimo-selected-audio");
+    assert.equal(fs.readFileSync(secondOut, "utf8"), "mimo-selected-audio");
+  } finally {
+    Object.assign(configValues, previous);
+    global.fetch = originalFetch;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test("repairs common malformed coaching JSON responses", () => {
