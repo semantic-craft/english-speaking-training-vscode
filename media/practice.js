@@ -386,16 +386,18 @@
     const ROUTE_KEY_SETTINGS = ["coachProvider", "audioUnderstandingProvider", "ttsProvider"];
 
     function normalizeProviderForSetting(setting, raw) {
+      const provider = scalarText(raw).toLowerCase();
       if (setting === "coachProvider") {
-        return raw === "gemini" || raw === "mimo" || raw === "openai" ? raw : "openai";
+        return provider === "gemini" || provider === "mimo" || provider === "openai" ? provider : "openai";
       }
       if (setting === "audioUnderstandingProvider") {
-        return raw === "gemini" || raw === "openai" || raw === "mimo" ? raw : "openai";
+        return provider === "gemini" || provider === "openai" || provider === "mimo" ? provider : "openai";
       }
-      return raw === "minimax" || raw === "gemini" || raw === "openai" || raw === "mimo" ? raw : "openai";
+      return provider === "minimax" || provider === "gemini" || provider === "openai" || provider === "mimo" ? provider : "openai";
     }
 
     function activeRouteProviders(settings) {
+      const safeSettings = objectValue(settings) || {};
       const seen = new Set();
       const providers = [];
       const defaults = {
@@ -404,7 +406,7 @@
         ttsProvider: "openai",
       };
       ROUTE_KEY_SETTINGS.forEach((setting) => {
-        const raw = (settings && settings[setting]) || defaults[setting];
+        const raw = scalarField(safeSettings, setting) || defaults[setting];
         const value = normalizeProviderForSetting(setting, raw);
         if (value && !seen.has(value)) {
           seen.add(value);
@@ -415,9 +417,10 @@
     }
 
     function routeKeyStatus(currentState) {
-      const keys = (currentState && currentState.keys) || {};
-      const providers = activeRouteProviders(currentState && currentState.settings);
-      const missing = providers.filter((provider) => !keys[provider]);
+      const safeState = objectValue(currentState) || {};
+      const keys = objectValue(safeState.keys) || {};
+      const providers = activeRouteProviders(safeState.settings);
+      const missing = providers.filter((provider) => !providerKeySaved(keys, provider));
       const label = providers.map(providerLabel).join(" + ") || "Provider";
       const missingLabel = missing.map(providerLabel).join(" + ") || label;
       return {
@@ -438,9 +441,9 @@
     // error status produced during a real turn is never clobbered by a
     // coincidental re-render.
     function setupReady(currentState) {
-      const progress = currentState && currentState.progress;
+      const progress = objectValue(currentState && currentState.progress) || {};
       const routeKeys = routeKeyStatus(currentState);
-      const hasLessons = Boolean(progress && progress.total && progress.total > 0);
+      const hasLessons = positiveInteger(progress.total) > 0;
       return {
         ready: routeKeys.coreKeysReady && hasLessons,
         coreKeysReady: routeKeys.coreKeysReady,
@@ -450,10 +453,11 @@
     }
 
     function setupBlockMessage(currentState) {
-      const diag = (currentState && currentState.sourceDiagnostics) || {};
-      if (diag.packageJsonError) {
-        return "Today's lesson file (prebuilt/" + (diag.currentPackageDate || "?")
-          + "/english-training.json) has a JSON syntax error: " + diag.packageJsonError
+      const diag = objectValue(currentState && currentState.sourceDiagnostics) || {};
+      const packageJsonError = scalarField(diag, "packageJsonError");
+      if (packageJsonError) {
+        return "Today's lesson file (prebuilt/" + (scalarField(diag, "currentPackageDate") || "?")
+          + "/english-training.json) has a JSON syntax error: " + packageJsonError
           + " — fix the JSON and press ↻.";
       }
       const gate = setupReady(currentState);
@@ -468,17 +472,17 @@
     }
 
     function ttsActionBlockMessage(currentState, text, actionLabel) {
-      if (!String(text || "").trim()) {
+      if (!compactScalarText(text)) {
         return "No text is available for " + actionLabel + ".";
       }
-      const diag = (currentState && currentState.sourceDiagnostics) || {};
-      if (diag.packageJsonError) {
+      const diag = objectValue(currentState && currentState.sourceDiagnostics) || {};
+      if (scalarField(diag, "packageJsonError")) {
         return setupBlockMessage(currentState);
       }
-      const settings = (currentState && currentState.settings) || {};
-      const keys = (currentState && currentState.keys) || {};
-      const provider = normalizeProviderForSetting("ttsProvider", settings.ttsProvider || "openai");
-      if (!keys[provider]) {
+      const settings = objectValue(currentState && currentState.settings) || {};
+      const keys = objectValue(currentState && currentState.keys) || {};
+      const provider = normalizeProviderForSetting("ttsProvider", scalarField(settings, "ttsProvider") || "openai");
+      if (!providerKeySaved(keys, provider)) {
         return "Add " + providerLabel(provider) + " API key in Quick setup above to " + actionLabel + ".";
       }
       return "";
@@ -502,8 +506,8 @@
       // button over a totally empty lesson with no hint why. The lesson
       // directory still counts toward setupReady's lesson tally, so this
       // must be gated explicitly and ahead of the generic readiness check.
-      const diag = (currentState && currentState.sourceDiagnostics) || {};
-      if (diag.packageJsonError) {
+      const diag = objectValue(currentState && currentState.sourceDiagnostics) || {};
+      if (scalarField(diag, "packageJsonError")) {
         recordingBlockedBySetup = true;
         if (btn) btn.disabled = true;
         setStatus(setupBlockMessage(currentState), "error");
@@ -785,7 +789,7 @@
 
     function providerModelSetting(setting, option, settings) {
       if (setting === "audioUnderstandingProvider" && option.value === "openai") {
-        const mode = settings && settings.openaiTranscriptionMode === "realtime" ? "realtime" : "file";
+        const mode = scalarField(settings, "openaiTranscriptionMode") === "realtime" ? "realtime" : "file";
         return mode === "realtime" ? "openaiRealtimeTranscriptionModel" : "openaiFileTranscriptionModel";
       }
       return option.modelSetting || "";
@@ -793,7 +797,7 @@
 
     function providerModelButtonLabel(setting, option, settings) {
       if (setting === "audioUnderstandingProvider" && option.value === "openai") {
-        const mode = settings && settings.openaiTranscriptionMode === "realtime" ? "realtime" : "file";
+        const mode = scalarField(settings, "openaiTranscriptionMode") === "realtime" ? "realtime" : "file";
         return mode === "realtime" ? "Realtime model" : "File model";
       }
       return option.modelLabel || "Model";
@@ -801,7 +805,7 @@
 
     function providerNote(setting, option, settings) {
       if (setting === "audioUnderstandingProvider" && option.value === "openai") {
-        const mode = settings && settings.openaiTranscriptionMode === "realtime" ? "realtime" : "file";
+        const mode = scalarField(settings, "openaiTranscriptionMode") === "realtime" ? "realtime" : "file";
         return mode === "realtime"
           ? "realtime STT — gpt-realtime-whisper"
           : "default STT — gpt-4o-transcribe with domain prompt";
@@ -824,20 +828,25 @@
         : [];
     }
 
+    function providerKeySaved(keys, provider) {
+      const safeKeys = objectValue(keys) || {};
+      return safeKeys[provider] === true;
+    }
+
     function providerModelSummary(setting, option, settings) {
       if (!settings) return "";
       const modelSetting = providerModelSetting(setting, option, settings);
       if (!modelSetting) return "";
-      const model = settings[modelSetting] || "";
+      const model = scalarField(settings, modelSetting);
       const extras = providerExtraSettings(option)
-        .map((item) => settings[item.setting] || "")
+        .map((item) => scalarField(settings, item.setting))
         .filter(Boolean);
       return [model, ...extras].map(esc).join(" · ");
     }
 
     function providerCardHtml(setting, option, settings, keys) {
-      const active = settings && settings[setting] === option.value;
-      const hasKey = keys && keys[option.value];
+      const active = normalizeProviderForSetting(setting, scalarField(settings, setting)) === option.value;
+      const hasKey = providerKeySaved(keys, option.value);
       const modelText = providerModelSummary(setting, option, settings);
       const modelSetting = providerModelSetting(setting, option, settings);
       const extraButtons = providerExtraSettings(option)
@@ -872,7 +881,7 @@
 
     function providerRoleHtml(title, setting, settings, keys) {
       const options = PROVIDER_ROUTES[setting] || [];
-      const activeValue = settings && settings[setting];
+      const activeValue = normalizeProviderForSetting(setting, scalarField(settings, setting));
       const activeOption = options.find((option) => option.value === activeValue);
       const current = activeOption ? activeOption.label : providerLabel(activeValue || "");
       return [
@@ -886,7 +895,7 @@
     }
 
     function routeSummaryHtml(label, setting, settings) {
-      const value = settings && settings[setting];
+      const value = normalizeProviderForSetting(setting, scalarField(settings, setting));
       const options = PROVIDER_ROUTES[setting] || [];
       const activeOption = options.find((option) => option.value === value);
       const name = activeOption ? activeOption.label : providerLabel(value || "");
@@ -894,8 +903,8 @@
     }
 
     function recorderSettingsHtml(settings) {
-      const backend = String((settings && settings.recorderBackend) || "macLocal");
-      const mic = String((settings && settings.preferredMicrophoneName) || "").trim() || "Auto (prefer Mac built-in)";
+      const backend = scalarField(settings, "recorderBackend") || "macLocal";
+      const mic = scalarField(settings, "preferredMicrophoneName") || "Auto (prefer Mac built-in)";
       return [
         '<div class="provider-role recorder-role">',
           '<div class="provider-role-head"><span class="label">Recorder</span><span class="provider-role-current">' + esc(backend) + '</span></div>',
@@ -915,8 +924,9 @@
     }
 
     function keyStripHtml(keys) {
+      const safeKeys = objectValue(keys) || {};
       return '<div class="key-strip">' + ["gemini", "openai", "minimax", "mimo"].map((name) => {
-        const saved = keys && keys[name];
+        const saved = providerKeySaved(safeKeys, name);
         return '<button class="key-pill ' + (saved ? "saved" : "") + '" data-key="' + esc(name) + '">' + esc(providerLabel(name)) + ': ' + (saved ? "saved" : "missing") + '</button>';
       }).join("") + '</div>';
     }
@@ -924,23 +934,25 @@
     function renderProviderPanel(settings, keys) {
       const panel = $("providersPanel");
       if (!panel) return;
+      const safeSettings = objectValue(settings) || {};
+      const safeKeys = objectValue(keys) || {};
       panel.innerHTML = [
         '<h3>Routes & Models</h3>',
         '<div class="route-summary">',
-          routeSummaryHtml("Coach", "coachProvider", settings),
-          routeSummaryHtml("Speech in", "audioUnderstandingProvider", settings),
-          routeSummaryHtml("Speech out", "ttsProvider", settings),
+          routeSummaryHtml("Coach", "coachProvider", safeSettings),
+          routeSummaryHtml("Speech in", "audioUnderstandingProvider", safeSettings),
+          routeSummaryHtml("Speech out", "ttsProvider", safeSettings),
         '</div>',
         '<div class="provider-presets">',
           '<button class="secondary" id="useOpenAIStack" title="Set coach, speech input, and speech output all to OpenAI file-mode defaults">Use OpenAI stack</button>',
           '<button class="secondary" id="useGeminiOnly" title="Set coach, speech input, and speech output all to Gemini">Reset to all-Gemini route</button>',
         '</div>',
-        providerRoleHtml("Coach", "coachProvider", settings, keys),
-        providerRoleHtml("Speech in", "audioUnderstandingProvider", settings, keys),
-        providerRoleHtml("Speech out", "ttsProvider", settings, keys),
-        recorderSettingsHtml(settings),
+        providerRoleHtml("Coach", "coachProvider", safeSettings, safeKeys),
+        providerRoleHtml("Speech in", "audioUnderstandingProvider", safeSettings, safeKeys),
+        providerRoleHtml("Speech out", "ttsProvider", safeSettings, safeKeys),
+        recorderSettingsHtml(safeSettings),
         '<div class="field" id="minimaxVoiceField" hidden><span class="label">MiniMax voice</span><div class="row" id="minimaxVoicePicker"></div></div>',
-        keyStripHtml(keys),
+        keyStripHtml(safeKeys),
       ].join("");
     }
 
@@ -2120,18 +2132,19 @@
     }
 
     function currentSettings() {
-      return (state && state.settings) || {};
+      return objectValue(state && state.settings) || {};
     }
 
     function recorderBackend() {
       const settings = currentSettings();
-      const backend = String(settings.recorderBackend || "macLocal");
-      return backend === "macLocal" || backend === "webview" || backend === "auto" ? backend : "macLocal";
+      const backend = scalarField(settings, "recorderBackend").toLowerCase();
+      if (backend === "maclocal") return "macLocal";
+      return backend === "webview" || backend === "auto" ? backend : "macLocal";
     }
 
     function blockedMicrophonePattern() {
       const settings = currentSettings();
-      const pattern = String(settings.blockedMicrophoneNamePattern || "iphone|ipad|continuity|karios");
+      const pattern = scalarField(settings, "blockedMicrophoneNamePattern") || "iphone|ipad|continuity|karios";
       try {
         return new RegExp(pattern, "i");
       } catch {
@@ -2156,7 +2169,7 @@
       const devices = await navigator.mediaDevices.enumerateDevices();
       const inputs = devices.filter((device) => device.kind === "audioinput" && device.label);
       const settings = currentSettings();
-      const preferred = String(settings.preferredMicrophoneName || "").toLowerCase().trim();
+      const preferred = scalarField(settings, "preferredMicrophoneName").toLowerCase();
       const byPreferredName = preferred
         ? inputs.find((device) => !isBlockedMicrophone(device.label) && device.label.toLowerCase().includes(preferred))
         : undefined;
