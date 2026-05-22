@@ -1,10 +1,11 @@
     const vscode = acquireVsCodeApi();
     let mediaRecorder = null;
     let stream = null;
-    let chunks = [];
     let recorderMode = null;
     let nativeStartRequestSeq = 0;
     let activeNativeStartRequestId = 0;
+    let practiceRequestSeq = 0;
+    let activePracticeRequestId = 0;
     // True from posting startNativeRecording until the extension confirms
     // ffmpeg is actually up (nativeRecordingStarted) or fails (error). A stop
     // tap in this ~1s window would otherwise tear down a recorder that has
@@ -128,6 +129,13 @@
     const textList = (value) => Array.isArray(value)
       ? value.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean)
       : [];
+
+    function addElementListener(id, eventName, handler) {
+      const element = $(id);
+      if (!element) return null;
+      element.addEventListener(eventName, handler);
+      return element;
+    }
     const firstTextField = (obj, ...keys) => {
       for (const key of keys) {
         const text = textField(obj, key);
@@ -283,13 +291,18 @@
       // first interval is orphaned and repaints #timer at 4 Hz forever.
       if (timerHandle) clearInterval(timerHandle);
       recordingStartedAt = Date.now();
-      $("timer").textContent = "00:00";
+      setTimerText("00:00");
       timerHandle = setInterval(() => {
         const sec = Math.floor((Date.now() - recordingStartedAt) / 1000);
         const m = String(Math.floor(sec / 60)).padStart(2, "0");
         const s = String(sec % 60).padStart(2, "0");
-        $("timer").textContent = m + ":" + s;
+        setTimerText(m + ":" + s);
       }, 250);
+    }
+
+    function setTimerText(text) {
+      const timer = $("timer");
+      if (timer) timer.textContent = text;
     }
 
     function stopTimer() {
@@ -378,6 +391,7 @@
       pendingReplyContext = null;
       pendingPracticeTarget = null;
       activeRecordingTarget = null;
+      activePracticeRequestId = 0;
       if (notifyHost) {
         vscode.postMessage({ type: "clearReplyContext" });
       }
@@ -2116,6 +2130,7 @@
 
     function setRecording(active) {
       const btn = $("record");
+      if (!btn) return;
       btn.classList.toggle("recording", active);
       btn.setAttribute("aria-label", active ? "Stop recording" : "Start recording");
       btn.setAttribute("title", active ? "Stop recording" : "Start recording");
@@ -2123,11 +2138,13 @@
 
     function setBusy(active, label) {
       const btn = $("record");
-      btn.classList.toggle("busy", active);
-      // Don't let an unrelated path (e.g. a failed example-audio request)
-      // re-enable the record button while setup is still incomplete — that
-      // briefly reopens the wasted-recording trap until the next re-render.
-      btn.disabled = active || recordingBlockedBySetup;
+      if (btn) {
+        btn.classList.toggle("busy", active);
+        // Don't let an unrelated path (e.g. a failed example-audio request)
+        // re-enable the record button while setup is still incomplete — that
+        // briefly reopens the wasted-recording trap until the next re-render.
+        btn.disabled = active || recordingBlockedBySetup;
+      }
       if (label) setStatus(label, active ? "busy" : undefined);
     }
 
@@ -2161,8 +2178,69 @@
       return ["imac", "macbook", "mac mini", "mac studio", "studio display", "built-in", "built in", "internal"].some((name) => text.includes(name));
     }
 
+    const WEBVIEW_RECORDER_AUDIO_BITS_PER_SECOND = 128000;
+    const WEBVIEW_RECORDER_TIMESLICE_MS = 1000;
+
+    function webviewAudioConstraints() {
+      return {
+        // For pronunciation practice we want the least processed voice the
+        // browser can provide. Built-in echo/noise/AGC processing can make
+        // takes sound phasey or muffled; use soft `ideal: false` hints so
+        // older Electron builds can still fall back instead of rejecting mic
+        // capture outright.
+        echoCancellation: { ideal: false },
+        noiseSuppression: { ideal: false },
+        autoGainControl: { ideal: false },
+        channelCount: { ideal: 1 },
+        sampleRate: { ideal: 48000 },
+        sampleSize: { ideal: 16 },
+      };
+    }
+
+    function webviewRecorderOptions(mimeType) {
+      const options = { audioBitsPerSecond: WEBVIEW_RECORDER_AUDIO_BITS_PER_SECOND };
+      if (mimeType) options.mimeType = mimeType;
+      return options;
+    }
+
+    function webviewMimeTypeSupported(mimeType) {
+      return typeof MediaRecorder.isTypeSupported === "function" && MediaRecorder.isTypeSupported(mimeType);
+    }
+
+    function createWebviewMediaRecorder(mediaStream) {
+      const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"].find(webviewMimeTypeSupported);
+      try {
+        return new MediaRecorder(mediaStream, webviewRecorderOptions(mimeType));
+      } catch {
+        // Older Electron/Chromium builds may reject bitrate hints even when
+        // the MIME type is valid. Keep recording available and only drop the
+        // optional quality hint in that narrow case.
+        if (mimeType) {
+          try {
+            return new MediaRecorder(mediaStream, { mimeType });
+          } catch (_) {
+            // Last resort below: some webviews report support but still reject
+            // the explicit MIME option at construction time.
+          }
+        }
+        return new MediaRecorder(mediaStream);
+      }
+    }
+
+    function stopWebviewStreamTracks(mediaStream) {
+      if (!mediaStream || typeof mediaStream.getTracks !== "function") return;
+      mediaStream.getTracks().forEach((track) => {
+        try {
+          if (track && typeof track.stop === "function") track.stop();
+        } catch (_) {
+          // Best effort cleanup: one bad track must not keep the recorder state
+          // or the remaining tracks alive.
+        }
+      });
+    }
+
     async function localAudioConstraints() {
-      const base = { echoCancellation: true, noiseSuppression: true, channelCount: 1 };
+      const base = webviewAudioConstraints();
       if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
         return base;
       }
@@ -2177,7 +2255,8 @@
       const byAllowedName = inputs.find((device) => !isBlockedMicrophone(device.label));
       const chosen = byPreferredName || byLocalName || byAllowedName;
       if (chosen) {
-        return { ...base, deviceId: { exact: chosen.deviceId } };
+        const deviceId = scalarText(chosen.deviceId);
+        if (deviceId) return { ...base, deviceId: { exact: deviceId } };
       }
       return base;
     }
@@ -2209,17 +2288,20 @@
         startNativeRecording((error && error.message) || String(error));
       };
       const resetWebviewCapture = () => {
-        if (stream) stream.getTracks().forEach((track) => track.stop());
+        if (mediaRecorder) {
+          mediaRecorder.ondataavailable = null;
+          mediaRecorder.onstop = null;
+        }
+        stopWebviewStreamTracks(stream);
         stream = null;
         mediaRecorder = null;
-        chunks = [];
       };
       // getUserMedia + the permission prompt is an unbounded, browser-owned
       // wait with no other signal; without this the press opens a silent
       // multi-second window (the same opaque-press gap the native path closes
       // with its streamed preparing phases). Mirror that cue here so both
       // recorder backends give immediate, legible feedback on the press.
-      chunks = [];
+      const recordingChunks = [];
       try {
         const constraints = await localAudioConstraints();
         if (fallbackToNative && (!constraints || !constraints.deviceId)) {
@@ -2227,21 +2309,20 @@
           return;
         }
         stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
-        const preferred = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"].find((type) => MediaRecorder.isTypeSupported(type));
-        mediaRecorder = preferred ? new MediaRecorder(stream, { mimeType: preferred }) : new MediaRecorder(stream);
+        mediaRecorder = createWebviewMediaRecorder(stream);
       } catch (error) {
         resetWebviewCapture();
         fallbackToNativeRecording(error);
         return;
       }
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) chunks.push(event.data);
+        if (event.data && event.data.size > 0) recordingChunks.push(event.data);
       };
       mediaRecorder.onstop = async () => {
         try {
           const stoppedRecorder = mediaRecorder;
           const mimeType = (stoppedRecorder && stoppedRecorder.mimeType) || "audio/webm";
-          const blob = new Blob(chunks, { type: mimeType });
+          const blob = new Blob(recordingChunks, { type: mimeType });
           if (blob.size < 1000) {
             throw new Error("Recording was empty. Please try again after the microphone indicator appears.");
           }
@@ -2255,7 +2336,9 @@
           }
           const priorTurn = pendingReplyContext;
           const practiceTarget = activeRecordingTarget;
-          vscode.postMessage({ type: "practiceAudio", mimeType, base64, priorTurn, practiceTarget });
+          const requestId = ++practiceRequestSeq;
+          activePracticeRequestId = requestId;
+          vscode.postMessage({ type: "practiceAudio", mimeType, base64, priorTurn, practiceTarget, requestId });
           armProcessingWatchdog();
         } catch (error) {
           setBusy(false);
@@ -2272,7 +2355,14 @@
         }
       };
       recorderMode = "webview";
-      mediaRecorder.start();
+      try {
+        mediaRecorder.start(WEBVIEW_RECORDER_TIMESLICE_MS);
+      } catch (error) {
+        recorderMode = null;
+        resetWebviewCapture();
+        fallbackToNativeRecording(error);
+        return;
+      }
       setRecording(true);
       setStatus("Listening… speak now.");
       startVuMeter(stream);
@@ -2287,7 +2377,8 @@
           setStatus("Starting recorder — one moment, then it will listen.");
           return;
         }
-        vscode.postMessage({ type: "stopNativeRecording" });
+        const requestId = activeNativeStartRequestId;
+        vscode.postMessage({ type: "stopNativeRecording", requestId });
         setRecording(false);
         stopTimer();
         setBusy(true, "Stopping native recorder…");
@@ -2483,6 +2574,27 @@
       return requestId > 0 && requestId === activeNativeStartRequestId;
     }
 
+    function activeTurnMessageRequestId(message) {
+      const requestId = positiveInteger(message && message.requestId);
+      return requestId > 0 && (requestId === activePracticeRequestId || requestId === activeNativeStartRequestId) ? requestId : 0;
+    }
+
+    function clearActiveTurnRequestId(requestId) {
+      if (requestId === activePracticeRequestId) activePracticeRequestId = 0;
+      if (requestId === activeNativeStartRequestId) activeNativeStartRequestId = 0;
+    }
+
+    function isCurrentTurnErrorMessage(message) {
+      const requestId = positiveInteger(message && message.requestId);
+      if (!requestId) return true;
+      return requestId === activeNativeStartRequestId || requestId === activePracticeRequestId;
+    }
+
+    function isCurrentStageMessage(message) {
+      const requestId = positiveInteger(message && message.requestId);
+      return !requestId || requestId === activePracticeRequestId || requestId === activeNativeStartRequestId;
+    }
+
     // Tear down a live webview MediaRecorder + mic stream WITHOUT firing its
     // onstop pipeline. Calling mediaRecorder.stop() here would post a second
     // practiceAudio for audio the user never chose to submit, racing a turn
@@ -2490,6 +2602,7 @@
     // indicator lit. Mirrors the onstop finally cleanup minus the post.
     function abortWebviewRecorder() {
       if (mediaRecorder) {
+        mediaRecorder.ondataavailable = null;
         mediaRecorder.onstop = null;
         try {
           if (mediaRecorder.state !== "inactive") mediaRecorder.stop();
@@ -2497,10 +2610,9 @@
           /* already inactive — nothing to do */
         }
       }
-      if (stream) stream.getTracks().forEach((track) => track.stop());
+      stopWebviewStreamTracks(stream);
       stream = null;
       mediaRecorder = null;
-      chunks = [];
     }
 
     function recoverStartRecordingFailure(error) {
@@ -2530,7 +2642,7 @@
       // time, not microphone warm-up. The host streams nativeRecordingPreparing
       // phases; the timer starts when nativeRecordingStarted arrives.
       setStatus((reason ? reason + " " : "") + "Preparing microphone…", "busy");
-      $("timer").textContent = "00:00";
+      setTimerText("00:00");
       const practiceTarget = activeRecordingTarget || consumePracticeTarget();
       activeRecordingTarget = practiceTarget;
       const priorTurn = pendingReplyContext;
@@ -3077,11 +3189,11 @@
       }
     }
 
-    $("record").addEventListener("click", toggleRecording);
-    $("refresh").addEventListener("click", () => {
+    addElementListener("record", "click", toggleRecording);
+    addElementListener("refresh", "click", (event) => {
       if (blockIfPracticeTurnInProgress("Current turn is still running — wait for it to finish before refreshing.")) return;
       if (blockIfTransientActionInProgress("refreshing")) return;
-      if (!beginRefreshRequest($("refresh"))) return;
+      if (!beginRefreshRequest(event.currentTarget || $("refresh"))) return;
       vscode.postMessage({ type: "refresh" });
     });
     function focusTurnChip(trigger) {
@@ -3323,26 +3435,26 @@
         postSidebarCommand("openMaterialsGuide", "Opening materials guide", trigger);
       }
     });
-    $("completeLocal").addEventListener("click", () => {
+    addElementListener("completeLocal", "click", (event) => {
       if (blockIfPracticeTurnInProgress("Finish or stop the current turn before completing this lesson.")) return;
       if (blockIfTransientActionInProgress("completing this lesson")) return;
-      const requestId = beginSidebarCommand($("completeLocal"), "Completing lesson");
+      const requestId = beginSidebarCommand(event.currentTarget || $("completeLocal"), "Completing lesson");
       if (!requestId) return;
       vscode.postMessage({ type: "completeLocal", requestId });
     });
-    $("configureMaterials").addEventListener("click", () => {
+    addElementListener("configureMaterials", "click", (event) => {
       if (blockSetupChangeDuringPractice()) return;
-      postSidebarCommand("configureMaterials", "Choosing materials folder", $("configureMaterials"));
+      postSidebarCommand("configureMaterials", "Choosing materials folder", event.currentTarget || $("configureMaterials"));
     });
-    $("openTask").addEventListener("click", () => {
+    addElementListener("openTask", "click", (event) => {
       if (blockIfPracticeTurnInProgress("Finish or stop the current turn before opening the task card.")) return;
       if (blockIfTransientActionInProgress("opening the task card")) return;
-      postSidebarCommand("openTask", "Opening task card", $("openTask"));
+      postSidebarCommand("openTask", "Opening task card", event.currentTarget || $("openTask"));
     });
-    $("openFolder").addEventListener("click", () => {
+    addElementListener("openFolder", "click", (event) => {
       if (blockIfPracticeTurnInProgress("Finish or stop the current turn before opening the session folder.")) return;
       if (blockIfTransientActionInProgress("opening the session folder")) return;
-      postSidebarCommand("openSessionFolder", "Opening session folder", $("openFolder"));
+      postSidebarCommand("openSessionFolder", "Opening session folder", event.currentTarget || $("openFolder"));
     });
 
     window.addEventListener("message", (event) => {
@@ -3395,6 +3507,7 @@
           : "Recorder started after a delay — press stop when you finish this take.");
       }
       if (message.type === "stage") {
+        if (!isCurrentStageMessage(message)) return;
         const name = stageName(message.stage);
         const status = stageStatus(message.status);
         if (message.show && name) {
@@ -3407,6 +3520,9 @@
         if (name) armProcessingWatchdog();
       }
       if (message.type === "practiceResult") {
+        const requestId = activeTurnMessageRequestId(message);
+        if (message.requestId && !requestId) return;
+        if (requestId) clearActiveTurnRequestId(requestId);
         clearProcessingWatchdog();
         nativeStarting = false;
         const r = normalizePracticeResult(message.result);
@@ -3633,7 +3749,8 @@
         setStatus(added ? "Added " + added + " fresh FSI line" + (added === 1 ? "" : "s") : "No new drill lines generated");
       }
       if (message.type === "error") {
-        if (message.requestId && !isCurrentNativeStartMessage(message)) return;
+        if (!isCurrentTurnErrorMessage(message)) return;
+        clearActiveTurnRequestId(activeTurnMessageRequestId(message));
         const errorText = messageErrorText(message.message, "Error.");
         clearProcessingWatchdog();
         clearNativeStartWatchdog();

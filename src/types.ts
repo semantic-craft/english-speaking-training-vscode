@@ -162,6 +162,7 @@ export interface WebviewAudioMessage {
   type: "practiceAudio";
   base64: string;
   mimeType: string;
+  requestId?: number;
   priorTurn?: CoachPriorTurn;
   practiceTarget?: PracticeTarget;
 }
