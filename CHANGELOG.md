@@ -9,6 +9,39 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.1.42] — 2026-05-22
+
+### Fixed
+- Webview recording now requests minimally processed 48 kHz, 16-bit, mono
+  voice capture and a higher Opus bitrate while keeping layered fallbacks for
+  older Electron builds, reducing the chance that the non-native recorder
+  produces muffled takes or fails before capture starts.
+- Recording controls now tolerate a missing timer or record button during
+  webview recovery instead of throwing while starting, stopping, or sending a
+  take.
+- Webview recording now flushes chunks once per second and cleans up the
+  microphone stream if `MediaRecorder.start()` fails, avoiding a hot mic or a
+  heavier stop step on longer takes.
+- Aborted webview recordings now detach both stop and data handlers before
+  stopping the recorder, so discarded audio chunks cannot bleed into a later
+  retry.
+- Webview audio chunks are now scoped to the active recording attempt, making
+  rapid retry cleanup resilient even if old recorder events arrive late.
+- Webview recording submissions, host progress, and host results now carry
+  request ids, so stale processing updates cannot reset the UI after a newer
+  take has started.
+- Native recorder stop and post-recording processing now reuse the same
+  request id, keeping the default `macLocal` progress/result/error messages
+  scoped to the recording that produced them.
+- Webview microphone cleanup now stops tracks best-effort and still clears
+  recorder state if one track fails to stop.
+- Webview microphone selection now avoids an exact `deviceId` constraint when
+  Electron exposes a named input without a usable id, falling back to broad
+  capture instead of failing with an overconstrained recorder.
+- Fixed webview control registration now tolerates missing fixed buttons
+  during template drift, preventing one absent control from breaking the whole
+  practice script at startup.
+
 ## [0.1.41] — 2026-05-22
 
 ### Fixed

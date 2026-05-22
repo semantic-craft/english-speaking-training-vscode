@@ -380,7 +380,7 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (payload.type === "stopNativeRecording") {
-        await this.stopNativeRecording();
+        await this.stopNativeRecording(positiveRequestId(payload.requestId));
         return;
       }
       if (payload.type === "practiceAudio") {
@@ -424,8 +424,10 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
         message: `Unknown sidebar message: ${messageValue(payload.type)}.`,
       });
     } catch (error) {
-      const requestId = payload.type === "startNativeRecording" ? positiveRequestId(payload.requestId) : 0;
-      if (payload.type === "startNativeRecording" && this.view === view) {
+      const requestId = payload.type === "startNativeRecording" || payload.type === "practiceAudio" || payload.type === "stopNativeRecording"
+        ? positiveRequestId(payload.requestId)
+        : 0;
+      if ((payload.type === "startNativeRecording" || payload.type === "practiceAudio" || payload.type === "stopNativeRecording") && this.view === view) {
         this.pendingPriorTurn = undefined;
       }
       this.postToActiveView(view, {
@@ -506,10 +508,16 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private stageReporter(view = this.view): StageReporter {
+  private stageReporter(view = this.view, requestId = 0): StageReporter {
     return (stage, status) => {
       if (view) {
-        this.postToActiveView(view, { type: "stage", stage, status, show: true });
+        this.postToActiveView(view, {
+          type: "stage",
+          stage,
+          status,
+          show: true,
+          ...(requestId ? { requestId } : {}),
+        });
       }
     };
   }
@@ -519,12 +527,19 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     if (!view) {
       return;
     }
-    this.postToActiveView(view, { type: "stage", stage: "transcribe", status: "active", show: true });
     const priorTurn = message.priorTurn ?? this.pendingPriorTurn;
     this.pendingPriorTurn = undefined;
+    const requestId = positiveRequestId(message.requestId);
+    this.postToActiveView(view, {
+      type: "stage",
+      stage: "transcribe",
+      status: "active",
+      show: true,
+      ...(requestId ? { requestId } : {}),
+    });
     const practiceTarget = normalizePracticeTargetPayload(message.practiceTarget);
-    const result = await processPracticeAudio(this.context, message, this.stageReporter(view), priorTurn, practiceTarget);
-    this.postPracticeResult(view, result, { priorTurn, practiceTarget });
+    const result = await processPracticeAudio(this.context, message, this.stageReporter(view, requestId), priorTurn, practiceTarget);
+    this.postPracticeResult(view, result, { priorTurn, practiceTarget, requestId });
     await this.refreshAfterPracticeResult();
   }
 
@@ -555,7 +570,7 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private async stopNativeRecording(): Promise<void> {
+  private async stopNativeRecording(requestId = 0): Promise<void> {
     const view = this.view;
     if (!view) {
       return;
@@ -580,7 +595,7 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
       "audio/wav",
       session.sessionDir,
       session.packageDate,
-      this.stageReporter(view),
+      this.stageReporter(view, requestId),
       priorTurn,
       practiceTarget,
     );
@@ -588,6 +603,7 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
       localAudioFile: session.filePath,
       priorTurn,
       practiceTarget,
+      requestId,
     });
     await this.refreshAfterPracticeResult();
   }
@@ -661,6 +677,7 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
       localAudioFile?: string;
       priorTurn?: CoachPriorTurn;
       practiceTarget?: PracticeTarget;
+      requestId?: number;
     } = {},
   ): void {
     if (this.view !== view) {
@@ -675,6 +692,7 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
       : undefined;
     this.postToActiveView(view, {
       type: "practiceResult",
+      ...(options.requestId ? { requestId: options.requestId } : {}),
       result: {
         ...result,
         audioUri,

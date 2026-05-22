@@ -1157,6 +1157,44 @@ test("native recording start failures echo request ids for stale-message filteri
   }
 });
 
+test("native recording stop failures echo request ids for stale-message filtering", async () => {
+  const previousLocalMaterialsRoot = configValues.localMaterialsRoot;
+  const previousWorkspaceFolders = mockVscode.workspace.workspaceFolders;
+  configValues.localMaterialsRoot = "";
+  mockVscode.workspace.workspaceFolders = [];
+
+  const context = {
+    extensionPath: "/tmp/english-training-extension-test",
+    extensionUri: mockVscode.Uri.file("/tmp/english-training-extension-test"),
+    globalStorageUri: mockVscode.Uri.file("/tmp/english-training-extension-test/storage"),
+    secrets: {
+      get: async () => undefined,
+      store: async () => undefined,
+      delete: async () => undefined,
+    },
+    subscriptions: [],
+  };
+  const provider = new api.PracticeViewProvider(context);
+  const messages = [];
+  const view = createPracticeWebviewView(messages);
+
+  try {
+    provider.resolveWebviewView(view);
+    await waitForAsyncWork();
+    messages.length = 0;
+
+    await provider.handleMessage(view, { type: "stopNativeRecording", requestId: 38 });
+
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].type, "error");
+    assert.equal(messages[0].requestId, 38);
+    assert.match(messages[0].message, /Native recorder is not running/);
+  } finally {
+    configValues.localMaterialsRoot = previousLocalMaterialsRoot;
+    mockVscode.workspace.workspaceFolders = previousWorkspaceFolders;
+  }
+});
+
 test("stale native recording start failures do not clear replacement view reply context", async () => {
   const previousLocalMaterialsRoot = configValues.localMaterialsRoot;
   const previousWorkspaceFolders = mockVscode.workspace.workspaceFolders;
@@ -1252,11 +1290,13 @@ test("failed practice audio consumes stale reply context before the next turn", 
       type: "practiceAudio",
       mimeType: "audio/webm",
       base64: "not-base64!",
+      requestId: 42,
     });
 
     assert.equal(provider.pendingPriorTurn, undefined);
     assert.ok(messages.some((message) =>
       message.type === "error" &&
+      message.requestId === 42 &&
       /Recorded audio payload was not valid base64/.test(message.message),
     ));
   } finally {
