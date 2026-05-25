@@ -3645,6 +3645,35 @@ test("provider base URLs are trimmed before UI state or endpoint composition", (
   }
 });
 
+test("qwen realtime endpoint and model mapping follow the configured HTTP endpoint region", () => {
+  const previousEndpoint = configValues.qwenTtsEndpoint;
+  try {
+    configValues.qwenTtsEndpoint = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+    assert.equal(
+      api.normalizedQwenTtsRealtimeEndpoint(),
+      "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+    );
+    configValues.qwenTtsEndpoint = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+    assert.equal(
+      api.normalizedQwenTtsRealtimeEndpoint(),
+      "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime",
+    );
+    configValues.qwenTtsEndpoint = "https://unknown.example/api/v1/generation";
+    assert.equal(
+      api.normalizedQwenTtsRealtimeEndpoint(),
+      "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+    );
+  } finally {
+    configValues.qwenTtsEndpoint = previousEndpoint;
+  }
+
+  assert.equal(api.qwenTtsRealtimeModel("qwen3-tts-flash"), "qwen3-tts-flash-realtime");
+  assert.equal(api.qwenTtsRealtimeModel("qwen3-tts-instruct-flash"), "qwen3-tts-instruct-flash-realtime");
+  // Idempotent: feeding an already -realtime model name through must not
+  // double the suffix and trip a model-not-found error host-side.
+  assert.equal(api.qwenTtsRealtimeModel("qwen3-tts-flash-realtime"), "qwen3-tts-flash-realtime");
+});
+
 test("provider model ids and external voice ids are trimmed before UI state or request bodies", () => {
   const previous = {
     geminiCoachModel: configValues.geminiCoachModel,
