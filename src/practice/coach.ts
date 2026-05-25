@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import {
+  chatCompletionsUrl,
   configString,
   extractGeminiText,
   fetchWithTimeout,
@@ -10,7 +11,10 @@ import {
   parseLooseJson,
   stringValue,
 } from "../core.js";
-import { normalizedCoachProvider } from "../runtime/settings.js";
+import {
+  normalizedCoachProvider,
+  normalizedQwenCompatibleBaseUrl,
+} from "../runtime/settings.js";
 import type {
   CoachPriorTurn,
   DrillExample,
@@ -342,6 +346,16 @@ async function requestProviderJson(
   user: string,
 ): Promise<JsonObject> {
   const provider = normalizedCoachProvider();
+  if (provider === "qwen") {
+    const apiKey = await getRequiredKey(context, "qwen");
+    return callQwenJson(
+      apiKey,
+      normalizedQwenCompatibleBaseUrl(),
+      configString("qwenCoachModel", "qwen-plus"),
+      system,
+      user,
+    );
+  }
   if (provider === "mimo") {
     const apiKey = await getRequiredKey(context, "mimo");
     return callAnthropicJson(system, user, {
@@ -358,6 +372,41 @@ async function requestProviderJson(
   // OpenAI is the default coach and the fallback for any stale/removed value.
   const apiKey = await getRequiredKey(context, "openai");
   return callOpenAIJson(apiKey, configString("openaiCoachModel", "gpt-4o"), system, user);
+}
+
+async function callQwenJson(
+  apiKey: string,
+  baseUrl: string,
+  model: string,
+  system: string,
+  user: string,
+): Promise<JsonObject> {
+  const response = await fetchWithTimeout(chatCompletionsUrl(baseUrl), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      // Match the OpenAI coach path: force a JSON object body so coach
+      // turns don't fail mid-flight on `<think>` blocks or Markdown fences
+      // around the JSON. The DashScope OpenAI-compatible endpoint honors
+      // response_format on qwen-plus / qwen-max / qwen3-* chat models; the
+      // stripThinkBlocks + parseLooseJson fallback below stays in place so
+      // a model that ignores the hint still parses.
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`Qwen coach request failed (${response.status}): ${body.slice(0, 1200)}`);
+  }
+  return parseLooseJson(stripThinkBlocks(extractChatCompletionText(parseJsonObject(body, "Qwen coach"))));
 }
 
 async function callAnthropicJson(
@@ -460,6 +509,10 @@ async function callOpenAIJson(
     throw new Error(`OpenAI request failed (${response.status}): ${body.slice(0, 1200)}`);
   }
   const parsed = parseJsonObject(body, "OpenAI coach");
+  return parseLooseJson(extractChatCompletionText(parsed));
+}
+
+function extractChatCompletionText(parsed: JsonObject): string {
   const choices = parsed.choices;
   const firstChoice = Array.isArray(choices) && choices.length && choices[0] && typeof choices[0] === "object"
     ? choices[0] as JsonObject
@@ -467,7 +520,7 @@ async function callOpenAIJson(
   const message = firstChoice?.message && typeof firstChoice.message === "object" && !Array.isArray(firstChoice.message)
     ? firstChoice.message as JsonObject
     : undefined;
-  return parseLooseJson(stringValue(message?.content));
+  return stringValue(message?.content);
 }
 
 function extractAnthropicText(parsed: JsonObject): string {

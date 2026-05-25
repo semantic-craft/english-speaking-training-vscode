@@ -23,13 +23,11 @@ import { expandHome } from "../runtime/training-root.js";
 export async function migrateGeminiModelDefaults(): Promise<boolean> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
   let changed = false;
-  changed = (await migrateProviderSetting(settings, "coachProvider", "minimax", "openai")) || changed;
   changed = (await migrateProviderSetting(settings, "coachProvider", "kimi", "openai")) || changed;
   // DeepSeek was removed as a coach provider; fall existing users back to
   // the current default so a now-unrouteable value can't wedge the coach step.
   changed = (await migrateProviderSetting(settings, "coachProvider", "deepseek", "openai")) || changed;
   changed = (await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "openai")) || changed;
-  changed = (await migrateProviderSetting(settings, "ttsProvider", "minimax", "qwen")) || changed;
   changed = (await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-flash", "gemini-3-flash-preview")) || changed;
   changed = (await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-pro", "gemini-3.1-pro-preview")) || changed;
   changed = (await migrateGeminiSetting(settings, "geminiAudioUnderstandingModel", "gemini-2.5-flash", "gemini-3-flash-preview")) || changed;
@@ -305,20 +303,6 @@ export async function setGeminiOnlyProviders(): Promise<void> {
   await refreshAll();
 }
 
-export async function setRecommendedHybridProviders(): Promise<void> {
-  const settings = vscode.workspace.getConfiguration("englishTraining");
-  let changed = false;
-  changed = (await updateUserSettingIfChanged(settings, "coachProvider", "gemini")) || changed;
-  changed = (await updateUserSettingIfChanged(settings, "audioUnderstandingProvider", "gemini")) || changed;
-  changed = (await updateUserSettingIfChanged(settings, "ttsProvider", "gemini")) || changed;
-  if (!changed) {
-    vscode.window.showInformationMessage("English Training Gemini core route is already enabled.");
-    return;
-  }
-  vscode.window.showInformationMessage("English Training Gemini core route enabled: Gemini coach + Gemini speech input + Gemini speech output.");
-  await refreshAll();
-}
-
 export async function setOpenAIStackProviders(): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
   let changed = false;
@@ -334,6 +318,22 @@ export async function setOpenAIStackProviders(): Promise<void> {
   }
   vscode.window.showInformationMessage(
     "English Training OpenAI stack enabled: coach (gpt-4o) + transcribe (gpt-4o-transcribe, domain prompt) + TTS (gpt-4o-mini-tts, marin, coach-driven style).",
+  );
+  await refreshAll();
+}
+
+export async function setQwenStackProviders(): Promise<void> {
+  const settings = vscode.workspace.getConfiguration("englishTraining");
+  let changed = false;
+  changed = (await updateUserSettingIfChanged(settings, "coachProvider", "qwen")) || changed;
+  changed = (await updateUserSettingIfChanged(settings, "audioUnderstandingProvider", "qwen")) || changed;
+  changed = (await updateUserSettingIfChanged(settings, "ttsProvider", "qwen")) || changed;
+  if (!changed) {
+    vscode.window.showInformationMessage("English Training Qwen stack is already enabled.");
+    return;
+  }
+  vscode.window.showInformationMessage(
+    "English Training Qwen stack enabled: Qwen coach + Qwen-ASR speech input + Qwen-TTS speech output.",
   );
   await refreshAll();
 }

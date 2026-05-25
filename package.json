@@ -2,7 +2,7 @@
   "name": "english-speaking-training-vscode",
   "displayName": "English Speaking Training",
   "description": "Standalone VS Code speaking-practice cockpit for local EnglishSpeakingTraining files.",
-  "version": "0.1.44",
+  "version": "0.1.45",
   "publisher": "xianwei-zhang",
   "license": "MIT",
   "repository": {
@@ -82,6 +82,11 @@
         "category": "English Training"
       },
       {
+        "command": "englishTraining.useQwenCoach",
+        "title": "English Training: Use Qwen Coach",
+        "category": "English Training"
+      },
+      {
         "command": "englishTraining.useOpenAICoach",
         "title": "English Training: Use OpenAI Coach",
         "category": "English Training"
@@ -89,6 +94,11 @@
       {
         "command": "englishTraining.useOpenAIRealtimeAudioUnderstanding",
         "title": "English Training: Use OpenAI Realtime Speech Input",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.useQwenAudioUnderstanding",
+        "title": "English Training: Use Qwen-ASR Speech Input",
         "category": "English Training"
       },
       {
@@ -112,13 +122,13 @@
         "category": "English Training"
       },
       {
-        "command": "englishTraining.useGeminiOnly",
-        "title": "English Training: Use Gemini Only",
+        "command": "englishTraining.useQwenStack",
+        "title": "English Training: Use Qwen Stack (Coach + ASR + TTS)",
         "category": "English Training"
       },
       {
-        "command": "englishTraining.useRecommendedHybrid",
-        "title": "English Training: Use Gemini Core Route",
+        "command": "englishTraining.useGeminiOnly",
+        "title": "English Training: Use Gemini Only",
         "category": "English Training"
       },
       {
@@ -213,9 +223,10 @@
           "enum": [
             "gemini",
             "mimo",
+            "qwen",
             "openai"
           ],
-          "description": "Language-model provider used for transcript correction and follow-up generation. Default routes through OpenAI (gpt-4o) so the full OpenAI stack only needs an OpenAI key; Gemini and Xiaomi MiMo remain available as alternates."
+          "description": "Language-model provider used for transcript correction and follow-up generation. Default routes through OpenAI (gpt-4o) so the full OpenAI stack only needs an OpenAI key; Gemini, Qwen, and Xiaomi MiMo remain available as alternates."
         },
         "englishTraining.audioUnderstandingProvider": {
           "type": "string",
@@ -223,9 +234,10 @@
           "enum": [
             "gemini",
             "openai",
+            "qwen",
             "mimo"
           ],
-          "description": "Speech input provider. OpenAI is the default and routes through /v1/audio/transcriptions (gpt-4o-transcribe) for accurate file-based transcription, or Realtime WebSocket if openaiTranscriptionMode is set to realtime. Gemini and Xiaomi MiMo remain available as alternates."
+          "description": "Speech input provider. OpenAI is the default and routes through /v1/audio/transcriptions (gpt-4o-transcribe) for accurate file-based transcription, or Realtime WebSocket if openaiTranscriptionMode is set to realtime. Gemini, Qwen-ASR, and Xiaomi MiMo remain available as alternates."
         },
         "englishTraining.ttsProvider": {
           "type": "string",
@@ -369,6 +381,39 @@
             "Zephyr"
           ],
           "description": "Gemini prebuilt voice name for native-version audio."
+        },
+        "englishTraining.qwenCompatibleBaseUrl": {
+          "type": "string",
+          "default": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "enum": [
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+          ],
+          "description": "DashScope OpenAI-compatible base URL used by Qwen coach and Qwen-ASR. Use the intl endpoint only with a matching international DashScope API key."
+        },
+        "englishTraining.qwenCoachModel": {
+          "type": "string",
+          "default": "qwen-plus",
+          "enum": [
+            "qwen-plus",
+            "qwen3.6-flash",
+            "qwen3.6-plus",
+            "qwen3.6-max-preview",
+            "qwen3.5-flash",
+            "qwen3.5-plus",
+            "qwen3-max"
+          ],
+          "description": "Qwen chat model used for correction and follow-up coaching through the DashScope OpenAI-compatible Chat Completions endpoint."
+        },
+        "englishTraining.qwenAudioUnderstandingModel": {
+          "type": "string",
+          "default": "qwen3-asr-flash",
+          "enum": [
+            "qwen3-asr-flash",
+            "qwen3-asr-flash-2026-02-10",
+            "qwen3-asr-flash-2025-09-08"
+          ],
+          "description": "Qwen-ASR model used for short recorded speech input through DashScope OpenAI-compatible Chat Completions."
         },
         "englishTraining.mimoAnthropicBaseUrl": {
           "type": "string",

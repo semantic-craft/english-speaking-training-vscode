@@ -402,10 +402,10 @@
     function normalizeProviderForSetting(setting, raw) {
       const provider = scalarText(raw).toLowerCase();
       if (setting === "coachProvider") {
-        return provider === "gemini" || provider === "mimo" || provider === "openai" ? provider : "openai";
+        return provider === "gemini" || provider === "mimo" || provider === "qwen" || provider === "openai" ? provider : "openai";
       }
       if (setting === "audioUnderstandingProvider") {
-        return provider === "gemini" || provider === "openai" || provider === "mimo" ? provider : "openai";
+        return provider === "gemini" || provider === "openai" || provider === "qwen" || provider === "mimo" ? provider : "openai";
       }
       return provider === "qwen" || provider === "gemini" || provider === "openai" || provider === "mimo" ? provider : "openai";
     }
@@ -708,17 +708,33 @@
       if (!chips) return;
       const current = normalizedTtsSpeed(settings && settings.ttsSpeed);
       const hasPresetMatch = SPEED_OPTIONS.some((speed) => Math.abs(speed - current) < 0.01);
+      // Only OpenAI's `/v1/audio/speech` accepts a `speed` request parameter
+      // today; Qwen-TTS, Gemini-TTS, and MiMo TTS do not expose that field
+      // through their official APIs (Qwen3-TTS-Instruct-Flash can be nudged
+      // via `instructions` text, but plain Qwen3-TTS-Flash cannot). Without
+      // this hint a learner who clicks 0.6× on the Qwen stack would think it
+      // failed silently — the click DOES persist the preference for when the
+      // user switches back to OpenAI, but the next Qwen TTS turn still plays
+      // at the model's native rate.
+      const ttsProvider = scalarField(settings, "ttsProvider") || "openai";
+      const honorsSpeed = ttsProvider === "openai";
+      const inactiveTitle = honorsSpeed
+        ? ""
+        : ' title="Speed currently only affects OpenAI TTS — ' + esc(providerLabel(ttsProvider)) + " ignores it. Switch speech-output to OpenAI to hear this rate.\"";
       const fragments = SPEED_OPTIONS.map((speed) => {
         const pressed = !hasPresetMatch ? false : Math.abs(speed - current) < 0.01;
         const label = (speed.toFixed(1) + "×").replace(".0", "");
-        return '<button type="button" class="speed-chip" data-speed="' + speed + '" aria-pressed="' + (pressed ? "true" : "false") + '">' + esc(label) + '</button>';
+        return '<button type="button" class="speed-chip" data-speed="' + speed + '" aria-pressed="' + (pressed ? "true" : "false") + '"' + inactiveTitle + '>' + esc(label) + '</button>';
       });
       if (!hasPresetMatch && Number.isFinite(current) && current > 0) {
         const labelText = Number.isInteger(current)
           ? String(current)
           : current.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
         const label = labelText + "×";
-        fragments.push('<button type="button" class="speed-chip" data-speed="' + current + '" aria-pressed="true" title="Custom speed from settings.json">' + esc(label) + '</button>');
+        const customTitle = honorsSpeed
+          ? ' title="Custom speed from settings.json"'
+          : ' title="Custom speed from settings.json — ' + esc(providerLabel(ttsProvider)) + " TTS ignores speed; switch speech-output to OpenAI to hear this rate.\"";
+        fragments.push('<button type="button" class="speed-chip" data-speed="' + current + '" aria-pressed="true"' + customTitle + '>' + esc(label) + '</button>');
       }
       chips.innerHTML = fragments.join("");
       chips.querySelectorAll("button[data-speed]").forEach((button) => {
@@ -746,7 +762,7 @@
     let voicePickerExpanded = false;
 
     const PROVIDER_LABELS = {
-      qwen: "Qwen-TTS",
+      qwen: "Qwen",
       mimo: "MiMo",
       openai: "OpenAI",
       gemini: "Gemini"
@@ -755,11 +771,13 @@
     const PROVIDER_ROUTES = {
       coachProvider: [
         { value: "openai", label: "OpenAI", note: "default coach — chat-completions JSON", modelSetting: "openaiCoachModel" },
+        { value: "qwen", label: "Qwen", note: "DashScope Chat Completions", modelSetting: "qwenCoachModel", extraSetting: "qwenCompatibleBaseUrl", extraLabel: "Endpoint" },
         { value: "gemini", label: "Gemini", note: "alternate coach", modelSetting: "geminiCoachModel" },
         { value: "mimo", label: "MiMo", note: "Xiaomi Token Plan", modelSetting: "mimoCoachModel" },
       ],
       audioUnderstandingProvider: [
         { value: "openai", label: "OpenAI", note: "default STT — gpt-4o-transcribe with domain prompt (realtime optional)", modelSetting: "openaiFileTranscriptionModel", extraSetting: "openaiTranscriptionMode", extraLabel: "Mode" },
+        { value: "qwen", label: "Qwen-ASR", note: "DashScope short-recording ASR", modelSetting: "qwenAudioUnderstandingModel", extraSetting: "qwenCompatibleBaseUrl", extraLabel: "Endpoint" },
         { value: "gemini", label: "Gemini", note: "alternate STT", modelSetting: "geminiAudioUnderstandingModel" },
         { value: "mimo", label: "MiMo", note: "Xiaomi audio understanding", modelSetting: "mimoAudioUnderstandingModel" },
       ],
@@ -954,6 +972,7 @@
         '</div>',
         '<div class="provider-presets">',
           '<button class="secondary" id="useOpenAIStack" title="Set coach, speech input, and speech output all to OpenAI file-mode defaults">Use OpenAI stack</button>',
+          '<button class="secondary" id="useQwenStack" title="Set coach, speech input, and speech output all to Qwen/DashScope">Use Qwen stack</button>',
           '<button class="secondary" id="useGeminiOnly" title="Set coach, speech input, and speech output all to Gemini">Reset to all-Gemini route</button>',
         '</div>',
         providerRoleHtml("Coach", "coachProvider", safeSettings, safeKeys),
@@ -2465,6 +2484,7 @@
         "#openTask",
         "#openFolder",
         "#useOpenAIStack",
+        "#useQwenStack",
         "#useGeminiOnly",
         "[data-onboard]",
         "[data-key]",
@@ -3365,6 +3385,12 @@
       if (openAIStackTrigger) {
         if (blockSetupChangeDuringPractice()) return;
         postSetupAction({ type: "useOpenAIStack" }, "Switching to OpenAI stack", openAIStackTrigger);
+        return;
+      }
+      const qwenStackTrigger = event.target.closest && event.target.closest("#useQwenStack");
+      if (qwenStackTrigger) {
+        if (blockSetupChangeDuringPractice()) return;
+        postSetupAction({ type: "useQwenStack" }, "Switching to Qwen stack", qwenStackTrigger);
         return;
       }
       const keyTrigger = event.target.closest && event.target.closest("[data-key]");

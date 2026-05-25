@@ -9,6 +9,39 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.1.45] — 2026-05-25
+
+### Added
+- Full Alibaba Cloud DashScope Qwen stack: a Qwen chat coach (`qwen-plus`
+  by default) and Qwen-ASR speech input (`qwen3-asr-flash`) join the existing
+  Qwen-TTS speech output. New `englishTraining.useQwenCoach`,
+  `englishTraining.useQwenAudioUnderstanding`, and
+  `englishTraining.useQwenStack` commands plus a sidebar "Use Qwen stack"
+  preset pin coach + ASR + TTS to DashScope in one click.
+- New `englishTraining.qwenCompatibleBaseUrl`, `englishTraining.qwenCoachModel`,
+  and `englishTraining.qwenAudioUnderstandingModel` settings expose the
+  DashScope OpenAI-compatible base URL and per-route Qwen model id, with
+  trimmed/normalized fallbacks so dirty hand-edits cannot wedge the route.
+
+### Changed
+- Sidebar provider label for DashScope is now "Qwen" (the routes panel still
+  reads "Qwen-ASR" for speech input and "Qwen-TTS" for speech output) so it
+  matches the broader role the stack now plays.
+- Qwen coach requests now send `response_format: { type: "json_object" }`
+  alongside the OpenAI-compatible body, matching the OpenAI coach path. This
+  cuts mid-turn JSON parse failures on Qwen3 models that otherwise emit
+  `<think>` blocks or Markdown fences around the JSON. The
+  `stripThinkBlocks` + `parseLooseJson` fallback stays in place for models
+  that ignore the hint.
+- Collapsed the duplicate `englishTraining.useRecommendedHybrid`
+  ("Use Gemini Core Route") command into `englishTraining.useGeminiOnly`.
+  Both wrote `gemini` to all three provider settings, so two Command Palette
+  entries with different titles for the same action only added confusion.
+- Playback-speed chips now show a tooltip when the active TTS provider is
+  not OpenAI, explaining that `Qwen`/`Gemini`/`MiMo` TTS APIs do not honor a
+  `speed` request field and the preference will apply once the user switches
+  speech-output back to OpenAI.
+
 ## [0.1.44] — 2026-05-25
 
 ### Changed
