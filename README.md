@@ -113,19 +113,20 @@ Practice / Skip choices after each result, and coach-generated
 
 ## Provider Defaults
 
-- Coach: OpenAI by default with `gpt-4o`. Gemini and Xiaomi MiMo remain
+- Coach: OpenAI by default with `gpt-4o`. Qwen, Gemini, and Xiaomi MiMo remain
   optional coach routes from the sidebar or command palette.
 - Speech input: OpenAI file transcription by default with `gpt-4o-transcribe`
   plus a lesson-specific domain prompt. OpenAI Realtime
-  `gpt-realtime-whisper`, Gemini audio understanding, and Xiaomi MiMo audio
-  understanding remain optional alternates.
+  `gpt-realtime-whisper`, Qwen-ASR, Gemini audio understanding, and Xiaomi
+  MiMo audio understanding remain optional alternates.
 - Speech output: OpenAI `gpt-4o-mini-tts` by default with the `marin` voice,
   `wav` output, and coach-generated style instructions. Gemini, Qwen-TTS, and
   Xiaomi MiMo speech output remain optional fallbacks.
-- Qwen-TTS uses DashScope / Alibaba Cloud Model Studio with
+- Qwen uses DashScope / Alibaba Cloud Model Studio with
   `DASHSCOPE_API_KEY` or the stored `dashscopeApiKey` SecretStorage value,
-  defaulting to `qwen3-tts-flash`, the `Cherry` voice, and
-  `language_type: English`.
+  defaulting to `qwen-plus` for coaching, `qwen3-asr-flash` for speech input,
+  and `qwen3-tts-flash` with the `Cherry` voice and `language_type: English`
+  for speech output.
 - The sidebar's **Routes & Models** panel shows the active route, key status,
   and model/voice controls in one place.
 
@@ -151,12 +152,14 @@ Practice / Skip choices after each result, and coach-generated
   - `English Training: Configure Xiaomi MiMo API Key`
 - Route commands:
   - `English Training: Use OpenAI Coach`
+  - `English Training: Use Qwen Coach`
   - `English Training: Use Gemini Coach`
   - `English Training: Use Xiaomi MiMo Coach`
   - `English Training: Use OpenAI Speech Output`
+  - `English Training: Use Qwen-ASR Speech Input`
   - `English Training: Use Qwen-TTS Speech Output`
   - `English Training: Use Gemini Speech Output`
-  - `English Training: Use Gemini Core Route`
+  - `English Training: Use Qwen Stack (Coach + ASR + TTS)`
   - `English Training: Use Gemini Only`
   - `English Training: Use OpenAI Stack (Coach + STT + TTS)`
   - `English Training: Use OpenAI Realtime Speech Input`

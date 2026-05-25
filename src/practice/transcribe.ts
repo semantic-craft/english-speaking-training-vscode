@@ -18,6 +18,8 @@ import {
 } from "../core.js";
 import {
   normalizedOpenAITranscriptionMode,
+  normalizedQwenAudioUnderstandingModel,
+  normalizedQwenCompatibleBaseUrl,
   normalizedSpeechInputProvider,
 } from "../runtime/settings.js";
 import type { JsonObject } from "../types.js";
@@ -40,11 +42,14 @@ export async function transcribeAudio(
   if (provider === "mimo") {
     return transcribeWithMimo(context, audioPath, mimeType, sessionDir);
   }
+  if (provider === "qwen") {
+    return transcribeWithQwen(context, audioPath, mimeType, sessionDir);
+  }
   return transcribeWithGemini(context, audioPath, mimeType, sessionDir);
 }
 
-export function resolveAudioUnderstandingProvider(): "openai" | "gemini" | "mimo" {
-  return normalizedSpeechInputProvider() as "openai" | "gemini" | "mimo";
+export function resolveAudioUnderstandingProvider(): "openai" | "gemini" | "qwen" | "mimo" {
+  return normalizedSpeechInputProvider() as "openai" | "gemini" | "qwen" | "mimo";
 }
 
 async function transcribeWithOpenAIFile(
@@ -201,6 +206,87 @@ export function extractMimoTranscript(parsed: JsonObject): string {
     .replace(/^transcript\s*:\s*/i, "")
     .replace(/^["“]|["”]$/g, "")
     .trim();
+}
+
+async function transcribeWithQwen(
+  context: vscode.ExtensionContext,
+  audioPath: string,
+  mimeType: string,
+  sessionDir: string,
+): Promise<string> {
+  const apiKey = await getRequiredKey(context, "qwen");
+  const audio = await prepareInlineAudio(audioPath, mimeType, sessionDir);
+  const dataUri = `data:${audio.mimeType};base64,${audio.base64}`;
+  if (Buffer.byteLength(dataUri, "utf8") > 10 * 1024 * 1024) {
+    throw new Error("Qwen-ASR inline audio limit is 10 MB after Base64 encoding. Shorten the recording.");
+  }
+
+  const response = await fetchWithTimeout(chatCompletionsUrl(normalizedQwenCompatibleBaseUrl()), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: normalizedQwenAudioUnderstandingModel(),
+      messages: [
+        {
+          role: "system",
+          content:
+            "Transcribe spoken English literally. Do not correct grammar, do not translate, and do not add commentary.",
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_audio",
+              input_audio: { data: dataUri },
+            },
+          ],
+        },
+      ],
+      stream: false,
+      asr_options: {
+        language: "en",
+        enable_itn: false,
+      },
+    }),
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`Qwen-ASR failed (${response.status}): ${body.slice(0, 1500)}`);
+  }
+  const transcript = extractQwenAsrTranscript(parseJsonObject(body, "Qwen-ASR"));
+  if (!transcript) {
+    throw new Error("Qwen-ASR returned empty transcript.");
+  }
+  return transcript;
+}
+
+export function extractQwenAsrTranscript(parsed: JsonObject): string {
+  const choices = parsed.choices;
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return "";
+  }
+  for (const choice of choices) {
+    if (!choice || typeof choice !== "object" || Array.isArray(choice)) {
+      continue;
+    }
+    const message = (choice as JsonObject).message;
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      continue;
+    }
+    const content = stringValue((message as JsonObject).content)
+      .replace(/^```(?:text)?\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .replace(/^transcript\s*:\s*/i, "")
+      .replace(/^["“]|["”]$/g, "")
+      .trim();
+    if (content) {
+      return content;
+    }
+  }
+  return "";
 }
 
 export async function prepareInlineAudio(

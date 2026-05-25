@@ -177,10 +177,10 @@ test("activates without a workspace and registers the command surface", async ()
   // pin coach + transcribe + TTS all to OpenAI in a single Command Palette
   // action. Bumping this number must stay in lockstep with the contributes
   // block in package.json so a stray rename can't silently lose a command.
-  // 27 includes englishTraining.selectMicrophone (0.1.39) — the interactive
-  // microphone picker added so users can switch the AVFoundation input
-  // without editing settings.json by hand.
-  assert.equal(registered.length, 27);
+  // 29 includes Qwen coach, Qwen-ASR speech input, and the Qwen stack preset,
+  // minus useRecommendedHybrid (collapsed into useGeminiOnly — they were
+  // doing exactly the same all-Gemini route under two different titles).
+  assert.equal(registered.length, 29);
   assert.ok(registered.includes("englishTraining.openPractice"));
   assert.ok(registered.includes("englishTraining.createSamplePackage"));
   assert.ok(registered.includes("englishTraining.generateNextPackage"));
@@ -188,8 +188,16 @@ test("activates without a workspace and registers the command surface", async ()
   // the dead configure-key command can't silently reappear.
   assert.ok(registered.includes("englishTraining.useOpenAICoach"));
   assert.ok(registered.includes("englishTraining.useOpenAIStack"));
+  assert.ok(registered.includes("englishTraining.useQwenCoach"));
+  assert.ok(registered.includes("englishTraining.useQwenAudioUnderstanding"));
+  assert.ok(registered.includes("englishTraining.useQwenStack"));
+  assert.ok(registered.includes("englishTraining.useGeminiOnly"));
   assert.ok(registered.includes("englishTraining.selectMicrophone"));
   assert.ok(!registered.includes("englishTraining.useDeepSeekCoach"));
+  // useRecommendedHybrid was an exact duplicate of useGeminiOnly; both wrote
+  // gemini to all three provider settings, so collapsing them is safe and
+  // removes a confusing second Command Palette entry.
+  assert.ok(!registered.includes("englishTraining.useRecommendedHybrid"));
   assert.ok(!registered.includes("englishTraining.configureDeepSeekKey"));
   extension.deactivate();
   mockVscode.commands.registerCommand = previousRegisterCommand;
@@ -3555,6 +3563,8 @@ test("normalizes legacy/unknown speech-input settings to the current default", (
   assert.equal(api.normalizedSpeechInputProvider(), "openai");
   configValues.audioUnderstandingProvider = "mimo";
   assert.equal(api.normalizedSpeechInputProvider(), "mimo");
+  configValues.audioUnderstandingProvider = "qwen";
+  assert.equal(api.normalizedSpeechInputProvider(), "qwen");
   configValues.audioUnderstandingProvider = "gemini";
   assert.equal(api.normalizedSpeechInputProvider(), "gemini");
 });
@@ -3567,20 +3577,20 @@ test("provider route settings tolerate hand-edited casing and whitespace", () =>
   };
 
   try {
-    configValues.coachProvider = " MiMo ";
-    configValues.audioUnderstandingProvider = " GEMINI ";
+    configValues.coachProvider = " Qwen ";
+    configValues.audioUnderstandingProvider = " QWEN ";
     configValues.ttsProvider = " Qwen ";
 
-    assert.equal(api.normalizedCoachProvider(), "mimo");
-    assert.equal(api.normalizedSpeechInputProvider(), "gemini");
-    assert.equal(api.resolveAudioUnderstandingProvider(), "gemini");
+    assert.equal(api.normalizedCoachProvider(), "qwen");
+    assert.equal(api.normalizedSpeechInputProvider(), "qwen");
+    assert.equal(api.resolveAudioUnderstandingProvider(), "qwen");
     assert.equal(api.normalizedTtsProvider(), "qwen");
     assert.equal(api.normalizeSpeechOutputProvider(" MiMo "), "mimo");
     assert.equal(api.normalizeProviderForSetting("ttsProvider", " Qwen "), "qwen");
-    assert.deepEqual(api.trainingSettings().coachProvider, "mimo");
-    assert.deepEqual(api.trainingSettings().audioUnderstandingProvider, "gemini");
+    assert.deepEqual(api.trainingSettings().coachProvider, "qwen");
+    assert.deepEqual(api.trainingSettings().audioUnderstandingProvider, "qwen");
     assert.deepEqual(api.trainingSettings().ttsProvider, "qwen");
-    assert.deepEqual(api.activeRouteProviders(), ["mimo", "gemini", "qwen"]);
+    assert.deepEqual(api.activeRouteProviders(), ["qwen"]);
   } finally {
     Object.assign(configValues, previous);
   }
@@ -3635,16 +3645,21 @@ test("normalizes OpenAI protocol enums before UI state or provider routing", () 
 
 test("provider base URLs are trimmed before UI state or endpoint composition", () => {
   const previous = {
+    qwenCompatibleBaseUrl: configValues.qwenCompatibleBaseUrl,
     mimoAnthropicBaseUrl: configValues.mimoAnthropicBaseUrl,
     mimoAudioBaseUrl: configValues.mimoAudioBaseUrl,
     mimoTtsBaseUrl: configValues.mimoTtsBaseUrl,
   };
 
   try {
+    configValues.qwenCompatibleBaseUrl = " https://dashscope-intl.aliyuncs.com/compatible-mode/v1/ ";
     configValues.mimoAnthropicBaseUrl = " https://anthropic.example.test/anthropic/ ";
     configValues.mimoAudioBaseUrl = " https://openai.example.test/v1/chat/completions/ ";
     configValues.mimoTtsBaseUrl = "   ";
 
+    assert.equal(api.trainingSettings().qwenCompatibleBaseUrl, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1");
+    configValues.qwenCompatibleBaseUrl = " https://unknown.example.test/v1 ";
+    assert.equal(api.trainingSettings().qwenCompatibleBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
     assert.equal(api.trainingSettings().mimoAnthropicBaseUrl, "https://anthropic.example.test/anthropic/");
     assert.equal(api.trainingSettings().mimoAudioBaseUrl, "https://openai.example.test/v1/chat/completions/");
     assert.equal(api.trainingSettings().mimoTtsBaseUrl, "https://token-plan-cn.xiaomimimo.com/v1");
@@ -3671,6 +3686,8 @@ test("provider model ids and external voice ids are trimmed before UI state or r
     geminiCoachModel: configValues.geminiCoachModel,
     geminiTtsModel: configValues.geminiTtsModel,
     geminiAudioUnderstandingModel: configValues.geminiAudioUnderstandingModel,
+    qwenCoachModel: configValues.qwenCoachModel,
+    qwenAudioUnderstandingModel: configValues.qwenAudioUnderstandingModel,
     mimoCoachModel: configValues.mimoCoachModel,
     mimoAudioUnderstandingModel: configValues.mimoAudioUnderstandingModel,
     mimoTtsModel: configValues.mimoTtsModel,
@@ -3690,6 +3707,8 @@ test("provider model ids and external voice ids are trimmed before UI state or r
       geminiCoachModel: " gemini-3.1-pro-preview ",
       geminiTtsModel: " gemini-3.1-flash-tts-preview ",
       geminiAudioUnderstandingModel: " gemini-3-flash-preview ",
+      qwenCoachModel: " qwen3.5-flash ",
+      qwenAudioUnderstandingModel: " qwen3-asr-flash-2026-02-10 ",
       mimoCoachModel: " mimo-v2.5-flash ",
       mimoAudioUnderstandingModel: " mimo-v2-omni ",
       mimoTtsModel: " mimo-v2.5-tts ",
@@ -3709,6 +3728,8 @@ test("provider model ids and external voice ids are trimmed before UI state or r
         geminiCoachModel: api.trainingSettings().geminiCoachModel,
         geminiTtsModel: api.trainingSettings().geminiTtsModel,
         geminiAudioUnderstandingModel: api.trainingSettings().geminiAudioUnderstandingModel,
+        qwenCoachModel: api.trainingSettings().qwenCoachModel,
+        qwenAudioUnderstandingModel: api.trainingSettings().qwenAudioUnderstandingModel,
         mimoCoachModel: api.trainingSettings().mimoCoachModel,
         mimoAudioUnderstandingModel: api.trainingSettings().mimoAudioUnderstandingModel,
         mimoTtsModel: api.trainingSettings().mimoTtsModel,
@@ -3726,6 +3747,8 @@ test("provider model ids and external voice ids are trimmed before UI state or r
         geminiCoachModel: "gemini-3.1-pro-preview",
         geminiTtsModel: "gemini-3.1-flash-tts-preview",
         geminiAudioUnderstandingModel: "gemini-3-flash-preview",
+        qwenCoachModel: "qwen3.5-flash",
+        qwenAudioUnderstandingModel: "qwen3-asr-flash-2026-02-10",
         mimoCoachModel: "mimo-v2.5-flash",
         mimoAudioUnderstandingModel: "mimo-v2-omni",
         mimoTtsModel: "mimo-v2.5-tts",
@@ -3738,15 +3761,21 @@ test("provider model ids and external voice ids are trimmed before UI state or r
     );
 
     configValues.openaiCoachModel = "   ";
+    configValues.qwenCoachModel = "   ";
+    configValues.qwenAudioUnderstandingModel = "bogus-asr-model";
     configValues.qwenTtsVoice = "   ";
     assert.equal(api.trainingSettings().openaiCoachModel, "gpt-4o");
+    assert.equal(api.trainingSettings().qwenCoachModel, "qwen-plus");
+    assert.equal(api.trainingSettings().qwenAudioUnderstandingModel, "qwen3-asr-flash");
     assert.equal(api.trainingSettings().qwenTtsVoice, "Cherry");
     assert.equal(api.configString("openaiCoachModel", "fallback-model"), "fallback-model");
     assert.equal(api.configString("qwenTtsVoice", "fallback-voice"), "fallback-voice");
 
     configValues.openaiCoachModel = { model: "gpt-4o" };
+    configValues.qwenCoachModel = { model: "qwen-plus" };
     configValues.qwenTtsVoice = ["Cherry"];
     assert.equal(api.trainingSettings().openaiCoachModel, "gpt-4o");
+    assert.equal(api.trainingSettings().qwenCoachModel, "qwen-plus");
     assert.equal(api.trainingSettings().qwenTtsVoice, "Cherry");
     assert.equal(api.configString("openaiCoachModel", "fallback-model"), "fallback-model");
   } finally {
@@ -3817,6 +3846,8 @@ test("transcription runtime route mirrors the normalized speech-input setting", 
   assert.equal(api.resolveAudioUnderstandingProvider(), "openai");
   configValues.audioUnderstandingProvider = "mimo";
   assert.equal(api.resolveAudioUnderstandingProvider(), "mimo");
+  configValues.audioUnderstandingProvider = "qwen";
+  assert.equal(api.resolveAudioUnderstandingProvider(), "qwen");
   configValues.audioUnderstandingProvider = "gemini";
   assert.equal(api.resolveAudioUnderstandingProvider(), "gemini");
   configValues.audioUnderstandingProvider = "openai";
@@ -3854,9 +3885,11 @@ test("active route key readiness follows configured providers instead of hard-co
   configValues.audioUnderstandingProvider = undefined;
   configValues.ttsProvider = undefined;
   assert.deepEqual(api.activeRouteProviders(), ["openai"]);
-  assert.equal(api.normalizeProviderForSetting("coachProvider", "minimax"), "openai");
-  assert.equal(api.normalizeProviderForSetting("audioUnderstandingProvider", "minimax"), "openai");
-  assert.equal(api.normalizeProviderForSetting("ttsProvider", "minimax"), "openai");
+  assert.equal(api.normalizeProviderForSetting("coachProvider", "unknown-provider"), "openai");
+  assert.equal(api.normalizeProviderForSetting("audioUnderstandingProvider", "unknown-provider"), "openai");
+  assert.equal(api.normalizeProviderForSetting("ttsProvider", "unknown-provider"), "openai");
+  assert.equal(api.normalizeProviderForSetting("coachProvider", "qwen"), "qwen");
+  assert.equal(api.normalizeProviderForSetting("audioUnderstandingProvider", "qwen"), "qwen");
   assert.equal(api.normalizeProviderForSetting("ttsProvider", "qwen"), "qwen");
 
   configValues.coachProvider = "gemini";
@@ -3874,10 +3907,10 @@ test("active route key readiness follows configured providers instead of hard-co
   configValues.ttsProvider = "bogus";
   assert.deepEqual(api.activeRouteProviders(), ["openai"]);
 
-  configValues.coachProvider = "minimax";
-  configValues.audioUnderstandingProvider = "openai";
-  configValues.ttsProvider = "gemini";
-  assert.deepEqual(api.activeRouteProviders(), ["openai", "gemini"]);
+  configValues.coachProvider = "qwen";
+  configValues.audioUnderstandingProvider = "qwen";
+  configValues.ttsProvider = "qwen";
+  assert.deepEqual(api.activeRouteProviders(), ["qwen"]);
 });
 
 test("provider-setting migration only updates stale configured values", async () => {
@@ -4239,7 +4272,7 @@ test("provider command refuses providers that are unsupported for a route", asyn
   });
 
   try {
-    await api.setProviderSetting("coachProvider", "minimax");
+    await api.setProviderSetting("coachProvider", "unsupported");
   } finally {
     configValues.coachProvider = previousProvider;
     mockVscode.workspace.getConfiguration = previousGetConfiguration;
@@ -4248,7 +4281,7 @@ test("provider command refuses providers that are unsupported for a route", asyn
 
   assert.deepEqual(updates, []);
   assert.equal(refreshes, 0);
-  assert.deepEqual(warningMessages, ["English Training coach provider cannot use minimax."]);
+  assert.deepEqual(warningMessages, ["English Training coach provider cannot use unsupported."]);
   warningMessages.length = 0;
 });
 
@@ -5046,6 +5079,132 @@ test("Qwen-TTS sends DashScope multimodal requests with documented fields", asyn
   }
 });
 
+test("Qwen-ASR sends DashScope OpenAI-compatible audio requests", async () => {
+  const previous = {
+    audioUnderstandingProvider: configValues.audioUnderstandingProvider,
+    qwenCompatibleBaseUrl: configValues.qwenCompatibleBaseUrl,
+    qwenAudioUnderstandingModel: configValues.qwenAudioUnderstandingModel,
+  };
+  const originalFetch = global.fetch;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "english-training-qwen-asr-"));
+  const audioPath = path.join(tmpDir, "audio-understanding-input.wav");
+  const audioBytes = Buffer.from("fake wav bytes");
+  fs.writeFileSync(audioPath, audioBytes);
+  const calls = [];
+  configValues.audioUnderstandingProvider = " qwen ";
+  configValues.qwenCompatibleBaseUrl = " https://dashscope-intl.aliyuncs.com/compatible-mode/v1/ ";
+  configValues.qwenAudioUnderstandingModel = " qwen3-asr-flash-2026-02-10 ";
+  global.fetch = async (url, init) => {
+    calls.push({
+      url: String(url),
+      headers: init.headers,
+      body: JSON.parse(init.body),
+    });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        choices: [{ message: { content: " Transcript text. " } }],
+      }),
+    };
+  };
+  const context = {
+    secrets: {
+      get: async (key) => key === "englishTraining.dashscopeApiKey" ? " dashscope-asr-test " : "",
+    },
+  };
+
+  try {
+    const transcript = await api.transcribeAudio(context, audioPath, "audio/wav", tmpDir);
+
+    assert.equal(transcript, "Transcript text.");
+    assert.equal(calls[0].url, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions");
+    assert.equal(calls[0].headers.Authorization, "Bearer dashscope-asr-test");
+    assert.equal(calls[0].body.model, "qwen3-asr-flash-2026-02-10");
+    assert.equal(calls[0].body.stream, false);
+    assert.deepEqual(calls[0].body.asr_options, { language: "en", enable_itn: false });
+    assert.equal(calls[0].body.messages[0].role, "system");
+    assert.deepEqual(calls[0].body.messages[1], {
+      role: "user",
+      content: [
+        {
+          type: "input_audio",
+          input_audio: {
+            data: `data:audio/wav;base64,${audioBytes.toString("base64")}`,
+          },
+        },
+      ],
+    });
+  } finally {
+    Object.assign(configValues, previous);
+    global.fetch = originalFetch;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("Qwen coach sends DashScope OpenAI-compatible chat requests", async () => {
+  const previous = {
+    coachProvider: configValues.coachProvider,
+    qwenCompatibleBaseUrl: configValues.qwenCompatibleBaseUrl,
+    qwenCoachModel: configValues.qwenCoachModel,
+  };
+  const originalFetch = global.fetch;
+  const calls = [];
+  configValues.coachProvider = " qwen ";
+  configValues.qwenCompatibleBaseUrl = " https://dashscope-intl.aliyuncs.com/compatible-mode/v1/ ";
+  configValues.qwenCoachModel = " qwen3.5-flash ";
+  global.fetch = async (url, init) => {
+    calls.push({
+      url: String(url),
+      headers: init.headers,
+      body: JSON.parse(init.body),
+    });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                lines: [
+                  { label: "claim", text: "I would frame the claim more narrowly.", reason: "替换 claim 槽位" },
+                ],
+              }),
+            },
+          },
+        ],
+      }),
+    };
+  };
+  const context = {
+    secrets: {
+      get: async (key) => key === "englishTraining.dashscopeApiKey" ? " dashscope-coach-test " : "",
+    },
+  };
+  const state = {
+    next: { package_date: "2026-05-25", goal: "Defend a claim.", scenario: "Seminar reply" },
+    training: { goal: "Defend a claim.", scenario: "Seminar reply", frames: [{ text: "I would frame the claim narrowly." }] },
+    drill: {},
+    learnerProfile: { loaded: false },
+  };
+
+  try {
+    const lines = await api.coachGenerateDrillLines(context, state, 1, []);
+
+    assert.deepEqual(lines, [
+      { label: "claim", text: "I would frame the claim more narrowly.", reason: "替换 claim 槽位", source: "coach" },
+    ]);
+    assert.equal(calls[0].url, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions");
+    assert.equal(calls[0].headers.Authorization, "Bearer dashscope-coach-test");
+    assert.equal(calls[0].body.model, "qwen3.5-flash");
+    assert.deepEqual(calls[0].body.response_format, { type: "json_object" });
+    assert.equal(calls[0].body.messages[0].role, "system");
+    assert.equal(calls[0].body.messages[1].role, "user");
+  } finally {
+    Object.assign(configValues, previous);
+    global.fetch = originalFetch;
+  }
+});
+
 test("MiMo TTS reads the selected text instead of a generic prompt", async () => {
   const previous = {
     mimoTtsBaseUrl: configValues.mimoTtsBaseUrl,
@@ -5224,6 +5383,14 @@ test("speech and TTS provider extractors skip malformed nested entries", async (
       { message: { content: "Transcript text." } },
     ],
   }), "Transcript text.");
+
+  assert.equal(api.extractQwenAsrTranscript({
+    choices: [
+      null,
+      { message: null },
+      { message: { content: "```text\nQwen transcript.\n```" } },
+    ],
+  }), "Qwen transcript.");
 
   assert.equal(api.extractMimoTtsAudioData({
     choices: [

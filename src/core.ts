@@ -6,6 +6,8 @@ import type { JsonObject, ProviderName } from "./types.js";
 
 export const MIMO_ANTHROPIC_BASE_URL = "https://token-plan-cn.xiaomimimo.com/anthropic";
 export const MIMO_OPENAI_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1";
+export const QWEN_COMPATIBLE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+export const QWEN_COMPATIBLE_INTL_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
 export const QWEN_TTS_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
 export const QWEN_TTS_INTL_ENDPOINT = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
 
@@ -331,7 +333,7 @@ export function providerKeyCommandTitle(provider: ProviderName): string {
 export function providerLabel(provider: ProviderName): string {
   if (provider === "openai") return "OpenAI";
   if (provider === "gemini") return "Gemini";
-  if (provider === "qwen") return "Qwen-TTS";
+  if (provider === "qwen") return "Qwen";
   return "MiMo";
 }
 
@@ -353,12 +355,13 @@ export function isCoachProvider(value: unknown): value is ProviderName {
   return (
     value === "gemini" ||
     value === "mimo" ||
+    value === "qwen" ||
     value === "openai"
   );
 }
 
 export function isAudioUnderstandingProvider(value: unknown): value is ProviderName {
-  return value === "gemini" || value === "openai" || value === "mimo";
+  return value === "gemini" || value === "openai" || value === "qwen" || value === "mimo";
 }
 
 export function isTtsProvider(value: unknown): value is ProviderName {

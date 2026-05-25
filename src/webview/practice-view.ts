@@ -34,8 +34,8 @@ import {
   setGeminiOnlyProviders,
   setOpenAIStackProviders,
   setProviderSetting,
+  setQwenStackProviders,
   setQwenTtsVoice,
-  setRecommendedHybridProviders,
   setTtsSpeedConfig,
 } from "../commands/provider-routes.js";
 import {
@@ -269,21 +269,21 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
         );
         return;
       }
-      if (payload.type === "useRecommendedHybrid") {
-        await this.runOptionalSidebarCommand(
-          view,
-          "useRecommendedHybrid",
-          positiveRequestId(payload.requestId),
-          () => setRecommendedHybridProviders(),
-        );
-        return;
-      }
       if (payload.type === "useOpenAIStack") {
         await this.runOptionalSidebarCommand(
           view,
           "useOpenAIStack",
           positiveRequestId(payload.requestId),
           () => setOpenAIStackProviders(),
+        );
+        return;
+      }
+      if (payload.type === "useQwenStack") {
+        await this.runOptionalSidebarCommand(
+          view,
+          "useQwenStack",
+          positiveRequestId(payload.requestId),
+          () => setQwenStackProviders(),
         );
         return;
       }

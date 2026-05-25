@@ -60,10 +60,12 @@ import {
 } from "./core.js";
 import {
   extensionFromMime,
+  extractQwenAsrTranscript,
   extractMimoTranscript,
   extractOpenAIFileTranscript,
   prepareInlineAudio,
   resolveAudioUnderstandingProvider,
+  transcribeAudio,
 } from "./practice/transcribe.js";
 import {
   decodeBase64AudioData,
@@ -115,6 +117,8 @@ import {
   normalizedOpenAITranscriptionMode,
   normalizedOpenAITtsResponseFormat,
   normalizedOpenAITtsVoice,
+  normalizedQwenAudioUnderstandingModel,
+  normalizedQwenCompatibleBaseUrl,
   normalizedQwenTtsEndpoint,
   normalizedQwenTtsLanguageType,
   normalizedQwenTtsModel,
@@ -140,8 +144,8 @@ import {
   setOpenAIRealtimeSpeechInput,
   setOpenAIStackProviders,
   setProviderSetting,
+  setQwenStackProviders,
   setQwenTtsVoice,
-  setRecommendedHybridProviders,
   setTtsSpeedConfig,
 } from "./commands/provider-routes.js";
 import {
@@ -221,6 +225,27 @@ const GEMINI_TEXT_MODEL_OPTIONS = [
 
 const GEMINI_TTS_MODEL_OPTIONS = [
   "gemini-3.1-flash-tts-preview",
+];
+
+const QWEN_COMPATIBLE_BASE_URL_OPTIONS = [
+  "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+];
+
+const QWEN_COACH_MODEL_OPTIONS = [
+  "qwen-plus",
+  "qwen3.6-flash",
+  "qwen3.6-plus",
+  "qwen3.6-max-preview",
+  "qwen3.5-flash",
+  "qwen3.5-plus",
+  "qwen3-max",
+];
+
+const QWEN_AUDIO_UNDERSTANDING_MODEL_OPTIONS = [
+  "qwen3-asr-flash",
+  "qwen3-asr-flash-2026-02-10",
+  "qwen3-asr-flash-2025-09-08",
 ];
 
 const QWEN_TTS_MODEL_OPTIONS = [
@@ -321,11 +346,17 @@ export function activate(context: vscode.ExtensionContext): void {
   register("englishTraining.useMimoCoach", async () => {
     await setProviderSetting("coachProvider", "mimo");
   });
+  register("englishTraining.useQwenCoach", async () => {
+    await setProviderSetting("coachProvider", "qwen");
+  });
   register("englishTraining.useOpenAICoach", async () => {
     await setProviderSetting("coachProvider", "openai");
   });
   register("englishTraining.useOpenAIRealtimeAudioUnderstanding", async () => {
     await setOpenAIRealtimeSpeechInput();
+  });
+  register("englishTraining.useQwenAudioUnderstanding", async () => {
+    await setProviderSetting("audioUnderstandingProvider", "qwen");
   });
   register("englishTraining.useQwenTts", async () => {
     await setProviderSetting("ttsProvider", "qwen");
@@ -339,11 +370,11 @@ export function activate(context: vscode.ExtensionContext): void {
   register("englishTraining.useGeminiOnly", async () => {
     await setGeminiOnlyProviders();
   });
-  register("englishTraining.useRecommendedHybrid", async () => {
-    await setRecommendedHybridProviders();
-  });
   register("englishTraining.useOpenAIStack", async () => {
     await setOpenAIStackProviders();
+  });
+  register("englishTraining.useQwenStack", async () => {
+    await setQwenStackProviders();
   });
   register("englishTraining.completeLocal", async () => {
     await completeLocalPackage(context);
@@ -413,6 +444,7 @@ export const __test__ = {
   cardSchemaContractJson,
   chatCompletionsUrl,
   chooseLocalAvfoundationAudioDevice,
+  coachGenerateDrillLines,
   coachingUserPrompt,
   configString,
   compactStatusValue,
@@ -443,6 +475,7 @@ export const __test__ = {
   errorMessage,
   extractMimoTranscript,
   extractMimoTtsAudioData,
+  extractQwenAsrTranscript,
   extractQwenTtsAudioData,
   extractOpenAIFileTranscript,
   fetchWithTimeout,
@@ -470,6 +503,8 @@ export const __test__ = {
   normalizedOpenAITranscriptionMode,
   normalizedOpenAITtsResponseFormat,
   normalizedOpenAITtsVoice,
+  normalizedQwenAudioUnderstandingModel,
+  normalizedQwenCompatibleBaseUrl,
   normalizedQwenTtsEndpoint,
   normalizedQwenTtsLanguageType,
   normalizedQwenTtsModel,
@@ -522,6 +557,7 @@ export const __test__ = {
   synthesizeWithConfiguredTts,
   todayExampleText,
   trainingSettings,
+  transcribeAudio,
   toWebviewState,
   validateLessonDateInput,
   writePracticeArtifacts,
@@ -598,6 +634,9 @@ function configSettingEffectiveValue(setting: ConfigSettingName, fallback: strin
     case "openaiCoachModel": return settings.openaiCoachModel;
     case "geminiCoachModel": return settings.geminiCoachModel;
     case "geminiAudioUnderstandingModel": return settings.geminiAudioUnderstandingModel;
+    case "qwenCompatibleBaseUrl": return normalizedQwenCompatibleBaseUrl();
+    case "qwenCoachModel": return settings.qwenCoachModel;
+    case "qwenAudioUnderstandingModel": return normalizedQwenAudioUnderstandingModel();
     case "mimoAudioUnderstandingModel": return settings.mimoAudioUnderstandingModel;
     case "qwenTtsEndpoint": return normalizedQwenTtsEndpoint();
     case "qwenTtsModel": return normalizedQwenTtsModel();
@@ -626,6 +665,8 @@ function configSettingAllowsCustom(setting: ConfigSettingName): boolean {
     setting !== "openaiTranscriptionMode" &&
     setting !== "openaiTtsResponseFormat" &&
     setting !== "recorderBackend" &&
+    setting !== "qwenCompatibleBaseUrl" &&
+    setting !== "qwenAudioUnderstandingModel" &&
     setting !== "qwenTtsEndpoint" &&
     setting !== "qwenTtsModel" &&
     setting !== "qwenTtsVoice" &&
@@ -654,6 +695,9 @@ function configSettingLabel(setting: ConfigSettingName): string {
     case "openaiCoachModel": return "OpenAI coach model";
     case "geminiCoachModel": return "Gemini coach model";
     case "geminiAudioUnderstandingModel": return "Gemini speech-input model";
+    case "qwenCompatibleBaseUrl": return "Qwen compatible base URL";
+    case "qwenCoachModel": return "Qwen coach model";
+    case "qwenAudioUnderstandingModel": return "Qwen-ASR speech-input model";
     case "mimoAudioUnderstandingModel": return "MiMo speech-input model";
     case "qwenTtsEndpoint": return "Qwen-TTS endpoint";
     case "qwenTtsModel": return "Qwen-TTS model";
@@ -679,6 +723,8 @@ function configSettingPrompt(setting: ConfigSettingName): string {
     case "openaiTtsVoice": return "OpenAI TTS voice name.";
     case "openaiTtsInstructions": return "Optional OpenAI TTS instructions. Leave blank to let the coach choose per turn.";
     case "openaiTtsResponseFormat": return "OpenAI TTS audio container.";
+    case "qwenCompatibleBaseUrl": return "DashScope OpenAI-compatible base URL used by Qwen coach and Qwen-ASR.";
+    case "qwenAudioUnderstandingModel": return "Qwen-ASR model id for short recorded clips.";
     case "qwenTtsEndpoint": return "DashScope Qwen-TTS endpoint.";
     case "qwenTtsVoice": return "Qwen-TTS voice name.";
     case "qwenTtsLanguageType": return "Qwen-TTS language_type: Auto, Chinese, English, or German.";
@@ -699,6 +745,9 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
     case "openaiCoachModel": return ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"];
     case "geminiCoachModel": return GEMINI_TEXT_MODEL_OPTIONS;
     case "geminiAudioUnderstandingModel": return GEMINI_TEXT_MODEL_OPTIONS;
+    case "qwenCompatibleBaseUrl": return QWEN_COMPATIBLE_BASE_URL_OPTIONS;
+    case "qwenCoachModel": return QWEN_COACH_MODEL_OPTIONS;
+    case "qwenAudioUnderstandingModel": return QWEN_AUDIO_UNDERSTANDING_MODEL_OPTIONS;
     case "mimoAudioUnderstandingModel": return ["mimo-v2.5", "mimo-v2-omni"];
     case "qwenTtsEndpoint": return QWEN_TTS_ENDPOINT_OPTIONS;
     case "qwenTtsModel": return QWEN_TTS_MODEL_OPTIONS;
@@ -720,7 +769,7 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
 function providerSetupHint(provider: ProviderName): string {
   switch (provider) {
     case "gemini": return "Gemini · alternate coach + speech input + native-version TTS";
-    case "qwen": return "Qwen-TTS · DashScope speech-output provider";
+    case "qwen": return "Qwen · DashScope coach + Qwen-ASR + Qwen-TTS";
     case "mimo": return "Xiaomi MiMo · coach + speech input + speech-output (Token Plan)";
     case "openai": return "OpenAI · default coach + file/realtime speech input + TTS";
   }

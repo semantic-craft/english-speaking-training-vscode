@@ -75,6 +75,9 @@ test("sidebar model presets stay inside package configuration enums", () => {
     "recorderBackend",
     "geminiCoachModel",
     "geminiAudioUnderstandingModel",
+    "qwenCompatibleBaseUrl",
+    "qwenCoachModel",
+    "qwenAudioUnderstandingModel",
     "mimoAudioUnderstandingModel",
     "qwenTtsEndpoint",
     "qwenTtsModel",
@@ -107,6 +110,9 @@ test("runtime model strings are trimmed before UI state and provider calls", () 
     [settingsSource, /geminiCoachModel: configString\("geminiCoachModel", "gemini-3-flash-preview"\)/],
     [settingsSource, /geminiTtsModel: configString\("geminiTtsModel", "gemini-3\.1-flash-tts-preview"\)/],
     [settingsSource, /geminiAudioUnderstandingModel: configString\("geminiAudioUnderstandingModel", "gemini-3-flash-preview"\)/],
+    [settingsSource, /qwenCompatibleBaseUrl: normalizedQwenCompatibleBaseUrl\(\)/],
+    [settingsSource, /qwenCoachModel: configString\("qwenCoachModel", "qwen-plus"\)/],
+    [settingsSource, /qwenAudioUnderstandingModel: normalizedQwenAudioUnderstandingModel\(\)/],
     [settingsSource, /mimoCoachModel: configString\("mimoCoachModel", "mimo-v2\.5-pro"\)/],
     [settingsSource, /mimoAudioUnderstandingModel: configString\("mimoAudioUnderstandingModel", "mimo-v2\.5"\)/],
     [settingsSource, /mimoTtsModel: configString\("mimoTtsModel", "mimo-v2\.5-tts"\)/],
@@ -115,10 +121,13 @@ test("runtime model strings are trimmed before UI state and provider calls", () 
     [settingsSource, /qwenTtsVoice: normalizedQwenTtsVoice\(\)/],
     [settingsSource, /qwenTtsLanguageType: normalizedQwenTtsLanguageType\(\)/],
     [coachSource, /configString\("mimoCoachModel", "mimo-v2\.5-pro"\)/],
+    [coachSource, /configString\("qwenCoachModel", "qwen-plus"\)/],
     [coachSource, /configString\("geminiCoachModel", "gemini-3-flash-preview"\)/],
     [coachSource, /configString\("openaiCoachModel", "gpt-4o"\)/],
     [transcribeSource, /configString\("openaiFileTranscriptionModel", "gpt-4o-transcribe"\)/],
     [transcribeSource, /configString\("mimoAudioUnderstandingModel", "mimo-v2\.5"\)/],
+    [transcribeSource, /normalizedQwenAudioUnderstandingModel\(\)/],
+    [transcribeSource, /normalizedQwenCompatibleBaseUrl\(\)/],
     [transcribeSource, /configString\("openaiRealtimeTranscriptionModel", "gpt-realtime-whisper"\)/],
     [transcribeSource, /configString\("geminiAudioUnderstandingModel", "gemini-3-flash-preview"\)/],
     [ttsSource, /configString\("openaiTtsModel", "gpt-4o-mini-tts"\)/],
@@ -183,7 +192,7 @@ test("speech input manifest no longer exposes Azure", () => {
   // Default switched from gemini → openai when the OpenAI stack became the
   // primary route in 0.1.38 (gpt-4o-transcribe with domain prompt).
   assert.equal(speechInput.default, "openai");
-  assert.deepEqual(speechInput.enum, ["gemini", "openai", "mimo"]);
+  assert.deepEqual(speechInput.enum, ["gemini", "openai", "qwen", "mimo"]);
   assert.equal(packageJson.contributes.configuration.properties["englishTraining.azureSpeechRegion"], undefined);
   assert.equal(packageJson.contributes.configuration.properties["englishTraining.azureSpeechLocale"], undefined);
   assert.equal(
@@ -213,8 +222,10 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(transcribeSource, /normalizedSpeechInputProvider\(\)/);
   assert.match(transcribeSource, /normalizedOpenAITranscriptionMode\(\)/);
   assert.match(transcribeSource, /chatCompletionsUrl\(baseUrl\)/);
+  assert.match(transcribeSource, /chatCompletionsUrl\(normalizedQwenCompatibleBaseUrl\(\)\)/);
   assert.match(transcribeSource, /configString\("mimoAudioBaseUrl", MIMO_OPENAI_BASE_URL\)/);
   assert.match(coachSource, /configString\("mimoAnthropicBaseUrl", MIMO_ANTHROPIC_BASE_URL\)/);
+  assert.match(coachSource, /chatCompletionsUrl\(baseUrl\)/);
   assert.match(providerRoutesSource, /normalizedProviderName\(raw\)/);
   assert.match(providerRoutesSource, /const provider = normalizedProviderName\(value\)/);
   assert.match(providerRoutesSource, /function normalizedMigrationValue\(value: unknown\): string \{[\s\S]*\.trim\(\)\.toLowerCase\(\)/);
@@ -230,6 +241,8 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(settingsSource, /configString\("mimoAnthropicBaseUrl", MIMO_ANTHROPIC_BASE_URL\)/);
   assert.match(settingsSource, /configString\("mimoAudioBaseUrl", MIMO_OPENAI_BASE_URL\)/);
   assert.match(settingsSource, /configString\("mimoTtsBaseUrl", MIMO_OPENAI_BASE_URL\)/);
+  assert.match(settingsSource, /normalizedQwenCompatibleBaseUrl\(\)/);
+  assert.match(settingsSource, /normalizedQwenAudioUnderstandingModel\(\)/);
   assert.match(ttsSource, /normalizedOpenAITtsResponseFormat\(\)/);
   assert.match(ttsSource, /normalizedProviderName\(provider\)/);
   assert.match(ttsSource, /fetchWithTimeout\(normalizedQwenTtsEndpoint\(\)/);
@@ -261,6 +274,8 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(extensionSource, /function configSettingAllowsBlank\(setting: ConfigSettingName\): boolean \{[\s\S]*openaiTtsInstructions/);
   assert.match(extensionSource, /function configSettingAllowsCustom\(setting: ConfigSettingName\): boolean \{[\s\S]*openaiTranscriptionMode[\s\S]*openaiTtsResponseFormat[\s\S]*recorderBackend[\s\S]*openaiTtsVoice[\s\S]*geminiTtsVoice[\s\S]*mimoTtsVoice/);
   assert.match(mediaSource, /value: "mimo", label: "MiMo", note: "Xiaomi audio understanding", modelSetting: "mimoAudioUnderstandingModel"/);
+  assert.match(mediaSource, /value: "qwen", label: "Qwen"[\s\S]*modelSetting: "qwenCoachModel"/);
+  assert.match(mediaSource, /value: "qwen", label: "Qwen-ASR"[\s\S]*modelSetting: "qwenAudioUnderstandingModel"/);
   assert.match(mediaSource, /value: "qwen"[\s\S]*label: "Qwen-TTS"[\s\S]*modelSetting: "qwenTtsModel"[\s\S]*setting: "qwenTtsLanguageType", label: "Language"/);
   assert.match(mediaSource, /value: "mimo", label: "MiMo", note: "Xiaomi voices", modelSetting: "mimoTtsModel", extraSetting: "mimoTtsVoice"/);
   assert.match(mediaSource, /Recorder started after a delay/);
