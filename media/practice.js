@@ -1811,6 +1811,201 @@
       }
     }
 
+    // Streaming PCM player for Qwen-TTS Realtime. Audio arrives as base64
+    // PCM 16-bit LE chunks from the host; we decode each chunk into a small
+    // AudioBuffer and schedule it back-to-back via AudioBufferSourceNode so
+    // the learner hears the native version as soon as the first chunk lands
+    // (target ~100-200ms first sound vs ~1.5-3s with the old synchronous
+    // HTTP path).
+    let ttsStreamPlayer = null;
+    function getTtsStreamPlayer() {
+      if (ttsStreamPlayer) return ttsStreamPlayer;
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      ttsStreamPlayer = {
+        ctx: null,
+        ctor: Ctx,
+        sampleRate: 24000,
+        channels: 1,
+        playheadTime: 0,
+        sources: new Set(),
+        byteLeftover: null,
+        endOfStream: false,
+        onDone: null,
+        endedTimer: null,
+      };
+      return ttsStreamPlayer;
+    }
+
+    function disposeTtsStreamPlayer() {
+      if (!ttsStreamPlayer) return;
+      const player = ttsStreamPlayer;
+      if (player.endedTimer) {
+        clearTimeout(player.endedTimer);
+        player.endedTimer = null;
+      }
+      for (const source of player.sources) {
+        try { source.onended = null; source.stop(); } catch (_) {}
+      }
+      player.sources.clear();
+      if (player.ctx) {
+        try { player.ctx.close(); } catch (_) {}
+      }
+      ttsStreamPlayer = null;
+    }
+
+    function startTtsStream(meta) {
+      const player = getTtsStreamPlayer();
+      if (!player) return false;
+      const sampleRate = positiveInteger(meta && meta.sampleRate) || 24000;
+      const channels = positiveInteger(meta && meta.channels) || 1;
+      // VS Code webview: a previous AudioContext can be left in "suspended"
+      // by VS Code's tab visibility hooks. Recreating it here from inside the
+      // click-handler chain is the cleanest way to guarantee a fresh, running
+      // context whose currentTime is sane for back-to-back scheduling.
+      if (player.ctx) {
+        try { player.ctx.close(); } catch (_) {}
+      }
+      try {
+        player.ctx = new player.ctor({ sampleRate });
+      } catch (_) {
+        try {
+          player.ctx = new player.ctor();
+        } catch (_) {
+          return false;
+        }
+      }
+      player.sampleRate = sampleRate;
+      player.channels = channels;
+      player.byteLeftover = null;
+      player.endOfStream = false;
+      player.playheadTime = player.ctx.currentTime;
+      player.sources.clear();
+      if (player.endedTimer) {
+        clearTimeout(player.endedTimer);
+        player.endedTimer = null;
+      }
+      if (player.ctx.state === "suspended" && typeof player.ctx.resume === "function") {
+        player.ctx.resume().catch(() => {});
+      }
+      return true;
+    }
+
+    function base64ToUint8(b64) {
+      if (typeof b64 !== "string" || !b64) return new Uint8Array(0);
+      const compact = b64.replace(/\s+/g, "");
+      let binary;
+      try {
+        binary = atob(compact);
+      } catch (_) {
+        return new Uint8Array(0);
+      }
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    function feedTtsStreamChunk(base64) {
+      const player = ttsStreamPlayer;
+      if (!player || !player.ctx) return;
+      let bytes = base64ToUint8(base64);
+      if (bytes.length === 0) return;
+      if (player.byteLeftover && player.byteLeftover.length) {
+        const merged = new Uint8Array(player.byteLeftover.length + bytes.length);
+        merged.set(player.byteLeftover, 0);
+        merged.set(bytes, player.byteLeftover.length);
+        bytes = merged;
+        player.byteLeftover = null;
+      }
+      // PCM 16-bit LE: each sample is 2 bytes. If a chunk lands a half-sample
+      // mid-frame, stash the odd byte and prepend it to the next chunk so
+      // sample alignment doesn't drift into white noise.
+      const evenLength = bytes.length - (bytes.length % 2);
+      if (evenLength < bytes.length) {
+        player.byteLeftover = bytes.slice(evenLength);
+        bytes = bytes.slice(0, evenLength);
+      }
+      if (bytes.length === 0) return;
+
+      const sampleCount = bytes.length / 2;
+      const float32 = new Float32Array(sampleCount);
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      for (let i = 0; i < sampleCount; i += 1) {
+        const sample = view.getInt16(i * 2, true);
+        float32[i] = sample < 0 ? sample / 0x8000 : sample / 0x7fff;
+      }
+
+      let buffer;
+      try {
+        buffer = player.ctx.createBuffer(player.channels, sampleCount, player.sampleRate);
+      } catch (_) {
+        return;
+      }
+      buffer.getChannelData(0).set(float32);
+
+      const source = player.ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(player.ctx.destination);
+      const startAt = Math.max(player.playheadTime, player.ctx.currentTime);
+      try {
+        source.start(startAt);
+      } catch (_) {
+        return;
+      }
+      player.playheadTime = startAt + buffer.duration;
+      player.sources.add(source);
+      source.onended = () => {
+        player.sources.delete(source);
+        if (player.endOfStream && player.sources.size === 0 && typeof player.onDone === "function") {
+          const done = player.onDone;
+          player.onDone = null;
+          try { done(); } catch (_) {}
+        }
+      };
+    }
+
+    function endTtsStream(onDone) {
+      const player = ttsStreamPlayer;
+      if (!player) {
+        if (typeof onDone === "function") {
+          try { onDone(); } catch (_) {}
+        }
+        return;
+      }
+      player.endOfStream = true;
+      player.onDone = typeof onDone === "function" ? onDone : null;
+      player.byteLeftover = null;
+      // If chunks finished without producing any source nodes (zero audio),
+      // fire onDone immediately so the caller doesn't wait forever.
+      if (player.sources.size === 0 && player.onDone) {
+        const done = player.onDone;
+        player.onDone = null;
+        try { done(); } catch (_) {}
+      }
+    }
+
+    function cancelTtsStream() {
+      const player = ttsStreamPlayer;
+      if (!player) return;
+      for (const source of player.sources) {
+        try { source.onended = null; source.stop(); } catch (_) {}
+      }
+      player.sources.clear();
+      player.byteLeftover = null;
+      player.endOfStream = false;
+      player.onDone = null;
+      if (player.endedTimer) {
+        clearTimeout(player.endedTimer);
+        player.endedTimer = null;
+      }
+      if (player.ctx) {
+        player.playheadTime = player.ctx.currentTime;
+      }
+    }
+
     function clearTodayGeneratedAudio() {
       const audio = $("todayAudio");
       if (!audio) return;
@@ -3584,6 +3779,50 @@
         if (!requestId || !activeSlowReadRequest || activeSlowReadRequest.id !== requestId) return;
         setStatus(messageText(message.message, "Generating slow-read audio…"), "busy");
       }
+      if (message.type === "slowReadStream") {
+        const requestId = positiveInteger(message.requestId);
+        if (!requestId || !activeSlowReadRequest || activeSlowReadRequest.id !== requestId) return;
+        const phase = scalarText(message.phase);
+        if (phase === "start") {
+          if (!startTtsStream({
+            sampleRate: positiveInteger(message.sampleRate) || 24000,
+            channels: positiveInteger(message.channels) || 1,
+          })) {
+            setStatus("Slow-read streaming audio unavailable; will play once it finishes generating.", "busy");
+          } else {
+            setStatus("Slow-read audio playing…", "busy");
+          }
+        } else if (phase === "chunk") {
+          feedTtsStreamChunk(scalarText(message.base64));
+        } else if (phase === "done") {
+          endTtsStream();
+        } else if (phase === "error") {
+          cancelTtsStream();
+        }
+        return;
+      }
+      if (message.type === "todayTtsStream") {
+        const requestId = positiveInteger(message.requestId);
+        if (!requestId || activeTodayTtsRequest !== requestId) return;
+        const phase = scalarText(message.phase);
+        if (phase === "start") {
+          if (!startTtsStream({
+            sampleRate: positiveInteger(message.sampleRate) || 24000,
+            channels: positiveInteger(message.channels) || 1,
+          })) {
+            setStatus("Example audio streaming unavailable; will play once it finishes generating.", "busy");
+          } else {
+            setStatus("Example audio playing…", "busy");
+          }
+        } else if (phase === "chunk") {
+          feedTtsStreamChunk(scalarText(message.base64));
+        } else if (phase === "done") {
+          endTtsStream();
+        } else if (phase === "error") {
+          cancelTtsStream();
+        }
+        return;
+      }
       if (message.type === "slowReadResult") {
         const requestId = positiveInteger(message.requestId);
         if (!requestId) return;
@@ -3622,8 +3861,12 @@
           }
           player.src = audioDataUri;
           player.hidden = false;
-          setStatus("Slow-read audio ready.");
-          playAudioOrPrompt(player, "Slow-read audio ready — press play.");
+          if (message.streamed) {
+            setStatus("Slow-read audio ready — press play to repeat.");
+          } else {
+            setStatus("Slow-read audio ready.");
+            playAudioOrPrompt(player, "Slow-read audio ready — press play.");
+          }
           if (message.target === "drill") {
             pendingSlowReadHost = null;
           }
@@ -3660,7 +3903,9 @@
         if (audio) {
           audio.src = audioDataUri;
           audio.hidden = false;
-          playAudioOrPrompt(audio, "Example audio ready — press play. Your next recording will shadow this text.");
+          if (!message.streamed) {
+            playAudioOrPrompt(audio, "Example audio ready — press play. Your next recording will shadow this text.");
+          }
         }
         let armedShadow = false;
         const resultText = textField(result, "text");

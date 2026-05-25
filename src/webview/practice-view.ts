@@ -26,7 +26,7 @@ import { generateDrillLines as coachGenerateDrillLines } from "../practice/coach
 import { buildPracticeHtml } from "./html.js";
 import { openMaterialsGuide } from "../materials-guide.js";
 import { refreshAll, runConfigureSetting } from "../runtime/host.js";
-import { isConfigSettingName } from "../runtime/settings.js";
+import { isConfigSettingName, normalizedTtsProvider } from "../runtime/settings.js";
 import {
   configureApiKey,
   configureCoreRouteKeys,
@@ -53,7 +53,12 @@ import {
   startNativeFfmpegRecording,
   stopNativeFfmpegRecording,
 } from "../audio/native-recording.js";
-import { synthesizeOnDemandText, synthesizeTodayAudio } from "../audio/synthesis.js";
+import {
+  streamQwenOnDemandText,
+  streamQwenTodayAudio,
+  synthesizeOnDemandText,
+  synthesizeTodayAudio,
+} from "../audio/synthesis.js";
 
 export class PracticeViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
@@ -435,6 +440,39 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     }
     const request = requestId ? { requestId } : {};
     this.postToActiveView(view, { type: "todayTtsStatus", ...request, message: "Generating example audio…" });
+    if (normalizedTtsProvider() === "qwen") {
+      let streamStarted = false;
+      try {
+        const result = await streamQwenTodayAudio(this.context, {
+          onStart: (info) => {
+            streamStarted = true;
+            this.postToActiveView(view, {
+              type: "todayTtsStream",
+              phase: "start",
+              ...request,
+              sampleRate: info.sampleRate,
+              channels: info.channels,
+            });
+          },
+          onChunk: (base64) => this.postToActiveView(view, {
+            type: "todayTtsStream",
+            phase: "chunk",
+            ...request,
+            base64,
+          }),
+        });
+        if (streamStarted) {
+          this.postToActiveView(view, { type: "todayTtsStream", phase: "done", ...request });
+        }
+        this.postToActiveView(view, { type: "todayTtsResult", ...request, result, streamed: streamStarted });
+      } catch (error) {
+        if (streamStarted) {
+          this.postToActiveView(view, { type: "todayTtsStream", phase: "error", ...request });
+        }
+        this.postToActiveView(view, { type: "todayTtsResult", ...request, error: errorMessage(error) });
+      }
+      return;
+    }
     try {
       const result = await synthesizeTodayAudio(this.context);
       this.postToActiveView(view, { type: "todayTtsResult", ...request, result });
@@ -485,6 +523,46 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
       "Read this sentence very slowly and clearly. Over-articulate each word, " +
       "lengthen the stressed syllables, and pause briefly between sense groups so " +
       "a learner can shadow you word by word.";
+    if (normalizedTtsProvider() === "qwen") {
+      let streamStarted = false;
+      try {
+        const result = await streamQwenOnDemandText(this.context, trimmed, slowSpeed, slowInstructions, {
+          onStart: (info) => {
+            streamStarted = true;
+            this.postToActiveView(view, {
+              type: "slowReadStream",
+              phase: "start",
+              target,
+              ...request,
+              sampleRate: info.sampleRate,
+              channels: info.channels,
+            });
+          },
+          onChunk: (base64) => this.postToActiveView(view, {
+            type: "slowReadStream",
+            phase: "chunk",
+            target,
+            ...request,
+            base64,
+          }),
+        });
+        if (streamStarted) {
+          this.postToActiveView(view, { type: "slowReadStream", phase: "done", target, ...request });
+        }
+        this.postToActiveView(view, { type: "slowReadResult", target, ...request, result, streamed: streamStarted });
+      } catch (error) {
+        if (streamStarted) {
+          this.postToActiveView(view, { type: "slowReadStream", phase: "error", target, ...request });
+        }
+        this.postToActiveView(view, {
+          type: "slowReadResult",
+          target,
+          ...request,
+          error: errorMessage(error),
+        });
+      }
+      return;
+    }
     try {
       const result = await synthesizeOnDemandText(this.context, trimmed, slowSpeed, slowInstructions);
       this.postToActiveView(view, { type: "slowReadResult", target, ...request, result });
