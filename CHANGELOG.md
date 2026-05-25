@@ -9,6 +9,50 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.1.46] — 2026-05-25
+
+### Added
+- Qwen-TTS Realtime streaming for the three on-pipeline audio paths
+  (pipeline native-version, 🐢 Slow, Today TTS). Audio plays as the first
+  PCM chunk lands instead of after the whole synthesis completes; smoke
+  tests against DashScope showed first-sound at ~250–300 ms after the
+  service replies (vs. seconds with the old one-shot HTTP path). Falls
+  back automatically to the existing non-streaming path when the active
+  TTS provider is not Qwen.
+- New `src/practice/qwen-tts-realtime.ts` DashScope WebSocket client that
+  runs the full `session.update` → `input_text_buffer.append + commit` →
+  `response.audio.delta` → `response.audio.done` protocol, exposing a
+  streaming sink while still writing the complete WAV file to disk so the
+  audio control on the turn card stays usable for replay.
+- Webview-side `PcmStreamPlayer` (AudioContext + queued
+  AudioBufferSourceNode with `scheduledTime` accumulation and a 1-byte
+  alignment buffer) that consumes the new `slowReadStream` /
+  `todayTtsStream` / `practiceTtsStream` messages.
+- `normalizedQwenTtsRealtimeEndpoint` and `qwenTtsRealtimeModel` helpers
+  that follow the configured HTTP endpoint region (CN vs intl) and add a
+  `-realtime` suffix idempotently, with unit coverage in
+  `test/runtime.test.cjs`.
+
+### Removed
+- The OpenAI provider is retired. The OpenAI TTS / coach / file-mode
+  transcription / Realtime WebSocket transcription implementations were
+  deleted along with the 5 OpenAI commands (`configureOpenAIKey`,
+  `useOpenAICoach`, `useOpenAIRealtimeAudioUnderstanding`, `useOpenAITts`,
+  `useOpenAIStack`) and the 11 `englishTraining.openai*` settings. The
+  `ProviderName` union, `secretKeys`, and every provider validation no
+  longer accept `"openai"`. Existing user settings holding `"openai"` for
+  `coachProvider` / `audioUnderstandingProvider` / `ttsProvider` are
+  migrated to `"qwen"` on activation so a now-unrouteable value cannot
+  wedge a turn.
+
+### Changed
+- Default `coachProvider`, `audioUnderstandingProvider`, and `ttsProvider`
+  now all default to `qwen`; `Gemini` and `Xiaomi MiMo` remain available as
+  alternates. The fallback when a stale or unknown provider value is read
+  is also `qwen`.
+- `speechOutputExtension` is now provider-agnostic — every supported TTS
+  writes a WAV container.
+
 ## [0.1.45] — 2026-05-25
 
 ### Added
