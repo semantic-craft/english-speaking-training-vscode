@@ -512,11 +512,10 @@ function uniqueDrillExample(): (example: DrillExample) => boolean {
 }
 
 /**
- * Build a short domain prompt that biases the OpenAI file transcription
- * decoder toward this lesson's scenario, frames, and key expressions.
- * Whisper-family models accept ~224 tokens; we trim conservatively. The
- * Gemini and Realtime paths ignore this string today, so it's safe to
- * always compute and pass it through.
+ * Build a short domain prompt biasing transcription toward this lesson's
+ * scenario, frames, and key expressions. The currently active providers
+ * (Gemini, Qwen-ASR, MiMo) ignore this string today; it's preserved for
+ * future ASR routes that accept a domain prompt.
  */
 export function buildTranscriptionPrompt(state: TrainingState, target?: PracticeTarget): string {
   const parts: string[] = ["Spoken academic English in a Chinese legal scholar's voice."];

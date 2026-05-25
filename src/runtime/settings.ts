@@ -12,13 +12,12 @@ import {
   normalizeTtsSpeed,
   QWEN_TTS_ENDPOINT,
   QWEN_TTS_INTL_ENDPOINT,
+  QWEN_TTS_REALTIME_ENDPOINT,
+  QWEN_TTS_REALTIME_INTL_ENDPOINT,
 } from "../core.js";
 import type { TrainingState } from "../types.js";
 
 export const DEFAULT_BLOCKED_MICROPHONE_PATTERN = "iphone|ipad|continuity|karios";
-const OPENAI_TTS_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse", "marin", "cedar"] as const;
-const OPENAI_TRANSCRIPTION_MODES = ["file", "realtime"] as const;
-const OPENAI_TTS_RESPONSE_FORMATS = ["wav", "mp3", "opus", "aac", "flac", "pcm"] as const;
 const GEMINI_TTS_VOICES = ["Kore", "Puck", "Charon", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"] as const;
 const MIMO_TTS_VOICES = ["Mia", "Chloe", "Milo", "Dean", "mimo_default"] as const;
 const QWEN_COMPATIBLE_BASE_URLS = [QWEN_COMPATIBLE_BASE_URL, QWEN_COMPATIBLE_INTL_BASE_URL] as const;
@@ -39,10 +38,6 @@ const QWEN_TTS_LANGUAGE_TYPES = ["Auto", "Chinese", "English", "German"] as cons
 export type ProviderSettingName = "coachProvider" | "audioUnderstandingProvider" | "ttsProvider";
 export type ConfigSettingName =
   | "mimoCoachModel"
-  | "openaiTranscriptionMode"
-  | "openaiRealtimeTranscriptionModel"
-  | "openaiFileTranscriptionModel"
-  | "openaiCoachModel"
   | "geminiCoachModel"
   | "geminiAudioUnderstandingModel"
   | "qwenCompatibleBaseUrl"
@@ -56,10 +51,6 @@ export type ConfigSettingName =
   | "qwenTtsInstructions"
   | "mimoTtsModel"
   | "mimoTtsVoice"
-  | "openaiTtsModel"
-  | "openaiTtsVoice"
-  | "openaiTtsInstructions"
-  | "openaiTtsResponseFormat"
   | "recorderBackend"
   | "geminiTtsModel"
   | "geminiTtsVoice";
@@ -74,14 +65,6 @@ export function trainingSettings(): TrainingState["settings"] {
     coachProvider: normalizedCoachProvider(),
     audioUnderstandingProvider: normalizedSpeechInputProvider(),
     ttsProvider: normalizedTtsProvider(),
-    openaiRealtimeTranscriptionModel: configString("openaiRealtimeTranscriptionModel", "gpt-realtime-whisper"),
-    openaiTranscriptionMode: normalizedOpenAITranscriptionMode(),
-    openaiFileTranscriptionModel: configString("openaiFileTranscriptionModel", "gpt-4o-transcribe"),
-    openaiCoachModel: configString("openaiCoachModel", "gpt-4o"),
-    openaiTtsModel: configString("openaiTtsModel", "gpt-4o-mini-tts"),
-    openaiTtsVoice: normalizedOpenAITtsVoice(),
-    openaiTtsInstructions: configString("openaiTtsInstructions"),
-    openaiTtsResponseFormat: normalizedOpenAITtsResponseFormat(),
     geminiCoachModel: configString("geminiCoachModel", "gemini-3-flash-preview"),
     geminiTtsModel: configString("geminiTtsModel", "gemini-3.1-flash-tts-preview"),
     geminiTtsVoice: normalizedGeminiTtsVoice(),
@@ -110,19 +93,19 @@ export function trainingSettings(): TrainingState["settings"] {
 
 export function normalizedSpeechInputProvider(): string {
   const provider = normalizedProviderName(config<string>("audioUnderstandingProvider"));
-  return provider === "openai" || provider === "gemini" || provider === "qwen" || provider === "mimo"
+  return provider === "gemini" || provider === "qwen" || provider === "mimo"
     ? provider
-    : "openai";
+    : "qwen";
 }
 
 export function normalizedCoachProvider(): string {
   const provider = normalizedProviderName(config<string>("coachProvider"));
-  return isCoachProvider(provider) ? provider : "openai";
+  return isCoachProvider(provider) ? provider : "qwen";
 }
 
 export function normalizedTtsProvider(): string {
   const provider = normalizedProviderName(config<string>("ttsProvider"));
-  return isTtsProvider(provider) ? provider : "openai";
+  return isTtsProvider(provider) ? provider : "qwen";
 }
 
 export function normalizedRecorderBackend(): string {
@@ -130,21 +113,6 @@ export function normalizedRecorderBackend(): string {
   if (backend === "maclocal") return "macLocal";
   if (backend === "webview" || backend === "auto") return backend;
   return "macLocal";
-}
-
-export function normalizedOpenAITranscriptionMode(): string {
-  const mode = configString("openaiTranscriptionMode", "file").toLowerCase();
-  return includesValue(OPENAI_TRANSCRIPTION_MODES, mode) ? mode : "file";
-}
-
-export function normalizedOpenAITtsResponseFormat(): string {
-  const format = configString("openaiTtsResponseFormat", "wav").toLowerCase();
-  return includesValue(OPENAI_TTS_RESPONSE_FORMATS, format) ? format : "wav";
-}
-
-export function normalizedOpenAITtsVoice(): string {
-  const voice = configString("openaiTtsVoice", "marin");
-  return includesValue(OPENAI_TTS_VOICES, voice) ? voice : "marin";
 }
 
 export function normalizedGeminiTtsVoice(): string {
@@ -172,6 +140,17 @@ export function normalizedQwenTtsEndpoint(): string {
   return endpoint === QWEN_TTS_INTL_ENDPOINT ? QWEN_TTS_INTL_ENDPOINT : QWEN_TTS_ENDPOINT;
 }
 
+export function normalizedQwenTtsRealtimeEndpoint(): string {
+  return normalizedQwenTtsEndpoint() === QWEN_TTS_INTL_ENDPOINT
+    ? QWEN_TTS_REALTIME_INTL_ENDPOINT
+    : QWEN_TTS_REALTIME_ENDPOINT;
+}
+
+export function qwenTtsRealtimeModel(baseModel: string): string {
+  if (baseModel.endsWith("-realtime")) return baseModel;
+  return `${baseModel}-realtime`;
+}
+
 export function normalizedQwenTtsModel(): string {
   const model = configString("qwenTtsModel", "qwen3-tts-flash");
   return includesValue(QWEN_TTS_MODELS, model) ? model : "qwen3-tts-flash";
@@ -194,10 +173,6 @@ function includesValue(values: readonly string[], value: string): boolean {
 export function isConfigSettingName(value: unknown): value is ConfigSettingName {
   return (
     value === "mimoCoachModel" ||
-    value === "openaiTranscriptionMode" ||
-    value === "openaiRealtimeTranscriptionModel" ||
-    value === "openaiFileTranscriptionModel" ||
-    value === "openaiCoachModel" ||
     value === "geminiCoachModel" ||
     value === "geminiAudioUnderstandingModel" ||
     value === "qwenCompatibleBaseUrl" ||
@@ -211,10 +186,6 @@ export function isConfigSettingName(value: unknown): value is ConfigSettingName 
     value === "qwenTtsInstructions" ||
     value === "mimoTtsModel" ||
     value === "mimoTtsVoice" ||
-    value === "openaiTtsModel" ||
-    value === "openaiTtsVoice" ||
-    value === "openaiTtsInstructions" ||
-    value === "openaiTtsResponseFormat" ||
     value === "recorderBackend" ||
     value === "geminiTtsModel" ||
     value === "geminiTtsVoice"

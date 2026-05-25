@@ -48,7 +48,6 @@ export class StatusProvider implements vscode.TreeDataProvider<StatusItem> {
         new StatusItem("Coach", vscode.TreeItemCollapsibleState.None, state.settings.coachProvider),
         new StatusItem("Speech In", vscode.TreeItemCollapsibleState.None, state.settings.audioUnderstandingProvider),
         new StatusItem("Speech Out", vscode.TreeItemCollapsibleState.None, state.settings.ttsProvider),
-        new StatusItem("OpenAI Key", vscode.TreeItemCollapsibleState.None, state.keys.openai ? "saved" : "missing", { command: "englishTraining.configureOpenAIKey", title: "Configure OpenAI" }),
         new StatusItem("Gemini Key", vscode.TreeItemCollapsibleState.None, state.keys.gemini ? "saved" : "missing", { command: "englishTraining.configureGeminiKey", title: "Configure Gemini" }),
         new StatusItem("DashScope Key", vscode.TreeItemCollapsibleState.None, state.keys.qwen ? "saved" : "missing", { command: "englishTraining.configureDashScopeKey", title: "Configure DashScope" }),
         new StatusItem("MiMo Key", vscode.TreeItemCollapsibleState.None, state.keys.mimo ? "saved" : "missing", { command: "englishTraining.configureMimoKey", title: "Configure Xiaomi MiMo" }),

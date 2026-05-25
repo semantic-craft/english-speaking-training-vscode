@@ -2,7 +2,7 @@ import type { JsonObject } from "./types.js";
 
 /**
  * Versioned, machine-readable contract for the daily training package and the
- * follow-up FSI drill package. Any capable LLM (OpenAI / Gemini / MiMo / ...)
+ * follow-up FSI drill package. Any capable LLM (Qwen / Gemini / MiMo / ...)
  * can read CARD_SCHEMA and emit a package this extension renders identically:
  * the pitch/contour card, the falling-tone card, the stress card, and the
  * reading-card images all derive from the fields described here.

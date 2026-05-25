@@ -32,7 +32,6 @@ import {
   configureCoreRouteKeys,
   configureLocalMaterialsRoot,
   setGeminiOnlyProviders,
-  setOpenAIStackProviders,
   setProviderSetting,
   setQwenStackProviders,
   setQwenTtsVoice,
@@ -269,15 +268,6 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
         );
         return;
       }
-      if (payload.type === "useOpenAIStack") {
-        await this.runOptionalSidebarCommand(
-          view,
-          "useOpenAIStack",
-          positiveRequestId(payload.requestId),
-          () => setOpenAIStackProviders(),
-        );
-        return;
-      }
       if (payload.type === "useQwenStack") {
         await this.runOptionalSidebarCommand(
           view,
@@ -488,9 +478,9 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     const slowSpeed = Number.isFinite(speed) && speed > 0 ? Math.max(0.5, Math.min(1.5, speed)) : 0.7;
     this.postToActiveView(view, { type: "slowReadStatus", target, ...request, message: "Re-reading…" });
     // For slow re-reads the learner is shadowing word-by-word, so we ask the
-    // TTS to over-articulate and pause between sense groups. OpenAI carries
-    // this directly; Qwen carries it only on the instruct model, while Gemini
-    // and MiMo ignore the style hint and just honor their normal route.
+    // TTS to over-articulate and pause between sense groups. Qwen carries
+    // this only on the instruct model; MiMo passes it as a user style
+    // prompt; Gemini ignores the hint and just honors its normal route.
     const slowInstructions =
       "Read this sentence very slowly and clearly. Over-articulate each word, " +
       "lengthen the stressed syllables, and pause briefly between sense groups so " +

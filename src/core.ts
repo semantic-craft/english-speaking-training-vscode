@@ -10,9 +10,10 @@ export const QWEN_COMPATIBLE_BASE_URL = "https://dashscope.aliyuncs.com/compatib
 export const QWEN_COMPATIBLE_INTL_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
 export const QWEN_TTS_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
 export const QWEN_TTS_INTL_ENDPOINT = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+export const QWEN_TTS_REALTIME_ENDPOINT = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime";
+export const QWEN_TTS_REALTIME_INTL_ENDPOINT = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime";
 
 export const secretKeys: Record<ProviderName, string> = {
-  openai: "englishTraining.openaiKey",
   gemini: "englishTraining.geminiKey",
   qwen: "englishTraining.dashscopeApiKey",
   mimo: "englishTraining.mimoKey",
@@ -322,7 +323,6 @@ export function storedOrEnvApiKey(stored: unknown, provider: ProviderName): stri
 // near-identical commands; naming the precise one makes the error actionable.
 export function providerKeyCommandTitle(provider: ProviderName): string {
   const titles: Record<ProviderName, string> = {
-    openai: "English Training: Configure OpenAI API Key",
     gemini: "English Training: Configure Gemini API Key",
     qwen: "English Training: Configure DashScope API Key",
     mimo: "English Training: Configure Xiaomi MiMo API Key",
@@ -331,7 +331,6 @@ export function providerKeyCommandTitle(provider: ProviderName): string {
 }
 
 export function providerLabel(provider: ProviderName): string {
-  if (provider === "openai") return "OpenAI";
   if (provider === "gemini") return "Gemini";
   if (provider === "qwen") return "Qwen";
   return "MiMo";
@@ -339,7 +338,6 @@ export function providerLabel(provider: ProviderName): string {
 
 export function isProviderName(value: unknown): value is ProviderName {
   return (
-    value === "openai" ||
     value === "gemini" ||
     value === "qwen" ||
     value === "mimo"
@@ -355,18 +353,17 @@ export function isCoachProvider(value: unknown): value is ProviderName {
   return (
     value === "gemini" ||
     value === "mimo" ||
-    value === "qwen" ||
-    value === "openai"
+    value === "qwen"
   );
 }
 
 export function isAudioUnderstandingProvider(value: unknown): value is ProviderName {
-  return value === "gemini" || value === "openai" || value === "qwen" || value === "mimo";
+  return value === "gemini" || value === "qwen" || value === "mimo";
 }
 
 export function isTtsProvider(value: unknown): value is ProviderName {
   return (
-    value === "qwen" || value === "gemini" || value === "openai" || value === "mimo"
+    value === "qwen" || value === "gemini" || value === "mimo"
   );
 }
 
@@ -719,58 +716,6 @@ export function parseFirstJson(stdout: string): JsonObject | undefined {
     }
   }
   return tryParseJsonObject(stdout) ?? tryParseJsonObject(extractCompleteJsonObject(stdout) ?? "");
-}
-
-export function extractOpenAIText(parsed: JsonObject): string {
-  const direct = stringValue(parsed.output_text);
-  if (direct) return direct;
-  const choices = parsed.choices;
-  if (Array.isArray(choices)) {
-    for (const choice of choices) {
-      if (!choice || typeof choice !== "object" || Array.isArray(choice)) {
-        continue;
-      }
-      const messageValue = (choice as JsonObject).message;
-      const message = messageValue && typeof messageValue === "object" && !Array.isArray(messageValue)
-        ? messageValue as JsonObject
-        : undefined;
-      const content = message?.content;
-      const textContent = typeof content === "string" ? content : "";
-      if (textContent) return textContent;
-      if (Array.isArray(content)) {
-        const parts = content
-          .map((part) =>
-            part && typeof part === "object" && !Array.isArray(part)
-              ? stringValue((part as JsonObject).text)
-              : "",
-          )
-          .filter(Boolean);
-        if (parts.length) return parts.join("\n");
-      }
-    }
-  }
-  const output = parsed.output;
-  if (Array.isArray(output)) {
-    const parts: string[] = [];
-    for (const item of output) {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        continue;
-      }
-      const content = (item as JsonObject).content;
-      if (Array.isArray(content)) {
-        for (const part of content) {
-          if (!part || typeof part !== "object" || Array.isArray(part)) {
-            continue;
-          }
-          const partObj = part as JsonObject;
-          const text = stringValue(partObj.text) || stringValue(partObj.output_text);
-          if (text) parts.push(text);
-        }
-      }
-    }
-    if (parts.length) return parts.join("\n");
-  }
-  return JSON.stringify(parsed);
 }
 
 export function extractGeminiText(parsed: JsonObject): string {
