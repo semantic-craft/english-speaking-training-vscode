@@ -297,7 +297,7 @@ test("Qwen-first UX and packaging metadata stay aligned", () => {
   assert.match(practiceViewSource, /payload\.type === "startNativeRecording" \|\| payload\.type === "practiceAudio" \|\| payload\.type === "stopNativeRecording"/);
   assert.match(practiceViewSource, /stageReporter\(view = this\.view, requestId = 0\): StageReporter \{[\s\S]*\.\.\.\(requestId \? \{ requestId \} : \{\}\)/);
   assert.match(practiceViewSource, /type: "stage",\s*stage: "transcribe",\s*status: "active",\s*show: true,\s*\.\.\.\(requestId \? \{ requestId \} : \{\}\)/);
-  assert.match(practiceViewSource, /processPracticeAudio\(this\.context, message, this\.stageReporter\(view, requestId\), priorTurn, practiceTarget\)/);
+  assert.match(practiceViewSource, /processPracticeAudio\(\s*this\.context,\s*message,\s*this\.stageReporter\(view, requestId\),\s*priorTurn,\s*practiceTarget,\s*tts\.sink,\s*\)/);
   assert.match(practiceViewSource, /const requestId = positiveRequestId\(message\.requestId\);[\s\S]*postPracticeResult\(view, result, \{ priorTurn, practiceTarget, requestId \}\)/);
   assert.match(practiceViewSource, /stopNativeRecording\(requestId = 0\): Promise<void>[\s\S]*this\.stageReporter\(view, requestId\)[\s\S]*postPracticeResult\(view, result, \{[\s\S]*requestId,/);
   assert.match(practiceViewSource, /\.\.\.\(options\.requestId \? \{ requestId: options\.requestId \} : \{\}\)/);

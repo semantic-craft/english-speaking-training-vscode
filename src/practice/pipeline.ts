@@ -26,6 +26,7 @@ import {
   speechOutputFileName,
   synthesizeWithConfiguredTts,
 } from "./tts.js";
+import { type QwenStreamSink, streamQwenToFile } from "../audio/synthesis.js";
 import { normalizedTtsProvider } from "../runtime/settings.js";
 
 export async function processPracticeFile(
@@ -38,6 +39,7 @@ export async function processPracticeFile(
   progress?: StageReporter,
   priorTurn?: CoachPriorTurn,
   practiceTarget?: PracticeTarget,
+  nativeTtsStreamSink?: QwenStreamSink,
 ): Promise<PracticeResult> {
   const target = normalizePracticeTarget(practiceTarget);
   progress?.("transcribe", "active");
@@ -134,8 +136,32 @@ export async function processPracticeFile(
         return undefined;
       });
   };
+  // Native-version is the shadowing main beat: the user is waiting at
+  // "press record → wait → listen → repeat", so cutting its first-sound
+  // latency moves the needle on the perceived flow. Stream Qwen-TTS chunks
+  // to the webview as they arrive; the file still lands on disk for the
+  // replay control. Follow-up audio is a secondary cue and stays on the
+  // synchronous path to keep the diff small and avoid double-streaming the
+  // webview player (which can only host one PCM stream at a time).
+  const streamNativeClip = (
+    text: string,
+    outPath: string,
+  ): Promise<string | undefined> => {
+    if (!text.trim()) {
+      return Promise.resolve(undefined);
+    }
+    if (ttsProvider === "qwen" && nativeTtsStreamSink) {
+      return streamQwenToFile(context, text, outPath, ttsStyle, nativeTtsStreamSink)
+        .then(() => outPath)
+        .catch((error) => {
+          appendOutput(`Native-version streaming TTS failed: ${errorMessage(error)}`);
+          return undefined;
+        });
+    }
+    return synthesizeClip(text, outPath, "Native-version");
+  };
   const [audioFile, followUpAudioFile] = await Promise.all([
-    synthesizeClip(nativeVersion, outputAudio, "Native-version"),
+    streamNativeClip(nativeVersion, outputAudio),
     synthesizeClip(
       followUpQuestion,
       path.join(sessionDir, `follow-up.${speechOutputExtension(ttsProvider)}`),

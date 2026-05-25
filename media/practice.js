@@ -3823,6 +3823,30 @@
         }
         return;
       }
+      if (message.type === "practiceTtsStream") {
+        // Stream of the pipeline's native-version audio: the user has just
+        // finished recording and is waiting at "what did the coach say?"
+        // — playing the chunks as they land cuts the perceived wait so the
+        // shadowing main loop feels continuous instead of stop-and-go.
+        const phase = scalarText(message.phase);
+        if (phase === "start") {
+          if (!startTtsStream({
+            sampleRate: positiveInteger(message.sampleRate) || 24000,
+            channels: positiveInteger(message.channels) || 1,
+          })) {
+            // AudioContext unavailable: fall back to the audio element the
+            // turn result will render — no error message needed because the
+            // turn still finishes normally.
+          }
+        } else if (phase === "chunk") {
+          feedTtsStreamChunk(scalarText(message.base64));
+        } else if (phase === "done") {
+          endTtsStream();
+        } else if (phase === "error") {
+          cancelTtsStream();
+        }
+        return;
+      }
       if (message.type === "slowReadResult") {
         const requestId = positiveInteger(message.requestId);
         if (!requestId) return;

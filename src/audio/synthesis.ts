@@ -88,7 +88,7 @@ export async function streamQwenOnDemandText(
   const packageDate = stringValue(state.next.package_date) || state.today;
   const outDir = createReferenceAudioDir(state.root, packageDate);
   const outPath = path.join(outDir, `slow-${stamp()}.wav`);
-  await runQwenRealtime(context, text, outPath, ttsStyle, sink);
+  await streamQwenToFile(context, text, outPath, ttsStyle, sink);
   const audio = fs.readFileSync(outPath);
   const mimeType = "audio/wav";
   return {
@@ -114,7 +114,7 @@ export async function streamQwenTodayAudio(
   }
   const outDir = createReferenceAudioDir(state.root, packageDate);
   const outPath = path.join(outDir, `today-${stamp()}.wav`);
-  await runQwenRealtime(context, text, outPath, undefined, sink);
+  await streamQwenToFile(context, text, outPath, undefined, sink);
   const audio = fs.readFileSync(outPath);
   const mimeType = "audio/wav";
   return {
@@ -127,7 +127,7 @@ export async function streamQwenTodayAudio(
   };
 }
 
-async function runQwenRealtime(
+export async function streamQwenToFile(
   context: vscode.ExtensionContext,
   text: string,
   outPath: string,

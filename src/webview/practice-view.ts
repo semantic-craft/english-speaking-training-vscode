@@ -54,6 +54,7 @@ import {
   stopNativeFfmpegRecording,
 } from "../audio/native-recording.js";
 import {
+  type QwenStreamSink,
   streamQwenOnDemandText,
   streamQwenTodayAudio,
   synthesizeOnDemandText,
@@ -606,9 +607,55 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
       ...(requestId ? { requestId } : {}),
     });
     const practiceTarget = normalizePracticeTargetPayload(message.practiceTarget);
-    const result = await processPracticeAudio(this.context, message, this.stageReporter(view, requestId), priorTurn, practiceTarget);
+    const tts = this.buildNativeTtsStream(view, requestId);
+    const result = await processPracticeAudio(
+      this.context,
+      message,
+      this.stageReporter(view, requestId),
+      priorTurn,
+      practiceTarget,
+      tts.sink,
+    );
+    tts.finalize();
     this.postPracticeResult(view, result, { priorTurn, practiceTarget, requestId });
     await this.refreshAfterPracticeResult();
+  }
+
+  private buildNativeTtsStream(
+    view: vscode.WebviewView,
+    requestId?: number,
+  ): { sink: QwenStreamSink | undefined; finalize: () => void } {
+    if (normalizedTtsProvider() !== "qwen") {
+      return { sink: undefined, finalize: () => undefined };
+    }
+    const meta = requestId ? { requestId } : {};
+    let started = false;
+    const sink: QwenStreamSink = {
+      onStart: (info) => {
+        started = true;
+        this.postToActiveView(view, {
+          type: "practiceTtsStream",
+          phase: "start",
+          sampleRate: info.sampleRate,
+          channels: info.channels,
+          ...meta,
+        });
+      },
+      onChunk: (base64) => this.postToActiveView(view, {
+        type: "practiceTtsStream",
+        phase: "chunk",
+        base64,
+        ...meta,
+      }),
+    };
+    return {
+      sink,
+      finalize: () => {
+        if (started) {
+          this.postToActiveView(view, { type: "practiceTtsStream", phase: "done", ...meta });
+        }
+      },
+    };
   }
 
   private async startNativeRecording(
@@ -656,6 +703,7 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     priorTurn = session.priorTurn ?? priorTurn;
     const state = await loadState(this.context);
     const practiceTarget = session.practiceTarget;
+    const tts = this.buildNativeTtsStream(view, requestId);
     const result = await processPracticeFile(
       this.context,
       state,
@@ -666,7 +714,9 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
       this.stageReporter(view, requestId),
       priorTurn,
       practiceTarget,
+      tts.sink,
     );
+    tts.finalize();
     this.postPracticeResult(view, result, {
       localAudioFile: session.filePath,
       priorTurn,
@@ -808,6 +858,7 @@ export async function processPracticeAudio(
   progress?: StageReporter,
   priorTurn?: CoachPriorTurn,
   practiceTarget?: PracticeTarget,
+  nativeTtsStreamSink?: QwenStreamSink,
 ): Promise<PracticeResult> {
   const audioBuffer = decodeWebviewAudioBase64(message.base64);
   if (audioBuffer.length < 1000) {
@@ -832,6 +883,7 @@ export async function processPracticeAudio(
     progress,
     priorTurn,
     practiceTarget,
+    nativeTtsStreamSink,
   );
 }
 
