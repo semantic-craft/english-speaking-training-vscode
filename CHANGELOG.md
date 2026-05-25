@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+- Replaced the user-facing MiniMax speech-output route with Alibaba Cloud
+  DashScope Qwen-TTS. Qwen defaults to `qwen3-tts-flash`, stores its key as
+  `dashscopeApiKey` / `DASHSCOPE_API_KEY`, supports `language_type` values for
+  Auto, Chinese, English, and German, and sends style `instructions` only with
+  `qwen3-tts-instruct-flash`.
+
 ## [0.1.43] — 2026-05-22
 
 ### Fixed

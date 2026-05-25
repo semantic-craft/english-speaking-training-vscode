@@ -8,6 +8,8 @@ import {
   MIMO_OPENAI_BASE_URL,
   normalizedProviderName,
   normalizeTtsSpeed,
+  QWEN_TTS_ENDPOINT,
+  QWEN_TTS_INTL_ENDPOINT,
 } from "../core.js";
 import type { TrainingState } from "../types.js";
 
@@ -17,6 +19,9 @@ const OPENAI_TRANSCRIPTION_MODES = ["file", "realtime"] as const;
 const OPENAI_TTS_RESPONSE_FORMATS = ["wav", "mp3", "opus", "aac", "flac", "pcm"] as const;
 const GEMINI_TTS_VOICES = ["Kore", "Puck", "Charon", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"] as const;
 const MIMO_TTS_VOICES = ["Mia", "Chloe", "Milo", "Dean", "mimo_default"] as const;
+const QWEN_TTS_MODELS = ["qwen3-tts-flash", "qwen3-tts-instruct-flash"] as const;
+const QWEN_TTS_VOICES = ["Cherry", "Serena", "Ethan", "Chelsie", "Momo", "Vivian", "Moon", "Maia"] as const;
+const QWEN_TTS_LANGUAGE_TYPES = ["Auto", "Chinese", "English", "German"] as const;
 
 export type ProviderSettingName = "coachProvider" | "audioUnderstandingProvider" | "ttsProvider";
 export type ConfigSettingName =
@@ -28,7 +33,11 @@ export type ConfigSettingName =
   | "geminiCoachModel"
   | "geminiAudioUnderstandingModel"
   | "mimoAudioUnderstandingModel"
-  | "minimaxTtsModel"
+  | "qwenTtsEndpoint"
+  | "qwenTtsModel"
+  | "qwenTtsVoice"
+  | "qwenTtsLanguageType"
+  | "qwenTtsInstructions"
   | "mimoTtsModel"
   | "mimoTtsVoice"
   | "openaiTtsModel"
@@ -68,8 +77,11 @@ export function trainingSettings(): TrainingState["settings"] {
     mimoTtsBaseUrl: configString("mimoTtsBaseUrl", MIMO_OPENAI_BASE_URL),
     mimoTtsModel: configString("mimoTtsModel", "mimo-v2.5-tts"),
     mimoTtsVoice: normalizedMimoTtsVoice(),
-    minimaxTtsModel: configString("minimaxTtsModel", "speech-2.8-hd"),
-    minimaxTtsVoiceId: configString("minimaxTtsVoiceId", "English_expressive_narrator"),
+    qwenTtsEndpoint: normalizedQwenTtsEndpoint(),
+    qwenTtsModel: normalizedQwenTtsModel(),
+    qwenTtsVoice: normalizedQwenTtsVoice(),
+    qwenTtsLanguageType: normalizedQwenTtsLanguageType(),
+    qwenTtsInstructions: configString("qwenTtsInstructions"),
     ttsSpeed: normalizeTtsSpeed(config<unknown>("ttsSpeed"), 0.9),
     recorderBackend: normalizedRecorderBackend(),
     preferredMicrophoneName: configString("preferredMicrophoneName"),
@@ -126,6 +138,26 @@ export function normalizedMimoTtsVoice(): string {
   return includesValue(MIMO_TTS_VOICES, voice) ? voice : "Mia";
 }
 
+export function normalizedQwenTtsEndpoint(): string {
+  const endpoint = configString("qwenTtsEndpoint", QWEN_TTS_ENDPOINT).replace(/\/+$/, "");
+  return endpoint === QWEN_TTS_INTL_ENDPOINT ? QWEN_TTS_INTL_ENDPOINT : QWEN_TTS_ENDPOINT;
+}
+
+export function normalizedQwenTtsModel(): string {
+  const model = configString("qwenTtsModel", "qwen3-tts-flash");
+  return includesValue(QWEN_TTS_MODELS, model) ? model : "qwen3-tts-flash";
+}
+
+export function normalizedQwenTtsVoice(): string {
+  const voice = configString("qwenTtsVoice", "Cherry");
+  return includesValue(QWEN_TTS_VOICES, voice) ? voice : "Cherry";
+}
+
+export function normalizedQwenTtsLanguageType(): string {
+  const languageType = configString("qwenTtsLanguageType", "English");
+  return includesValue(QWEN_TTS_LANGUAGE_TYPES, languageType) ? languageType : "English";
+}
+
 function includesValue(values: readonly string[], value: string): boolean {
   return values.includes(value);
 }
@@ -140,7 +172,11 @@ export function isConfigSettingName(value: unknown): value is ConfigSettingName 
     value === "geminiCoachModel" ||
     value === "geminiAudioUnderstandingModel" ||
     value === "mimoAudioUnderstandingModel" ||
-    value === "minimaxTtsModel" ||
+    value === "qwenTtsEndpoint" ||
+    value === "qwenTtsModel" ||
+    value === "qwenTtsVoice" ||
+    value === "qwenTtsLanguageType" ||
+    value === "qwenTtsInstructions" ||
     value === "mimoTtsModel" ||
     value === "mimoTtsVoice" ||
     value === "openaiTtsModel" ||

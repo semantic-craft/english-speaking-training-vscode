@@ -143,7 +143,7 @@ export async function generateNextPackage(context: vscode.ExtensionContext): Pro
     await vscode.window.showTextDocument(vscode.Uri.file(targetFile), { preview: false });
     vscode.window.showInformationMessage(
       `Blank skeleton written to prebuilt/${targetDate}. Feed the generation prompt to any LLM ` +
-        "(MiniMax / Gemini / Kimi / ...), paste its two JSON blocks back into the skeleton files, then Refresh.",
+        "(OpenAI / Gemini / MiMo / ...), paste its two JSON blocks back into the skeleton files, then Refresh.",
     );
   } finally {
     await refreshMaterialsIfChanged(resolved.materialsChanged || packageChanged);

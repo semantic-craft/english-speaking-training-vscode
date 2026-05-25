@@ -41,7 +41,7 @@ prompt:
    scenario, who you address, goal, key expressions, and prosody focus.
 3. The brief is wrapped with the extension's versioned Card Schema contract and
    written as one `material-generation-prompt.md` to a folder you pick.
-4. Paste that single file into any LLM (OpenAI, Gemini, MiMo, MiniMax,
+4. Paste that single file into any capable LLM (OpenAI, Gemini, MiMo,
    Kimi, ...). It returns `english-training.json` and `followup-drill.json` that
    the sidebar renders with no manual fixes.
 
@@ -120,8 +120,12 @@ Practice / Skip choices after each result, and coach-generated
   `gpt-realtime-whisper`, Gemini audio understanding, and Xiaomi MiMo audio
   understanding remain optional alternates.
 - Speech output: OpenAI `gpt-4o-mini-tts` by default with the `marin` voice,
-  `wav` output, and coach-generated style instructions. Gemini, MiniMax, and
+  `wav` output, and coach-generated style instructions. Gemini, Qwen-TTS, and
   Xiaomi MiMo speech output remain optional fallbacks.
+- Qwen-TTS uses DashScope / Alibaba Cloud Model Studio with
+  `DASHSCOPE_API_KEY` or the stored `dashscopeApiKey` SecretStorage value,
+  defaulting to `qwen3-tts-flash`, the `Cherry` voice, and
+  `language_type: English`.
 - The sidebar's **Routes & Models** panel shows the active route, key status,
   and model/voice controls in one place.
 
@@ -143,14 +147,14 @@ Practice / Skip choices after each result, and coach-generated
 - API key commands:
   - `English Training: Configure OpenAI API Key`
   - `English Training: Configure Gemini API Key`
-  - `English Training: Configure MiniMax API Key`
+  - `English Training: Configure DashScope API Key`
   - `English Training: Configure Xiaomi MiMo API Key`
 - Route commands:
   - `English Training: Use OpenAI Coach`
   - `English Training: Use Gemini Coach`
   - `English Training: Use Xiaomi MiMo Coach`
   - `English Training: Use OpenAI Speech Output`
-  - `English Training: Use MiniMax Speech Output`
+  - `English Training: Use Qwen-TTS Speech Output`
   - `English Training: Use Gemini Speech Output`
   - `English Training: Use Gemini Core Route`
   - `English Training: Use Gemini Only`

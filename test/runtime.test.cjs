@@ -571,8 +571,8 @@ test("invalid practice webview control messages surface errors instead of no-opi
     await provider.handleMessage(view, { type: "setTtsSpeed", value: "   " });
     await provider.handleMessage(view, { type: "setTtsSpeed", value: true });
     await provider.handleMessage(view, { type: "setTtsSpeed", value: [1] });
-    await provider.handleMessage(view, { type: "setMinimaxVoice", voiceId: "" });
-    await provider.handleMessage(view, { type: "setMinimaxVoice", voiceId: "   " });
+    await provider.handleMessage(view, { type: "setQwenVoice", voiceId: "" });
+    await provider.handleMessage(view, { type: "setQwenVoice", voiceId: "   " });
     await provider.handleMessage(view, { type: "slowRead", text: "hello", target: "native" });
     await provider.handleMessage(view, { type: "todayTts" });
     await provider.handleMessage(view, { type: "generateDrillLines", count: 5, existing: [] });
@@ -597,8 +597,8 @@ test("invalid practice webview control messages surface errors instead of no-opi
       "Invalid TTS speed: (missing).",
       "Invalid TTS speed: true.",
       "Invalid TTS speed: (missing).",
-      "MiniMax voice id was missing.",
-      "MiniMax voice id was missing.",
+      "Qwen-TTS voice was missing.",
+      "Qwen-TTS voice was missing.",
       "Slow-read request id was missing. Refresh the practice view and try again.",
       "Example audio request id was missing. Refresh the practice view and try again.",
       "Drill generation request id was missing. Refresh the practice view and try again.",
@@ -671,18 +671,16 @@ test("practice webview provider messages trim setting and provider values before
   assert.deepEqual(messages, []);
 });
 
-test("practice webview MiniMax voice pin flag only treats explicit true as pinned", async () => {
+test("practice webview Qwen voice messages trim before writing config", async () => {
   const previous = {
-    minimaxTtsVoiceId: configValues.minimaxTtsVoiceId,
-    minimaxTtsModel: configValues.minimaxTtsModel,
+    qwenTtsVoice: configValues.qwenTtsVoice,
   };
   const previousGetConfiguration = mockVscode.workspace.getConfiguration;
   const previousInfoMessage = mockVscode.window.showInformationMessage;
   const updates = [];
   const info = [];
   let refreshes = 0;
-  configValues.minimaxTtsVoiceId = " voice-old ";
-  configValues.minimaxTtsModel = " speech-2.8-hd ";
+  configValues.qwenTtsVoice = " Cherry ";
   mockVscode.workspace.getConfiguration = (section) => {
     assert.equal(section, "englishTraining");
     return {
@@ -722,15 +720,13 @@ test("practice webview MiniMax voice pin flag only treats explicit true as pinne
     await waitForAsyncWork();
     messages.length = 0;
     await provider.handleMessage(view, {
-      type: "setMinimaxVoice",
-      voiceId: " voice-new ",
-      pinTurbo: "false",
+      type: "setQwenVoice",
+      voiceId: " Serena ",
       requestId: 83,
     });
     await provider.handleMessage(view, {
-      type: "setMinimaxVoice",
-      voiceId: " voice-cloned ",
-      pinTurbo: "true",
+      type: "setQwenVoice",
+      voiceId: " Ethan ",
       requestId: 84,
     });
   } finally {
@@ -741,16 +737,15 @@ test("practice webview MiniMax voice pin flag only treats explicit true as pinne
   }
 
   assert.deepEqual(updates, [
-    { key: "minimaxTtsVoiceId", value: "voice-new", target: mockVscode.ConfigurationTarget.Global },
-    { key: "minimaxTtsVoiceId", value: "voice-cloned", target: mockVscode.ConfigurationTarget.Global },
-    { key: "minimaxTtsModel", value: "speech-2.8-turbo", target: mockVscode.ConfigurationTarget.Global },
+    { key: "qwenTtsVoice", value: "Serena", target: mockVscode.ConfigurationTarget.Global },
+    { key: "qwenTtsVoice", value: "Ethan", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 2);
-  assert.equal(info[0], "MiniMax voice set to voice-new.");
-  assert.match(info[1], /MiniMax voice set to voice-cloned .*pinned model to speech-2\.8-turbo/);
+  assert.equal(info[0], "Qwen-TTS voice set to Serena.");
+  assert.equal(info[1], "Qwen-TTS voice set to Ethan.");
   assert.deepEqual(messages, [
-    { type: "commandResult", command: "setMinimaxVoice", requestId: 83 },
-    { type: "commandResult", command: "setMinimaxVoice", requestId: 84 },
+    { type: "commandResult", command: "setQwenVoice", requestId: 83 },
+    { type: "commandResult", command: "setQwenVoice", requestId: 84 },
   ]);
 });
 
@@ -1401,6 +1396,50 @@ test("fetch network failures include the provider host and retry guidance", asyn
       () => api.fetchWithTimeout("https://api.openai.com/v1/audio/transcriptions?key=secret", {}, 100),
       /Network request to api\.openai\.com failed before a response arrived \(fetch failed; ENOTFOUND; api\.openai\.com\)\. Check your VPN\/proxy\/DNS connection and press ↻ to retry\./,
     );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("fetch timeout stays armed through stalled body reads", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (_url, init) => {
+    const waitForAbort = () => new Promise((_resolve, reject) => {
+      const signal = init.signal;
+      const rejectAbort = () => {
+        const error = new Error("body read aborted");
+        error.name = "AbortError";
+        reject(error);
+      };
+      if (signal.aborted) {
+        rejectAbort();
+        return;
+      }
+      signal.addEventListener("abort", rejectAbort, { once: true });
+    });
+    return {
+      ok: true,
+      status: 200,
+      arrayBuffer: waitForAbort,
+      blob: waitForAbort,
+      formData: waitForAbort,
+      json: waitForAbort,
+      text: waitForAbort,
+    };
+  };
+
+  try {
+    const response = await api.fetchWithTimeout("https://api.openai.com/v1/chat/completions", {}, 25);
+    await Promise.race([
+      assert.rejects(
+        () => response.text(),
+        /Request timed out after 25ms .*press ↻ to retry\./,
+      ),
+      new Promise((_resolve, reject) => setTimeout(
+        () => reject(new Error("stalled response body did not time out")),
+        250,
+      )),
+    ]);
   } finally {
     global.fetch = originalFetch;
   }
@@ -3530,18 +3569,18 @@ test("provider route settings tolerate hand-edited casing and whitespace", () =>
   try {
     configValues.coachProvider = " MiMo ";
     configValues.audioUnderstandingProvider = " GEMINI ";
-    configValues.ttsProvider = " MiniMax ";
+    configValues.ttsProvider = " Qwen ";
 
     assert.equal(api.normalizedCoachProvider(), "mimo");
     assert.equal(api.normalizedSpeechInputProvider(), "gemini");
     assert.equal(api.resolveAudioUnderstandingProvider(), "gemini");
-    assert.equal(api.normalizedTtsProvider(), "minimax");
+    assert.equal(api.normalizedTtsProvider(), "qwen");
     assert.equal(api.normalizeSpeechOutputProvider(" MiMo "), "mimo");
-    assert.equal(api.normalizeProviderForSetting("ttsProvider", " MiniMax "), "minimax");
+    assert.equal(api.normalizeProviderForSetting("ttsProvider", " Qwen "), "qwen");
     assert.deepEqual(api.trainingSettings().coachProvider, "mimo");
     assert.deepEqual(api.trainingSettings().audioUnderstandingProvider, "gemini");
-    assert.deepEqual(api.trainingSettings().ttsProvider, "minimax");
-    assert.deepEqual(api.activeRouteProviders(), ["mimo", "gemini", "minimax"]);
+    assert.deepEqual(api.trainingSettings().ttsProvider, "qwen");
+    assert.deepEqual(api.activeRouteProviders(), ["mimo", "gemini", "qwen"]);
   } finally {
     Object.assign(configValues, previous);
   }
@@ -3635,8 +3674,11 @@ test("provider model ids and external voice ids are trimmed before UI state or r
     mimoCoachModel: configValues.mimoCoachModel,
     mimoAudioUnderstandingModel: configValues.mimoAudioUnderstandingModel,
     mimoTtsModel: configValues.mimoTtsModel,
-    minimaxTtsModel: configValues.minimaxTtsModel,
-    minimaxTtsVoiceId: configValues.minimaxTtsVoiceId,
+    qwenTtsEndpoint: configValues.qwenTtsEndpoint,
+    qwenTtsModel: configValues.qwenTtsModel,
+    qwenTtsVoice: configValues.qwenTtsVoice,
+    qwenTtsLanguageType: configValues.qwenTtsLanguageType,
+    qwenTtsInstructions: configValues.qwenTtsInstructions,
   };
 
   try {
@@ -3651,8 +3693,11 @@ test("provider model ids and external voice ids are trimmed before UI state or r
       mimoCoachModel: " mimo-v2.5-flash ",
       mimoAudioUnderstandingModel: " mimo-v2-omni ",
       mimoTtsModel: " mimo-v2.5-tts ",
-      minimaxTtsModel: " speech-2.8-turbo ",
-      minimaxTtsVoiceId: " English_expressive_narrator ",
+      qwenTtsEndpoint: " https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation ",
+      qwenTtsModel: " qwen3-tts-instruct-flash ",
+      qwenTtsVoice: " Serena ",
+      qwenTtsLanguageType: " German ",
+      qwenTtsInstructions: " Speak warmly. ",
     });
 
     assert.deepEqual(
@@ -3667,8 +3712,11 @@ test("provider model ids and external voice ids are trimmed before UI state or r
         mimoCoachModel: api.trainingSettings().mimoCoachModel,
         mimoAudioUnderstandingModel: api.trainingSettings().mimoAudioUnderstandingModel,
         mimoTtsModel: api.trainingSettings().mimoTtsModel,
-        minimaxTtsModel: api.trainingSettings().minimaxTtsModel,
-        minimaxTtsVoiceId: api.trainingSettings().minimaxTtsVoiceId,
+        qwenTtsEndpoint: api.trainingSettings().qwenTtsEndpoint,
+        qwenTtsModel: api.trainingSettings().qwenTtsModel,
+        qwenTtsVoice: api.trainingSettings().qwenTtsVoice,
+        qwenTtsLanguageType: api.trainingSettings().qwenTtsLanguageType,
+        qwenTtsInstructions: api.trainingSettings().qwenTtsInstructions,
       },
       {
         openaiRealtimeTranscriptionModel: "gpt-realtime-whisper",
@@ -3681,22 +3729,25 @@ test("provider model ids and external voice ids are trimmed before UI state or r
         mimoCoachModel: "mimo-v2.5-flash",
         mimoAudioUnderstandingModel: "mimo-v2-omni",
         mimoTtsModel: "mimo-v2.5-tts",
-        minimaxTtsModel: "speech-2.8-turbo",
-        minimaxTtsVoiceId: "English_expressive_narrator",
+        qwenTtsEndpoint: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+        qwenTtsModel: "qwen3-tts-instruct-flash",
+        qwenTtsVoice: "Serena",
+        qwenTtsLanguageType: "German",
+        qwenTtsInstructions: "Speak warmly.",
       },
     );
 
     configValues.openaiCoachModel = "   ";
-    configValues.minimaxTtsVoiceId = "   ";
+    configValues.qwenTtsVoice = "   ";
     assert.equal(api.trainingSettings().openaiCoachModel, "gpt-4o");
-    assert.equal(api.trainingSettings().minimaxTtsVoiceId, "English_expressive_narrator");
+    assert.equal(api.trainingSettings().qwenTtsVoice, "Cherry");
     assert.equal(api.configString("openaiCoachModel", "fallback-model"), "fallback-model");
-    assert.equal(api.configString("minimaxTtsVoiceId", "fallback-voice"), "fallback-voice");
+    assert.equal(api.configString("qwenTtsVoice", "fallback-voice"), "fallback-voice");
 
     configValues.openaiCoachModel = { model: "gpt-4o" };
-    configValues.minimaxTtsVoiceId = ["English_expressive_narrator"];
+    configValues.qwenTtsVoice = ["Cherry"];
     assert.equal(api.trainingSettings().openaiCoachModel, "gpt-4o");
-    assert.equal(api.trainingSettings().minimaxTtsVoiceId, "English_expressive_narrator");
+    assert.equal(api.trainingSettings().qwenTtsVoice, "Cherry");
     assert.equal(api.configString("openaiCoachModel", "fallback-model"), "fallback-model");
   } finally {
     Object.assign(configValues, previous);
@@ -3793,9 +3844,9 @@ test("normalizes stale coach and speech-output providers to OpenAI", () => {
   assert.equal(api.speechOutputExtension("deepseek"), "wav");
 
   configValues.coachProvider = "mimo";
-  configValues.ttsProvider = "minimax";
+  configValues.ttsProvider = "qwen";
   assert.equal(api.normalizedCoachProvider(), "mimo");
-  assert.equal(api.normalizedTtsProvider(), "minimax");
+  assert.equal(api.normalizedTtsProvider(), "qwen");
 });
 
 test("active route key readiness follows configured providers instead of hard-coded Gemini", () => {
@@ -3805,12 +3856,13 @@ test("active route key readiness follows configured providers instead of hard-co
   assert.deepEqual(api.activeRouteProviders(), ["openai"]);
   assert.equal(api.normalizeProviderForSetting("coachProvider", "minimax"), "openai");
   assert.equal(api.normalizeProviderForSetting("audioUnderstandingProvider", "minimax"), "openai");
-  assert.equal(api.normalizeProviderForSetting("ttsProvider", "minimax"), "minimax");
+  assert.equal(api.normalizeProviderForSetting("ttsProvider", "minimax"), "openai");
+  assert.equal(api.normalizeProviderForSetting("ttsProvider", "qwen"), "qwen");
 
   configValues.coachProvider = "gemini";
   configValues.audioUnderstandingProvider = "openai";
-  configValues.ttsProvider = "minimax";
-  assert.deepEqual(api.activeRouteProviders(), ["gemini", "openai", "minimax"]);
+  configValues.ttsProvider = "qwen";
+  assert.deepEqual(api.activeRouteProviders(), ["gemini", "openai", "qwen"]);
 
   configValues.coachProvider = "openai";
   configValues.audioUnderstandingProvider = "openai";
@@ -3907,10 +3959,11 @@ test("blank API key input warns instead of silently canceling", async () => {
 });
 
 test("saved API keys are trimmed before readiness checks or provider use", async () => {
+  const previousDashScopeKey = process.env.DASHSCOPE_API_KEY;
   const secrets = {
     "englishTraining.openaiKey": " openai-key ",
     "englishTraining.geminiKey": "   ",
-    "englishTraining.minimaxKey": "minimax-key",
+    "englishTraining.dashscopeApiKey": " dashscope-key ",
     "englishTraining.mimoKey": undefined,
   };
   const context = {
@@ -3919,17 +3972,48 @@ test("saved API keys are trimmed before readiness checks or provider use", async
     },
   };
 
-  assert.deepEqual(await api.apiKeyAvailability(context), {
-    openai: true,
-    gemini: false,
-    minimax: true,
-    mimo: false,
-  });
-  assert.equal(await api.getRequiredKey(context, "openai"), "openai-key");
-  await assert.rejects(
-    () => api.getRequiredKey(context, "gemini"),
-    /Missing Gemini API key/,
-  );
+  try {
+    delete process.env.DASHSCOPE_API_KEY;
+    assert.deepEqual(await api.apiKeyAvailability(context), {
+      openai: true,
+      gemini: false,
+      qwen: true,
+      mimo: false,
+    });
+    assert.equal(await api.getRequiredKey(context, "openai"), "openai-key");
+    assert.equal(await api.getRequiredKey(context, "qwen"), "dashscope-key");
+    await assert.rejects(
+      () => api.getRequiredKey(context, "gemini"),
+      /Missing Gemini API key/,
+    );
+  } finally {
+    if (previousDashScopeKey === undefined) {
+      delete process.env.DASHSCOPE_API_KEY;
+    } else {
+      process.env.DASHSCOPE_API_KEY = previousDashScopeKey;
+    }
+  }
+});
+
+test("blank stored DashScope keys do not mask a valid environment key", async () => {
+  const previousDashScopeKey = process.env.DASHSCOPE_API_KEY;
+  const context = {
+    secrets: {
+      get: async (key) => key === "englishTraining.dashscopeApiKey" ? "   " : undefined,
+    },
+  };
+
+  try {
+    process.env.DASHSCOPE_API_KEY = " env-dashscope-key ";
+    assert.equal(await api.getRequiredKey(context, "qwen"), "env-dashscope-key");
+    assert.equal((await api.apiKeyAvailability(context)).qwen, true);
+  } finally {
+    if (previousDashScopeKey === undefined) {
+      delete process.env.DASHSCOPE_API_KEY;
+    } else {
+      process.env.DASHSCOPE_API_KEY = previousDashScopeKey;
+    }
+  }
 });
 
 test("saving an already stored API key does not rewrite secrets or refresh", async () => {
@@ -3969,6 +4053,7 @@ test("saving an already stored API key does not rewrite secrets or refresh", asy
 });
 
 test("clearing API keys no-ops without a destructive prompt when none are saved", async () => {
+  const previousDashScopeKey = process.env.DASHSCOPE_API_KEY;
   const previousWarningMessage = mockVscode.window.showWarningMessage;
   const previousInfoMessage = mockVscode.window.showInformationMessage;
   const warnings = [];
@@ -3988,6 +4073,7 @@ test("clearing API keys no-ops without a destructive prompt when none are saved"
   });
 
   try {
+    delete process.env.DASHSCOPE_API_KEY;
     await api.clearApiKeys({
       secrets: {
         get: async () => undefined,
@@ -3997,6 +4083,11 @@ test("clearing API keys no-ops without a destructive prompt when none are saved"
       },
     });
   } finally {
+    if (previousDashScopeKey === undefined) {
+      delete process.env.DASHSCOPE_API_KEY;
+    } else {
+      process.env.DASHSCOPE_API_KEY = previousDashScopeKey;
+    }
     mockVscode.window.showWarningMessage = previousWarningMessage;
     mockVscode.window.showInformationMessage = previousInfoMessage;
     api.clearRefreshHandlers();
@@ -4009,6 +4100,7 @@ test("clearing API keys no-ops without a destructive prompt when none are saved"
 });
 
 test("core-route key setup batches refreshes across missing providers", async () => {
+  const previousDashScopeKey = process.env.DASHSCOPE_API_KEY;
   const previousProviders = {
     coachProvider: configValues.coachProvider,
     audioUnderstandingProvider: configValues.audioUnderstandingProvider,
@@ -4019,9 +4111,9 @@ test("core-route key setup batches refreshes across missing providers", async ()
 
   configValues.coachProvider = "gemini";
   configValues.audioUnderstandingProvider = "openai";
-  configValues.ttsProvider = "minimax";
+  configValues.ttsProvider = "qwen";
 
-  const inputs = [" gemini-key ", " openai-key ", " minimax-key "];
+  const inputs = [" gemini-key ", " openai-key ", " dashscope-key "];
   const stored = [];
   let refreshes = 0;
   mockVscode.window.showInputBox = async () => inputs.shift();
@@ -4032,6 +4124,7 @@ test("core-route key setup batches refreshes across missing providers", async ()
   });
 
   try {
+    delete process.env.DASHSCOPE_API_KEY;
     await api.configureCoreRouteKeys({
       secrets: {
         get: async () => undefined,
@@ -4041,6 +4134,11 @@ test("core-route key setup batches refreshes across missing providers", async ()
       },
     });
   } finally {
+    if (previousDashScopeKey === undefined) {
+      delete process.env.DASHSCOPE_API_KEY;
+    } else {
+      process.env.DASHSCOPE_API_KEY = previousDashScopeKey;
+    }
     mockVscode.window.showInputBox = previousInputBox;
     mockVscode.window.showInformationMessage = previousInfoMessage;
     Object.assign(configValues, previousProviders);
@@ -4051,7 +4149,7 @@ test("core-route key setup batches refreshes across missing providers", async ()
   assert.deepEqual(stored, [
     { key: "englishTraining.geminiKey", value: "gemini-key" },
     { key: "englishTraining.openaiKey", value: "openai-key" },
-    { key: "englishTraining.minimaxKey", value: "minimax-key" },
+    { key: "englishTraining.dashscopeApiKey", value: "dashscope-key" },
   ]);
 });
 
@@ -4748,10 +4846,9 @@ test("OpenAI stack preset skips rewrites and refresh when already active", async
   assert.deepEqual(info, ["English Training OpenAI stack is already enabled."]);
 });
 
-test("setting an already active MiniMax voice does not rewrite settings or refresh", async () => {
+test("setting an already active Qwen voice does not rewrite settings or refresh", async () => {
   const previous = {
-    minimaxTtsVoiceId: configValues.minimaxTtsVoiceId,
-    minimaxTtsModel: configValues.minimaxTtsModel,
+    qwenTtsVoice: configValues.qwenTtsVoice,
   };
   const previousWorkspaceFolders = mockVscode.workspace.workspaceFolders;
   const previousGetConfiguration = mockVscode.workspace.getConfiguration;
@@ -4759,8 +4856,7 @@ test("setting an already active MiniMax voice does not rewrite settings or refre
   const updates = [];
   const info = [];
   let refreshes = 0;
-  configValues.minimaxTtsVoiceId = " voice-abc ";
-  configValues.minimaxTtsModel = " speech-2.8-turbo ";
+  configValues.qwenTtsVoice = " Cherry ";
   mockVscode.workspace.workspaceFolders = [];
   mockVscode.workspace.getConfiguration = (section) => {
     assert.equal(section, "englishTraining");
@@ -4782,7 +4878,7 @@ test("setting an already active MiniMax voice does not rewrite settings or refre
   });
 
   try {
-    await api.setMinimaxVoiceId("voice-abc", true);
+    await api.setQwenTtsVoice("Cherry");
   } finally {
     Object.assign(configValues, previous);
     mockVscode.workspace.workspaceFolders = previousWorkspaceFolders;
@@ -4793,20 +4889,18 @@ test("setting an already active MiniMax voice does not rewrite settings or refre
 
   assert.deepEqual(updates, []);
   assert.equal(refreshes, 0);
-  assert.deepEqual(info, ["MiniMax voice is already voice-abc."]);
+  assert.deepEqual(info, ["Qwen-TTS voice is already Cherry."]);
 });
 
-test("blank MiniMax voice ids warn without rewriting settings or refreshing", async () => {
+test("blank Qwen voices warn without rewriting settings or refreshing", async () => {
   const previous = {
-    minimaxTtsVoiceId: configValues.minimaxTtsVoiceId,
-    minimaxTtsModel: configValues.minimaxTtsModel,
+    qwenTtsVoice: configValues.qwenTtsVoice,
   };
   const previousGetConfiguration = mockVscode.workspace.getConfiguration;
   warningMessages.length = 0;
   const updates = [];
   let refreshes = 0;
-  configValues.minimaxTtsVoiceId = "voice-abc";
-  configValues.minimaxTtsModel = "speech-2.8-hd";
+  configValues.qwenTtsVoice = "Cherry";
   mockVscode.workspace.getConfiguration = (section) => {
     assert.equal(section, "englishTraining");
     return {
@@ -4824,7 +4918,7 @@ test("blank MiniMax voice ids warn without rewriting settings or refreshing", as
   });
 
   try {
-    await api.setMinimaxVoiceId("   ", true);
+    await api.setQwenTtsVoice("   ");
   } finally {
     Object.assign(configValues, previous);
     mockVscode.workspace.getConfiguration = previousGetConfiguration;
@@ -4833,7 +4927,7 @@ test("blank MiniMax voice ids warn without rewriting settings or refreshing", as
 
   assert.deepEqual(updates, []);
   assert.equal(refreshes, 0);
-  assert.deepEqual(warningMessages, ["MiniMax voice id cannot be empty."]);
+  assert.deepEqual(warningMessages, ["Qwen-TTS voice cannot be empty."]);
   warningMessages.length = 0;
 });
 
@@ -4863,9 +4957,93 @@ test("provider TTS voices are normalized before UI state or provider calls", () 
   assert.equal(api.normalizedMimoTtsVoice(), "Mia");
   assert.equal(api.trainingSettings().mimoTtsVoice, "Mia");
 
+  configValues.qwenTtsVoice = "Serena";
+  configValues.qwenTtsLanguageType = "German";
+  assert.equal(api.normalizedQwenTtsVoice(), "Serena");
+  assert.equal(api.normalizedQwenTtsLanguageType(), "German");
+  configValues.qwenTtsVoice = "not-a-real-qwen-voice";
+  configValues.qwenTtsLanguageType = "Klingon";
+  assert.equal(api.normalizedQwenTtsVoice(), "Cherry");
+  assert.equal(api.normalizedQwenTtsLanguageType(), "English");
+  assert.equal(api.trainingSettings().qwenTtsVoice, "Cherry");
+  assert.equal(api.trainingSettings().qwenTtsLanguageType, "English");
+
   configValues.openaiTtsVoice = "";
   configValues.geminiTtsVoice = "";
   configValues.mimoTtsVoice = "";
+  configValues.qwenTtsVoice = "";
+  configValues.qwenTtsLanguageType = "";
+});
+
+test("Qwen-TTS sends DashScope multimodal requests with documented fields", async () => {
+  const previous = {
+    qwenTtsEndpoint: configValues.qwenTtsEndpoint,
+    qwenTtsModel: configValues.qwenTtsModel,
+    qwenTtsVoice: configValues.qwenTtsVoice,
+    qwenTtsLanguageType: configValues.qwenTtsLanguageType,
+    qwenTtsInstructions: configValues.qwenTtsInstructions,
+  };
+  const originalFetch = global.fetch;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "english-training-qwen-tts-"));
+  const calls = [];
+  configValues.qwenTtsEndpoint = " https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation ";
+  configValues.qwenTtsModel = " qwen3-tts-instruct-flash ";
+  configValues.qwenTtsVoice = " Serena ";
+  configValues.qwenTtsLanguageType = " German ";
+  configValues.qwenTtsInstructions = " Speak warmly. ";
+  global.fetch = async (url, init) => {
+    calls.push({
+      url: String(url),
+      headers: init.headers,
+      body: JSON.parse(init.body),
+    });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        output: { audio: { data: Buffer.from("qwen-audio").toString("base64") } },
+      }),
+    };
+  };
+  const context = {
+    secrets: {
+      get: async (key) => key === "englishTraining.dashscopeApiKey" ? " dashscope-test " : "",
+    },
+  };
+
+  try {
+    const firstOut = path.join(tmpDir, "first.wav");
+    const secondOut = path.join(tmpDir, "second.wav");
+    await api.synthesizeWithConfiguredTts(context, "  Hallo.  ", firstOut, "qwen", {
+      ttsStyle: "This style should be overridden.",
+    });
+    configValues.qwenTtsModel = "qwen3-tts-flash";
+    configValues.qwenTtsInstructions = "Should not be sent to flash.";
+    await api.synthesizeWithConfiguredTts(context, "  Hello.  ", secondOut, "qwen", {
+      ttsStyle: "Also not sent.",
+    });
+
+    assert.equal(calls[0].url, "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation");
+    assert.equal(calls[0].headers.Authorization, "Bearer dashscope-test");
+    assert.equal(calls[0].body.model, "qwen3-tts-instruct-flash");
+    assert.deepEqual(calls[0].body.input, {
+      text: "Hallo.",
+      voice: "Serena",
+      language_type: "German",
+      instructions: "Speak warmly.",
+    });
+    assert.equal(calls[1].body.model, "qwen3-tts-flash");
+    assert.deepEqual(calls[1].body.input, {
+      text: "Hello.",
+      voice: "Serena",
+      language_type: "German",
+    });
+    assert.equal(fs.readFileSync(firstOut, "utf8"), "qwen-audio");
+    assert.equal(fs.readFileSync(secondOut, "utf8"), "qwen-audio");
+  } finally {
+    Object.assign(configValues, previous);
+    global.fetch = originalFetch;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test("MiMo TTS reads the selected text instead of a generic prompt", async () => {
@@ -5028,7 +5206,7 @@ test("provider text extractors skip nullish content parts defensively", () => {
   }), "Later candidate text.");
 });
 
-test("speech and TTS provider extractors skip malformed nested entries", () => {
+test("speech and TTS provider extractors skip malformed nested entries", async () => {
   assert.equal(api.extractOpenAIFileTranscript({
     segments: [
       null,
@@ -5075,20 +5253,18 @@ test("speech and TTS provider extractors skip malformed nested entries", () => {
   );
 
   assert.equal(
-    api.decodeMiniMaxAudioHex(Buffer.from("minimax-audio").toString("hex")).toString("utf8"),
-    "minimax-audio",
+    (await api.extractQwenTtsAudioData({
+      output: { audio: { data: Buffer.from("qwen-audio").toString("base64") } },
+    })).toString("utf8"),
+    "qwen-audio",
   );
-  assert.throws(
-    () => api.decodeMiniMaxAudioHex("f"),
-    /MiniMax TTS returned invalid hex audio data/,
+  await assert.rejects(
+    () => api.extractQwenTtsAudioData({ output: { audio: { data: "not base64 !!!!" } } }),
+    /Qwen-TTS returned invalid base64 audio data/,
   );
-  assert.throws(
-    () => api.decodeMiniMaxAudioHex("zz"),
-    /MiniMax TTS returned invalid hex audio data/,
-  );
-  assert.throws(
-    () => api.decodeMiniMaxAudioHex("   "),
-    /MiniMax TTS returned empty audio data/,
+  await assert.rejects(
+    () => api.extractQwenTtsAudioData({ output: { audio: {} } }),
+    /Qwen-TTS returned no output\.audio\.data or output\.audio\.url/,
   );
 
   const geminiAudio = api.extractGeminiInlineAudio({
@@ -5412,11 +5588,11 @@ test("maps audio MIME types to stable file extensions and output MIME types", ()
   assert.equal(api.extensionFromMime("audio/ogg"), "ogg");
   assert.equal(api.extensionFromMime("audio/mpeg"), "mp3");
   assert.equal(api.speechOutputExtension("gemini"), "wav");
-  assert.equal(api.speechOutputExtension(" MiniMax "), "mp3");
+  assert.equal(api.speechOutputExtension(" Qwen "), "wav");
   // OpenAI's extension now reflects englishTraining.openaiTtsResponseFormat
   // (wav is the low-latency default in 0.1.38; mp3 stays available). pcm has
-  // no container so we wrap it in WAV and report .wav. The MiniMax/unknown
-  // branch still falls back to mp3 because that provider returns mp3 bytes.
+  // no container so we wrap it in WAV and report .wav. Qwen/Gemini/MiMo write
+  // WAV containers, and unknown providers fall back to the OpenAI default.
   configValues.openaiTtsResponseFormat = "wav";
   assert.equal(api.speechOutputExtension("openai"), "wav");
   configValues.openaiTtsResponseFormat = "mp3";
@@ -5424,7 +5600,7 @@ test("maps audio MIME types to stable file extensions and output MIME types", ()
   configValues.openaiTtsResponseFormat = "pcm";
   assert.equal(api.speechOutputExtension("openai"), "wav");
   configValues.openaiTtsResponseFormat = "";
-  assert.equal(api.speechOutputExtension("minimax"), "mp3");
+  assert.equal(api.speechOutputExtension("qwen"), "wav");
   assert.equal(api.mimeTypeForAudioPath("/tmp/native-version.wav"), "audio/wav");
   assert.equal(api.mimeTypeForAudioPath("/tmp/native-version.mp3"), "audio/mpeg");
 });

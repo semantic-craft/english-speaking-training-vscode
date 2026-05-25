@@ -4,15 +4,15 @@ import * as vscode from "vscode";
 
 import type { JsonObject, ProviderName } from "./types.js";
 
-export const MINIMAX_ANTHROPIC_BASE_URL = "https://api.minimaxi.com/anthropic";
 export const MIMO_ANTHROPIC_BASE_URL = "https://token-plan-cn.xiaomimimo.com/anthropic";
 export const MIMO_OPENAI_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1";
-export const MINIMAX_TTS_BASE_URL = "https://api.minimaxi.com/v1/t2a_v2";
+export const QWEN_TTS_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+export const QWEN_TTS_INTL_ENDPOINT = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
 
 export const secretKeys: Record<ProviderName, string> = {
   openai: "englishTraining.openaiKey",
   gemini: "englishTraining.geminiKey",
-  minimax: "englishTraining.minimaxKey",
+  qwen: "englishTraining.dashscopeApiKey",
   mimo: "englishTraining.mimoKey",
 };
 
@@ -74,10 +74,10 @@ export function stamp(): string {
  * network (captive portal, dead VPN tunnel, a provider edge holding the
  * socket) makes `await fetch()` — or a stalled `await response.text()` —
  * never resolve and never reject, wedging the whole practice turn with no
- * self-recovery. AbortSignal.timeout stays armed through the body read too
- * (unlike a manually-cleared timer) and self-cleans, so the deadline covers
- * the entire request. 90s is well beyond any healthy LLM/STT/TTS response
- * but finite, so a true hang surfaces a clear, retryable error instead.
+ * self-recovery. The timeout controller stays attached until the caller has
+ * consumed the response body, so the deadline covers the whole provider
+ * round-trip. 90s is well beyond any healthy LLM/STT/TTS response but finite,
+ * so a true hang surfaces a clear, retryable error instead.
  */
 export const HTTP_REQUEST_TIMEOUT_MS = 90_000;
 
@@ -86,23 +86,100 @@ export async function fetchWithTimeout(
   init: RequestInit = {},
   timeoutMs: number = HTTP_REQUEST_TIMEOUT_MS,
 ): Promise<Response> {
-  try {
-    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
-  } catch (error) {
+  const externalSignal = init.signal;
+  const controller = new AbortController();
+  let timedOut = false;
+  let externallyAborted = false;
+  let cleanedUp = false;
+  let abortFromExternalSignal: (() => void) | undefined;
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const cleanup = () => {
+    if (cleanedUp) {
+      return;
+    }
+    cleanedUp = true;
+    clearTimeout(timeoutId);
+    if (abortFromExternalSignal) {
+      externalSignal?.removeEventListener("abort", abortFromExternalSignal);
+    }
+  };
+  timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+    cleanup();
+  }, timeoutMs);
+  abortFromExternalSignal = () => {
+    externallyAborted = true;
+    controller.abort();
+    cleanup();
+  };
+  if (externalSignal?.aborted) {
+    externallyAborted = true;
+    controller.abort();
+    cleanup();
+  } else {
+    externalSignal?.addEventListener("abort", abortFromExternalSignal, { once: true });
+  }
+  const classifyError = (error: unknown): Error => {
     if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-      throw new Error(
-        `Request timed out after ${Math.round(timeoutMs / 1000)}s — the network or provider ` +
+      if (externallyAborted || (externalSignal?.aborted && !timedOut)) {
+        return new Error("Request was cancelled.");
+      }
+      return new Error(
+        `Request timed out after ${formatTimeoutSeconds(timeoutMs)} — the network or provider ` +
           `did not respond. Check your connection and press ↻ to retry.`,
       );
     }
     if (error instanceof TypeError && looksLikeFetchNetworkFailure(error)) {
-      throw new Error(
+      return new Error(
         `Network request to ${fetchTargetLabel(url)} failed before a response arrived ` +
           `(${fetchFailureDetail(error)}). Check your VPN/proxy/DNS connection and press ↻ to retry.`,
       );
     }
-    throw error;
+    return error instanceof Error ? error : new Error(String(error));
+  };
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    return attachTimedBodyReaders(response, cleanup, classifyError);
+  } catch (error) {
+    cleanup();
+    throw classifyError(error);
   }
+}
+
+function attachTimedBodyReaders(
+  response: Response,
+  cleanup: () => void,
+  classifyError: (error: unknown) => Error,
+): Response {
+  const wrap = <T>(reader: () => Promise<T>) => async (): Promise<T> => {
+    try {
+      const value = await reader();
+      cleanup();
+      return value;
+    } catch (error) {
+      cleanup();
+      throw classifyError(error);
+    }
+  };
+  const mutable = response as Response & {
+    [key: string]: unknown;
+  };
+  for (const method of ["arrayBuffer", "blob", "formData", "json", "text"]) {
+    const reader = mutable[method];
+    if (typeof reader === "function") {
+      mutable[method] = wrap(reader.bind(response) as () => Promise<unknown>);
+    }
+  }
+  return response;
+}
+
+function formatTimeoutSeconds(timeoutMs: number): string {
+  if (timeoutMs < 1000) {
+    return `${timeoutMs}ms`;
+  }
+  const seconds = Math.round(timeoutMs / 1000);
+  return `${seconds}s`;
 }
 
 function looksLikeFetchNetworkFailure(error: Error): boolean {
@@ -218,13 +295,24 @@ export async function getRequiredKey(
   context: vscode.ExtensionContext,
   provider: ProviderName,
 ): Promise<string> {
-  const key = (await context.secrets.get(secretKeys[provider]) || "").trim();
+  const key = storedOrEnvApiKey(await context.secrets.get(secretKeys[provider]), provider);
   if (!key) {
     throw new Error(
       `Missing ${providerLabel(provider)} API key. Open the Command Palette and run “${providerKeyCommandTitle(provider)}”.`,
     );
   }
   return key;
+}
+
+export function storedOrEnvApiKey(stored: unknown, provider: ProviderName): string {
+  const storedKey = stringValue(stored).trim();
+  if (storedKey) {
+    return storedKey;
+  }
+  if (provider === "qwen") {
+    return stringValue(process.env.DASHSCOPE_API_KEY).trim();
+  }
+  return "";
 }
 
 // Exact Command Palette titles from package.json `contributes.commands`.
@@ -234,7 +322,7 @@ export function providerKeyCommandTitle(provider: ProviderName): string {
   const titles: Record<ProviderName, string> = {
     openai: "English Training: Configure OpenAI API Key",
     gemini: "English Training: Configure Gemini API Key",
-    minimax: "English Training: Configure MiniMax API Key",
+    qwen: "English Training: Configure DashScope API Key",
     mimo: "English Training: Configure Xiaomi MiMo API Key",
   };
   return titles[provider];
@@ -243,7 +331,7 @@ export function providerKeyCommandTitle(provider: ProviderName): string {
 export function providerLabel(provider: ProviderName): string {
   if (provider === "openai") return "OpenAI";
   if (provider === "gemini") return "Gemini";
-  if (provider === "minimax") return "MiniMax";
+  if (provider === "qwen") return "Qwen-TTS";
   return "MiMo";
 }
 
@@ -251,7 +339,7 @@ export function isProviderName(value: unknown): value is ProviderName {
   return (
     value === "openai" ||
     value === "gemini" ||
-    value === "minimax" ||
+    value === "qwen" ||
     value === "mimo"
   );
 }
@@ -275,7 +363,7 @@ export function isAudioUnderstandingProvider(value: unknown): value is ProviderN
 
 export function isTtsProvider(value: unknown): value is ProviderName {
   return (
-    value === "minimax" || value === "gemini" || value === "openai" || value === "mimo"
+    value === "qwen" || value === "gemini" || value === "openai" || value === "mimo"
   );
 }
 

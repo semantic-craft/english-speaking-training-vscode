@@ -141,7 +141,7 @@ export const MATERIALS_GUIDE_MD = [
   "2. opens a provider-agnostic generation prompt that embeds the full Card",
   "   Schema contract plus one worked example.",
   "",
-  "Paste that prompt into MiniMax, Gemini, Kimi, OpenAI, or any other model.",
+"Paste that prompt into OpenAI, Gemini, MiMo, or any other capable model.",
   "It returns two JSON blocks (`english-training.json` and `followup-drill.json`)",
   "this extension renders with no manual fixes — the prosody and image fields",
   "are constrained to the exact enumerations the sidebar understands.",

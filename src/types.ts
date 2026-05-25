@@ -4,7 +4,7 @@ export type JsonObject = Record<string, unknown>;
 export type ProviderName =
   | "openai"
   | "gemini"
-  | "minimax"
+  | "qwen"
   | "mimo";
 export type ActiveMaterialsSource = "local";
 export type KeyAvailability = Record<ProviderName, boolean>;
@@ -105,8 +105,11 @@ export interface TrainingState {
     mimoTtsBaseUrl: string;
     mimoTtsModel: string;
     mimoTtsVoice: string;
-    minimaxTtsModel: string;
-    minimaxTtsVoiceId: string;
+    qwenTtsEndpoint: string;
+    qwenTtsModel: string;
+    qwenTtsVoice: string;
+    qwenTtsLanguageType: string;
+    qwenTtsInstructions: string;
     ttsSpeed: number;
     recorderBackend: string;
     preferredMicrophoneName: string;

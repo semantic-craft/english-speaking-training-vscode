@@ -11,6 +11,7 @@ import {
   normalizeTtsSpeed,
   providerLabel,
   secretKeys,
+  storedOrEnvApiKey,
   stringValue,
   userConfigurationTarget,
 } from "../core.js";
@@ -28,10 +29,7 @@ export async function migrateGeminiModelDefaults(): Promise<boolean> {
   // the current default so a now-unrouteable value can't wedge the coach step.
   changed = (await migrateProviderSetting(settings, "coachProvider", "deepseek", "openai")) || changed;
   changed = (await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "openai")) || changed;
-  // NOTE: do not migrate `ttsProvider: minimax`. MiniMax is a currently
-  // supported, UI-selectable speech-output provider. Migrating it here ran on
-  // every activation and silently reverted a user's deliberate MiniMax TTS
-  // choice back to Gemini after each VS Code restart.
+  changed = (await migrateProviderSetting(settings, "ttsProvider", "minimax", "qwen")) || changed;
   changed = (await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-flash", "gemini-3-flash-preview")) || changed;
   changed = (await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-pro", "gemini-3.1-pro-preview")) || changed;
   changed = (await migrateGeminiSetting(settings, "geminiAudioUnderstandingModel", "gemini-2.5-flash", "gemini-3-flash-preview")) || changed;
@@ -90,7 +88,7 @@ export async function apiKeyAvailability(context: vscode.ExtensionContext): Prom
   return {
     openai: Boolean((await context.secrets.get(secretKeys.openai) || "").trim()),
     gemini: Boolean((await context.secrets.get(secretKeys.gemini) || "").trim()),
-    minimax: Boolean((await context.secrets.get(secretKeys.minimax) || "").trim()),
+    qwen: Boolean(storedOrEnvApiKey(await context.secrets.get(secretKeys.qwen), "qwen")),
     mimo: Boolean((await context.secrets.get(secretKeys.mimo) || "").trim()),
   };
 }
@@ -128,7 +126,7 @@ export async function configureApiKey(
 }
 
 export async function pickAndConfigureProviderKey(context: vscode.ExtensionContext): Promise<void> {
-  const providers: ProviderName[] = ["openai", "gemini", "minimax", "mimo"];
+  const providers: ProviderName[] = ["openai", "gemini", "qwen", "mimo"];
   const availability = await apiKeyAvailability(context);
   const items: (vscode.QuickPickItem & { provider: ProviderName })[] = providers.map((provider) => ({
     provider,
@@ -370,32 +368,20 @@ function parseTtsSpeedInput(speed: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-export async function setMinimaxVoiceId(voiceId: unknown, pinTurbo: boolean): Promise<void> {
+export async function setQwenTtsVoice(voiceId: unknown): Promise<void> {
   const trimmedVoiceId = stringValue(voiceId).trim();
   if (!trimmedVoiceId) {
-    vscode.window.showWarningMessage("MiniMax voice id cannot be empty.");
+    vscode.window.showWarningMessage("Qwen-TTS voice cannot be empty.");
     return;
   }
   const settings = vscode.workspace.getConfiguration("englishTraining");
-  const currentVoice = configString("minimaxTtsVoiceId");
-  const currentModel = configString("minimaxTtsModel", "speech-2.8-hd");
-  if (currentVoice === trimmedVoiceId && (!pinTurbo || currentModel === "speech-2.8-turbo")) {
-    vscode.window.showInformationMessage(`MiniMax voice is already ${trimmedVoiceId}.`);
+  const currentVoice = configString("qwenTtsVoice", "Cherry");
+  if (currentVoice === trimmedVoiceId) {
+    vscode.window.showInformationMessage(`Qwen-TTS voice is already ${trimmedVoiceId}.`);
     return;
   }
-  const target = userConfigurationTarget();
-  await settings.update("minimaxTtsVoiceId", trimmedVoiceId, target);
-  if (pinTurbo) {
-    if (currentModel !== "speech-2.8-turbo") {
-      await settings.update("minimaxTtsModel", "speech-2.8-turbo", target);
-      vscode.window.showInformationMessage(
-        `MiniMax voice set to ${trimmedVoiceId} (cloned voice — pinned model to speech-2.8-turbo to avoid HD billing).`,
-      );
-      await refreshAll();
-      return;
-    }
-  }
-  vscode.window.showInformationMessage(`MiniMax voice set to ${trimmedVoiceId}.`);
+  await settings.update("qwenTtsVoice", trimmedVoiceId, userConfigurationTarget());
+  vscode.window.showInformationMessage(`Qwen-TTS voice set to ${trimmedVoiceId}.`);
   await refreshAll();
 }
 
