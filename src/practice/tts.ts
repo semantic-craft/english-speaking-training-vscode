@@ -7,6 +7,10 @@ import {
   normalizedMimoTtsVoice,
   normalizedOpenAITtsResponseFormat,
   normalizedOpenAITtsVoice,
+  normalizedQwenTtsEndpoint,
+  normalizedQwenTtsLanguageType,
+  normalizedQwenTtsModel,
+  normalizedQwenTtsVoice,
   normalizedTtsProvider,
 } from "../runtime/settings.js";
 import {
@@ -16,7 +20,6 @@ import {
   fetchWithTimeout,
   getRequiredKey,
   MIMO_OPENAI_BASE_URL,
-  MINIMAX_TTS_BASE_URL,
   normalizedProviderName,
   normalizeTtsSpeed,
   parseJsonObject,
@@ -30,14 +33,14 @@ export function speechOutputFileName(provider: string): string {
 
 export function normalizeSpeechOutputProvider(provider: unknown): string {
   const normalized = normalizedProviderName(provider);
-  return normalized === "minimax" || normalized === "gemini" || normalized === "openai" || normalized === "mimo"
+  return normalized === "qwen" || normalized === "gemini" || normalized === "openai" || normalized === "mimo"
     ? normalized
     : "openai";
 }
 
 export function speechOutputExtension(provider: string): string {
   const selectedProvider = normalizeSpeechOutputProvider(provider);
-  if (selectedProvider === "gemini" || selectedProvider === "mimo") return "wav";
+  if (selectedProvider === "gemini" || selectedProvider === "mimo" || selectedProvider === "qwen") return "wav";
   if (selectedProvider === "openai") {
     const fmt = openaiResponseFormat();
     // pcm has no container; we wrap it in a .wav header before writing.
@@ -78,9 +81,10 @@ export interface SynthesizeOptions {
   speedOverride?: number;
   /**
    * Optional one-off style direction. OpenAI maps it to `instructions`
-   * unless the user has pinned englishTraining.openaiTtsInstructions; MiMo
-   * sends it as an optional user style prompt while keeping the text to read
-   * in the assistant message.
+   * unless the user has pinned englishTraining.openaiTtsInstructions. Qwen
+   * sends it only when qwen3-tts-instruct-flash is selected. MiMo sends it
+   * as an optional user style prompt while keeping the text to read in the
+   * assistant message.
    */
   ttsStyle?: string;
 }
@@ -107,8 +111,8 @@ export async function synthesizeWithConfiguredTts(
     return { provider: selectedProvider, filePath: await synthesizeMiMo(context, text, outPath, options) };
   }
   return {
-    provider: "minimax",
-    filePath: await synthesizeMiniMax(context, text, outPath, options.speedOverride),
+    provider: "qwen",
+    filePath: await synthesizeQwen(context, text, outPath, options),
   };
 }
 
@@ -208,72 +212,81 @@ async function synthesizeGemini(
   return outPath;
 }
 
-async function synthesizeMiniMax(
+async function synthesizeQwen(
   context: vscode.ExtensionContext,
   text: string,
   outPath: string,
-  speedOverride?: number,
+  options: SynthesizeOptions = {},
 ): Promise<string> {
-  const apiKey = await getRequiredKey(context, "minimax");
-  const ttsBaseUrl = configString("minimaxTtsBaseUrl", MINIMAX_TTS_BASE_URL);
-  const response = await fetchWithTimeout(ttsBaseUrl, {
+  const trimmedText = text.trim();
+  if (!trimmedText) {
+    throw new Error("Qwen-TTS text was empty.");
+  }
+  const apiKey = await getRequiredKey(context, "qwen");
+  const model = normalizedQwenTtsModel();
+  const input: JsonObject = {
+    text: trimmedText,
+    voice: normalizedQwenTtsVoice(),
+    language_type: normalizedQwenTtsLanguageType(),
+  };
+  const instructions = qwenSupportsInstructions(model)
+    ? configString("qwenTtsInstructions") || (options.ttsStyle || "").trim()
+    : "";
+  if (instructions) {
+    input.instructions = instructions;
+  }
+  const response = await fetchWithTimeout(normalizedQwenTtsEndpoint(), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: configString("minimaxTtsModel", "speech-2.8-hd"),
-      text,
-      stream: false,
-      output_format: "hex",
-      language_boost: "auto",
-      voice_setting: {
-        voice_id: configString("minimaxTtsVoiceId", "English_expressive_narrator"),
-        speed: resolveSpeed(speedOverride),
-        vol: 1,
-        pitch: 0,
-      },
-      audio_setting: {
-        sample_rate: 32000,
-        bitrate: 128000,
-        format: "mp3",
-        channel: 1,
-      },
+      model,
+      input,
     }),
   });
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(`MiniMax TTS failed (${response.status}): ${body.slice(0, 1200)}`);
+    throw new Error(`Qwen-TTS failed (${response.status}): ${body.slice(0, 1200)}`);
   }
-  const parsed = parseJsonObject(body, "MiniMax TTS");
-  const baseResp = (parsed.base_resp as JsonObject | undefined) ?? {};
-  if (Number(baseResp.status_code ?? 0) !== 0) {
-    const statusCode = stringValue(baseResp.status_code);
-    const statusMsg = stringValue(baseResp.status_msg);
-    if (statusCode === "2049") {
-      throw new Error(
-        `MiniMax TTS API error 2049: invalid api key for ${ttsBaseUrl}. ` +
-          `For the mainland/resource-pack key, use ${MINIMAX_TTS_BASE_URL} and reconfigure the MiniMax key.`,
-      );
-    }
-    throw new Error(`MiniMax TTS API error ${statusCode}: ${statusMsg}`);
+  const parsed = parseJsonObject(body, "Qwen-TTS");
+  if (parsed.code || parsed.message) {
+    throw new Error(`Qwen-TTS API error ${stringValue(parsed.code) || "unknown"}: ${stringValue(parsed.message)}`);
   }
-  const audioHex = stringValue((parsed.data as JsonObject | undefined)?.audio);
-  fs.writeFileSync(outPath, decodeMiniMaxAudioHex(audioHex));
+  fs.writeFileSync(outPath, await extractQwenTtsAudioData(parsed));
   return outPath;
 }
 
-export function decodeMiniMaxAudioHex(audioHex: string): Buffer {
-  const trimmed = audioHex.trim();
-  if (!trimmed) {
-    throw new Error("MiniMax TTS returned empty audio data.");
+function qwenSupportsInstructions(model: string): boolean {
+  return model === "qwen3-tts-instruct-flash";
+}
+
+export async function extractQwenTtsAudioData(parsed: JsonObject): Promise<Buffer> {
+  const output = parsed.output && typeof parsed.output === "object" && !Array.isArray(parsed.output)
+    ? parsed.output as JsonObject
+    : undefined;
+  const audio = output?.audio && typeof output.audio === "object" && !Array.isArray(output.audio)
+    ? output.audio as JsonObject
+    : undefined;
+  const data = stringValue(audio?.data);
+  if (data) {
+    return decodeBase64AudioData(data, "Qwen-TTS");
   }
-  if (trimmed.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(trimmed)) {
-    throw new Error("MiniMax TTS returned invalid hex audio data.");
+  const url = stringValue(audio?.url);
+  if (url) {
+    return downloadQwenAudioUrl(url);
   }
-  const audio = Buffer.from(trimmed, "hex");
-  return ensureNonEmptyAudioData(audio, "MiniMax TTS");
+  throw new Error("Qwen-TTS returned no output.audio.data or output.audio.url.");
+}
+
+async function downloadQwenAudioUrl(url: string): Promise<Buffer> {
+  const response = await fetchWithTimeout(url);
+  const payload = Buffer.from(await response.arrayBuffer());
+  if (!response.ok) {
+    throw new Error(`Qwen-TTS audio download failed (${response.status}): ${payload.toString("utf8").slice(0, 1200)}`);
+  }
+  return ensureNonEmptyAudioData(payload, "Qwen-TTS");
 }
 
 async function synthesizeMiMo(

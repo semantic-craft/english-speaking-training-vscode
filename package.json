@@ -57,8 +57,8 @@
         "category": "English Training"
       },
       {
-        "command": "englishTraining.configureMiniMaxKey",
-        "title": "English Training: Configure MiniMax API Key",
+        "command": "englishTraining.configureDashScopeKey",
+        "title": "English Training: Configure DashScope API Key",
         "category": "English Training"
       },
       {
@@ -97,8 +97,8 @@
         "category": "English Training"
       },
       {
-        "command": "englishTraining.useMiniMaxTts",
-        "title": "English Training: Use MiniMax Speech Output",
+        "command": "englishTraining.useQwenTts",
+        "title": "English Training: Use Qwen-TTS Speech Output",
         "category": "English Training"
       },
       {
@@ -232,11 +232,11 @@
           "default": "openai",
           "enum": [
             "gemini",
-            "minimax",
+            "qwen",
             "openai",
             "mimo"
           ],
-          "description": "Speech output provider used to generate the native-version follow-along audio. Default uses OpenAI gpt-4o-mini-tts with instructions-based style control (marin voice); Gemini, MiniMax, and Xiaomi MiMo remain available as fallbacks."
+          "description": "Speech output provider used to generate the native-version follow-along audio. Default uses OpenAI gpt-4o-mini-tts with instructions-based style control (marin voice); Gemini, Qwen-TTS, and Xiaomi MiMo remain available as fallbacks."
         },
         "englishTraining.openaiRealtimeTranscriptionModel": {
           "type": "string",
@@ -373,7 +373,7 @@
         "englishTraining.mimoAnthropicBaseUrl": {
           "type": "string",
           "default": "https://token-plan-cn.xiaomimimo.com/anthropic",
-          "description": "Xiaomi MiMo Token Plan Anthropic-compatible base URL. Used for mimo-v2.5 coach via /v1/messages. Distinct from MiniMax — separate vendor, separate key."
+          "description": "Xiaomi MiMo Token Plan Anthropic-compatible base URL. Used for mimo-v2.5 coach via /v1/messages. Distinct vendor and key from DashScope/Qwen-TTS."
         },
         "englishTraining.mimoCoachModel": {
           "type": "string",
@@ -423,24 +423,54 @@
           ],
           "description": "Xiaomi MiMo built-in voice for native-version audio. Mia and Chloe are female; Milo and Dean are male."
         },
-        "englishTraining.minimaxTtsBaseUrl": {
+        "englishTraining.qwenTtsEndpoint": {
           "type": "string",
-          "default": "https://api.minimaxi.com/v1/t2a_v2",
-          "description": "MiniMax synchronous T2A endpoint."
-        },
-        "englishTraining.minimaxTtsModel": {
-          "type": "string",
-          "default": "speech-2.8-hd",
+          "default": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
           "enum": [
-            "speech-2.8-hd",
-            "speech-2.8-turbo"
+            "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
           ],
-          "description": "MiniMax speech model for native-version audio. speech-2.8-hd is highest fidelity; speech-2.8-turbo is faster."
+          "description": "DashScope Qwen-TTS multimodal generation endpoint. Use the intl endpoint only with a matching international DashScope API key."
         },
-        "englishTraining.minimaxTtsVoiceId": {
+        "englishTraining.qwenTtsModel": {
           "type": "string",
-          "default": "English_expressive_narrator",
-          "description": "MiniMax voice id for English follow-along audio."
+          "default": "qwen3-tts-flash",
+          "enum": [
+            "qwen3-tts-flash",
+            "qwen3-tts-instruct-flash"
+          ],
+          "description": "Qwen-TTS model used for native-version audio. qwen3-tts-flash is the default; qwen3-tts-instruct-flash accepts optional speaking instructions."
+        },
+        "englishTraining.qwenTtsVoice": {
+          "type": "string",
+          "default": "Cherry",
+          "enum": [
+            "Cherry",
+            "Serena",
+            "Ethan",
+            "Chelsie",
+            "Momo",
+            "Vivian",
+            "Moon",
+            "Maia"
+          ],
+          "description": "Qwen-TTS voice used for native-version follow-along audio."
+        },
+        "englishTraining.qwenTtsLanguageType": {
+          "type": "string",
+          "default": "English",
+          "enum": [
+            "Auto",
+            "Chinese",
+            "English",
+            "German"
+          ],
+          "description": "Qwen-TTS language_type sent with speech-output requests. Use Auto for mixed or uncertain language; a specific language usually improves single-language synthesis quality."
+        },
+        "englishTraining.qwenTtsInstructions": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Qwen-TTS speaking instructions. Sent only when qwen3-tts-instruct-flash is selected."
         },
         "englishTraining.ttsSpeed": {
           "type": "number",

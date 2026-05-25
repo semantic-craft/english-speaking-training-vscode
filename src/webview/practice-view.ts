@@ -32,9 +32,9 @@ import {
   configureCoreRouteKeys,
   configureLocalMaterialsRoot,
   setGeminiOnlyProviders,
-  setMinimaxVoiceId,
   setOpenAIStackProviders,
   setProviderSetting,
+  setQwenTtsVoice,
   setRecommendedHybridProviders,
   setTtsSpeedConfig,
 } from "../commands/provider-routes.js";
@@ -225,18 +225,18 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
         }
         return;
       }
-      if (payload.type === "setMinimaxVoice") {
+      if (payload.type === "setQwenVoice") {
         const voiceId = stringValue(payload.voiceId).trim();
         const requestId = positiveRequestId(payload.requestId);
         if (voiceId) {
           await this.runOptionalSidebarCommand(
             view,
-            "setMinimaxVoice",
+            "setQwenVoice",
             requestId,
-            () => setMinimaxVoiceId(voiceId, explicitTruePayloadFlag(payload.pinTurbo)),
+            () => setQwenTtsVoice(voiceId),
           );
         } else {
-          this.postOptionalSidebarError(view, "setMinimaxVoice", requestId, "MiniMax voice id was missing.");
+          this.postOptionalSidebarError(view, "setQwenVoice", requestId, "Qwen-TTS voice was missing.");
         }
         return;
       }
@@ -488,9 +488,9 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
     const slowSpeed = Number.isFinite(speed) && speed > 0 ? Math.max(0.5, Math.min(1.5, speed)) : 0.7;
     this.postToActiveView(view, { type: "slowReadStatus", target, ...request, message: "Re-reading…" });
     // For slow re-reads the learner is shadowing word-by-word, so we ask the
-    // TTS to over-articulate and pause between sense groups. The OpenAI
-    // instructions field carries this directly; Gemini/MiniMax/MiMo ignore
-    // the extra hint and just honor the speed override.
+    // TTS to over-articulate and pause between sense groups. OpenAI carries
+    // this directly; Qwen carries it only on the instruct model, while Gemini
+    // and MiMo ignore the style hint and just honor their normal route.
     const slowInstructions =
       "Read this sentence very slowly and clearly. Over-articulate each word, " +
       "lengthen the stressed syllables, and pause briefly between sense groups so " +
@@ -826,17 +826,6 @@ function firstPayloadString(obj: JsonObject | undefined, ...keys: string[]): str
     }
   }
   return "";
-}
-
-function explicitTruePayloadFlag(value: unknown): boolean {
-  if (value === true || value === 1) {
-    return true;
-  }
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    return normalized === "true" || normalized === "1";
-  }
-  return false;
 }
 
 function dedupeUris(uris: vscode.Uri[]): vscode.Uri[] {

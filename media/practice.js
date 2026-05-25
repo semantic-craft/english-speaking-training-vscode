@@ -407,7 +407,7 @@
       if (setting === "audioUnderstandingProvider") {
         return provider === "gemini" || provider === "openai" || provider === "mimo" ? provider : "openai";
       }
-      return provider === "minimax" || provider === "gemini" || provider === "openai" || provider === "mimo" ? provider : "openai";
+      return provider === "qwen" || provider === "gemini" || provider === "openai" || provider === "mimo" ? provider : "openai";
     }
 
     function activeRouteProviders(settings) {
@@ -663,7 +663,7 @@
           ${scalarField(state, "sourceLabel") ? '<span class="chip">' + esc(shortSourceLabel(scalarField(state, "sourceLabel"))) + '</span>' : ''}
         `;
         renderProviderPanel(settings, state.keys || {});
-        renderMinimaxVoicePicker(settings);
+        renderQwenVoicePicker(settings);
         renderSpeedChips(settings);
         applyTransientAudioBusyState();
         applySidebarCommandBusyState();
@@ -732,37 +732,21 @@
       });
     }
 
-    const MINIMAX_VOICE_OPTIONS = [
-      { group: "Female (US)", id: "English_CalmWoman", label: "Calm Woman", favorite: true },
-      { group: "Female (US)", id: "English_Upbeat_Woman", label: "Upbeat Woman" },
-      { group: "Female (US)", id: "English_AttractiveGirl", label: "Attractive" },
-      { group: "Female (US)", id: "English_Kind-heartedGirl", label: "Kind-Hearted" },
-      { group: "Female (US)", id: "English_FriendlyNeighbor", label: "Friendly Neighbor" },
-      { group: "Female (US)", id: "English_SereneWoman", label: "Serene" },
-      { group: "Female (US)", id: "English_radiant_girl", label: "Radiant" },
-      { group: "Female (US)", id: "English_nursery_teacher_vv2", label: "Nursery Teacher" },
-      { group: "Female (UK)", id: "English_Graceful_Lady", label: "Graceful Lady", favorite: true },
-      { group: "Female (UK)", id: "English_compelling_lady1", label: "Compelling Lady" },
-      { group: "Male (US)", id: "English_Trustworth_Man", label: "Trustworthy", favorite: true },
-      { group: "Male (US)", id: "English_Diligent_Man", label: "Diligent" },
-      { group: "Male (US)", id: "English_Gentle-voiced_man", label: "Gentle-voiced" },
-      { group: "Male (US)", id: "English_FriendlyPerson", label: "Friendly Guy" },
-      { group: "Male (US)", id: "English_GentleTeacher", label: "Gentle Teacher" },
-      { group: "Male (US)", id: "English_engaging_instructor_vv2", label: "Engaging Instructor", favorite: true },
-      { group: "Male (US)", id: "English_magnetic_voiced_man", label: "Magnetic Voice" },
-      { group: "Male (UK)", id: "English_expressive_narrator", label: "Expressive Narrator", favorite: true },
-      { group: "Male (UK)", id: "English_Magnetic_Male_2", label: "Magnetic Man" },
-      { group: "Male (AU)", id: "English_Aussie_Bloke", label: "Aussie Bloke", favorite: true },
-      { group: "Cloned (Turbo)", id: "anne_v001", label: "Anne (clone)", cloned: true },
-      { group: "Cloned (Turbo)", id: "julianne_v004", label: "Julianne (clone)", cloned: true },
-      { group: "Cloned (Turbo)", id: "marylouise_v004", label: "Mary Louise (clone)", cloned: true },
-      { group: "Cloned (Turbo)", id: "audie_v005", label: "Audie (clone)", cloned: true },
+    const QWEN_VOICE_OPTIONS = [
+      { group: "Recommended", id: "Cherry", label: "Cherry", favorite: true },
+      { group: "Recommended", id: "Serena", label: "Serena", favorite: true },
+      { group: "Recommended", id: "Ethan", label: "Ethan", favorite: true },
+      { group: "Character", id: "Chelsie", label: "Chelsie" },
+      { group: "Character", id: "Momo", label: "Momo" },
+      { group: "Character", id: "Vivian", label: "Vivian" },
+      { group: "Narration", id: "Moon", label: "Moon", favorite: true },
+      { group: "Narration", id: "Maia", label: "Maia", favorite: true },
     ];
 
     let voicePickerExpanded = false;
 
     const PROVIDER_LABELS = {
-      minimax: "MiniMax",
+      qwen: "Qwen-TTS",
       mimo: "MiMo",
       openai: "OpenAI",
       gemini: "Gemini"
@@ -792,7 +776,18 @@
           ],
         },
         { value: "gemini", label: "Gemini", note: "alternate TTS", modelSetting: "geminiTtsModel", extraSetting: "geminiTtsVoice", extraLabel: "Voice" },
-        { value: "minimax", label: "MiniMax", note: "optional fallback", modelSetting: "minimaxTtsModel" },
+        {
+          value: "qwen",
+          label: "Qwen-TTS",
+          note: "DashScope speech synthesis",
+          modelSetting: "qwenTtsModel",
+          extraSettings: [
+            { setting: "qwenTtsVoice", label: "Voice" },
+            { setting: "qwenTtsLanguageType", label: "Language" },
+            { setting: "qwenTtsInstructions", label: "Style" },
+            { setting: "qwenTtsEndpoint", label: "Endpoint" },
+          ],
+        },
         { value: "mimo", label: "MiMo", note: "Xiaomi voices", modelSetting: "mimoTtsModel", extraSetting: "mimoTtsVoice", extraLabel: "Voice" },
       ],
     };
@@ -939,7 +934,7 @@
 
     function keyStripHtml(keys) {
       const safeKeys = objectValue(keys) || {};
-      return '<div class="key-strip">' + ["gemini", "openai", "minimax", "mimo"].map((name) => {
+      return '<div class="key-strip">' + ["gemini", "openai", "qwen", "mimo"].map((name) => {
         const saved = providerKeySaved(safeKeys, name);
         return '<button class="key-pill ' + (saved ? "saved" : "") + '" data-key="' + esc(name) + '">' + esc(providerLabel(name)) + ': ' + (saved ? "saved" : "missing") + '</button>';
       }).join("") + '</div>';
@@ -965,7 +960,7 @@
         providerRoleHtml("Speech in", "audioUnderstandingProvider", safeSettings, safeKeys),
         providerRoleHtml("Speech out", "ttsProvider", safeSettings, safeKeys),
         recorderSettingsHtml(safeSettings),
-        '<div class="field" id="minimaxVoiceField" hidden><span class="label">MiniMax voice</span><div class="row" id="minimaxVoicePicker"></div></div>',
+        '<div class="field" id="qwenVoiceField" hidden><span class="label">Qwen-TTS voice</span><div class="row" id="qwenVoicePicker"></div></div>',
         keyStripHtml(safeKeys),
       ].join("");
     }
@@ -977,24 +972,24 @@
       return '<button class="secondary' + active + '" data-voice-id="' + esc(opt.id) + '"' + cloned + ' title="' + esc(opt.id) + '">' + esc(opt.label) + tag + '</button>';
     }
 
-    function renderMinimaxVoicePicker(settings) {
-      const field = $("minimaxVoiceField");
-      const picker = $("minimaxVoicePicker");
+    function renderQwenVoicePicker(settings) {
+      const field = $("qwenVoiceField");
+      const picker = $("qwenVoicePicker");
       if (!field || !picker) return;
       const safeSettings = objectValue(settings) || {};
       const ttsProvider = scalarField(safeSettings, "ttsProvider");
-      if (ttsProvider !== "minimax") {
+      if (ttsProvider !== "qwen") {
         field.hidden = true;
         picker.innerHTML = "";
         return;
       }
       field.hidden = false;
-      const current = scalarField(safeSettings, "minimaxTtsVoiceId");
+      const current = scalarField(safeSettings, "qwenTtsVoice");
       const fragments = [];
 
       if (voicePickerExpanded) {
         const groups = new Map();
-        for (const option of MINIMAX_VOICE_OPTIONS) {
+        for (const option of QWEN_VOICE_OPTIONS) {
           if (!groups.has(option.group)) groups.set(option.group, []);
           groups.get(option.group).push(option);
         }
@@ -1006,19 +1001,19 @@
         }
         fragments.push('<button type="button" class="voice-toggle" data-voice-toggle="collapse" title="Show favorites only">Hide ⌃</button>');
       } else {
-        const favorites = MINIMAX_VOICE_OPTIONS.filter((opt) => opt.favorite);
+        const favorites = QWEN_VOICE_OPTIONS.filter((opt) => opt.favorite);
         const currentIsFavorite = favorites.some((opt) => opt.id === current);
         for (const opt of favorites) {
           fragments.push(voiceChipHtml(opt, current));
         }
         if (current && !currentIsFavorite) {
-          const activeOpt = MINIMAX_VOICE_OPTIONS.find((opt) => opt.id === current);
+          const activeOpt = QWEN_VOICE_OPTIONS.find((opt) => opt.id === current);
           if (activeOpt) {
             fragments.push('<span class="voice-group-label">Active</span>');
             fragments.push(voiceChipHtml(activeOpt, current));
           }
         }
-        const hiddenCount = MINIMAX_VOICE_OPTIONS.length - favorites.length;
+        const hiddenCount = QWEN_VOICE_OPTIONS.length - favorites.length;
         fragments.push('<button type="button" class="voice-toggle" data-voice-toggle="expand" title="Show all voices">All voices ⌄ <span class="voice-toggle-count">' + hiddenCount + '</span></button>');
       }
 
@@ -1028,14 +1023,13 @@
           if (blockSetupChangeDuringPractice()) return;
           const voiceId = datasetText(button, "voiceId");
           if (!voiceId) return;
-          const cloned = datasetText(button, "voiceCloned") === "1";
-          postSetupAction({ type: "setMinimaxVoice", voiceId, pinTurbo: cloned }, "Setting MiniMax voice", button);
+          postSetupAction({ type: "setQwenVoice", voiceId }, "Setting Qwen-TTS voice", button);
         });
       });
       picker.querySelectorAll("button[data-voice-toggle]").forEach((button) => {
         button.addEventListener("click", () => {
           voicePickerExpanded = datasetText(button, "voiceToggle") === "expand";
-          renderMinimaxVoicePicker(objectValue(state && state.settings) || safeSettings);
+          renderQwenVoicePicker(objectValue(state && state.settings) || safeSettings);
           applySidebarCommandBusyState();
         });
       });

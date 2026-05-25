@@ -76,7 +76,10 @@ test("sidebar model presets stay inside package configuration enums", () => {
     "geminiCoachModel",
     "geminiAudioUnderstandingModel",
     "mimoAudioUnderstandingModel",
-    "minimaxTtsModel",
+    "qwenTtsEndpoint",
+    "qwenTtsModel",
+    "qwenTtsVoice",
+    "qwenTtsLanguageType",
     "mimoTtsModel",
     "mimoTtsVoice",
     "geminiTtsModel",
@@ -107,8 +110,10 @@ test("runtime model strings are trimmed before UI state and provider calls", () 
     [settingsSource, /mimoCoachModel: configString\("mimoCoachModel", "mimo-v2\.5-pro"\)/],
     [settingsSource, /mimoAudioUnderstandingModel: configString\("mimoAudioUnderstandingModel", "mimo-v2\.5"\)/],
     [settingsSource, /mimoTtsModel: configString\("mimoTtsModel", "mimo-v2\.5-tts"\)/],
-    [settingsSource, /minimaxTtsModel: configString\("minimaxTtsModel", "speech-2\.8-hd"\)/],
-    [settingsSource, /minimaxTtsVoiceId: configString\("minimaxTtsVoiceId", "English_expressive_narrator"\)/],
+    [settingsSource, /qwenTtsEndpoint: normalizedQwenTtsEndpoint\(\)/],
+    [settingsSource, /qwenTtsModel: normalizedQwenTtsModel\(\)/],
+    [settingsSource, /qwenTtsVoice: normalizedQwenTtsVoice\(\)/],
+    [settingsSource, /qwenTtsLanguageType: normalizedQwenTtsLanguageType\(\)/],
     [coachSource, /configString\("mimoCoachModel", "mimo-v2\.5-pro"\)/],
     [coachSource, /configString\("geminiCoachModel", "gemini-3-flash-preview"\)/],
     [coachSource, /configString\("openaiCoachModel", "gpt-4o"\)/],
@@ -118,8 +123,9 @@ test("runtime model strings are trimmed before UI state and provider calls", () 
     [transcribeSource, /configString\("geminiAudioUnderstandingModel", "gemini-3-flash-preview"\)/],
     [ttsSource, /configString\("openaiTtsModel", "gpt-4o-mini-tts"\)/],
     [ttsSource, /configString\("geminiTtsModel", "gemini-3\.1-flash-tts-preview"\)/],
-    [ttsSource, /configString\("minimaxTtsModel", "speech-2\.8-hd"\)/],
-    [ttsSource, /configString\("minimaxTtsVoiceId", "English_expressive_narrator"\)/],
+    [ttsSource, /normalizedQwenTtsModel\(\)/],
+    [ttsSource, /normalizedQwenTtsVoice\(\)/],
+    [ttsSource, /normalizedQwenTtsLanguageType\(\)/],
     [ttsSource, /configString\("mimoTtsModel", "mimo-v2\.5-tts"\)/],
     [extensionSource, /const settings = trainingSettings\(\);[\s\S]*case "openaiCoachModel": return settings\.openaiCoachModel/],
     [extensionSource, /case "openaiTtsModel": return settings\.openaiTtsModel/],
@@ -215,10 +221,10 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(providerRoutesSource, /normalizedMigrationValue\(entry\[0\]\) === oldDefaultKey/);
   assert.match(providerRoutesSource, /const rawCurrent = settings\.get<unknown>\("ttsSpeed"\)/);
   assert.match(providerRoutesSource, /const currentIsCanonical = typeof rawCurrent === "number" && rawCurrent === clamped/);
-  assert.match(providerRoutesSource, /const currentVoice = configString\("minimaxTtsVoiceId"\)/);
-  assert.match(providerRoutesSource, /const currentModel = configString\("minimaxTtsModel", "speech-2\.8-hd"\)/);
+  assert.match(providerRoutesSource, /const currentVoice = configString\("qwenTtsVoice", "Cherry"\)/);
   assert.match(providerRoutesSource, /Boolean\(\(await context\.secrets\.get\(secretKeys\.openai\) \|\| ""\)\.trim\(\)\)/);
-  assert.match(coreSource, /const key = \(await context\.secrets\.get\(secretKeys\[provider\]\) \|\| ""\)\.trim\(\)/);
+  assert.match(coreSource, /await context\.secrets\.get\(secretKeys\[provider\]\)/);
+  assert.match(coreSource, /process\.env\.DASHSCOPE_API_KEY/);
   assert.match(practiceViewSource, /normalizedProviderName\(payload\.value\)/);
   assert.match(settingsSource, /configString\("recorderBackend", "macLocal"\)\.toLowerCase\(\)/);
   assert.match(settingsSource, /configString\("mimoAnthropicBaseUrl", MIMO_ANTHROPIC_BASE_URL\)/);
@@ -226,7 +232,10 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(settingsSource, /configString\("mimoTtsBaseUrl", MIMO_OPENAI_BASE_URL\)/);
   assert.match(ttsSource, /normalizedOpenAITtsResponseFormat\(\)/);
   assert.match(ttsSource, /normalizedProviderName\(provider\)/);
-  assert.match(ttsSource, /configString\("minimaxTtsBaseUrl", MINIMAX_TTS_BASE_URL\)/);
+  assert.match(ttsSource, /fetchWithTimeout\(normalizedQwenTtsEndpoint\(\)/);
+  assert.match(ttsSource, /language_type: normalizedQwenTtsLanguageType\(\)/);
+  assert.match(ttsSource, /qwenSupportsInstructions\(model\)/);
+  assert.match(ttsSource, /output\.audio\.data or output\.audio\.url/);
   assert.match(ttsSource, /configString\("mimoTtsBaseUrl", MIMO_OPENAI_BASE_URL\)/);
   assert.match(ttsSource, /chatCompletionsUrl\(baseUrl\)/);
   assert.match(ttsSource, /provider = normalizedTtsProvider\(\)/);
@@ -252,6 +261,7 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(extensionSource, /function configSettingAllowsBlank\(setting: ConfigSettingName\): boolean \{[\s\S]*openaiTtsInstructions/);
   assert.match(extensionSource, /function configSettingAllowsCustom\(setting: ConfigSettingName\): boolean \{[\s\S]*openaiTranscriptionMode[\s\S]*openaiTtsResponseFormat[\s\S]*recorderBackend[\s\S]*openaiTtsVoice[\s\S]*geminiTtsVoice[\s\S]*mimoTtsVoice/);
   assert.match(mediaSource, /value: "mimo", label: "MiMo", note: "Xiaomi audio understanding", modelSetting: "mimoAudioUnderstandingModel"/);
+  assert.match(mediaSource, /value: "qwen"[\s\S]*label: "Qwen-TTS"[\s\S]*modelSetting: "qwenTtsModel"[\s\S]*setting: "qwenTtsLanguageType", label: "Language"/);
   assert.match(mediaSource, /value: "mimo", label: "MiMo", note: "Xiaomi voices", modelSetting: "mimoTtsModel", extraSetting: "mimoTtsVoice"/);
   assert.match(mediaSource, /Recorder started after a delay/);
   assert.match(mediaSource, /recorderMode = "native"/);
@@ -400,8 +410,7 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(practiceViewSource, /function firstPayloadString\(obj: JsonObject \| undefined, \.\.\.keys: string\[\]\): string \{[\s\S]*stringValue\(obj\?\.\[key\]\)\.trim\(\)/);
   assert.match(practiceViewSource, /const referenceText = firstPayloadString\(obj, "referenceText", "reference_text"\)/);
   assert.match(practiceViewSource, /const nativeVersion = firstPayloadString\(obj, "nativeVersion", "native_version"\)/);
-  assert.match(practiceViewSource, /setMinimaxVoiceId\(voiceId, explicitTruePayloadFlag\(payload\.pinTurbo\)\)/);
-  assert.match(practiceViewSource, /function explicitTruePayloadFlag\(value: unknown\): boolean \{[\s\S]*value === true \|\| value === 1[\s\S]*normalized === "true" \|\| normalized === "1"/);
+  assert.match(practiceViewSource, /setQwenTtsVoice\(voiceId\)/);
   assert.match(practiceViewSource, /function positiveScalarNumber\(value: unknown\): number \| undefined \{[\s\S]*typeof value === "number"[\s\S]*typeof value === "string" && value\.trim\(\)[\s\S]*Number\.isFinite\(parsed\) && parsed > 0/);
   assert.match(practiceViewSource, /const value = positiveScalarNumber\(payload\.value\)/);
   assert.match(practiceViewSource, /const speed = positiveScalarNumber\(payload\.speed\)/);
@@ -474,12 +483,12 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /const datasetText = \(element, key\) => element && element\.dataset \? scalarText\(element\.dataset\[key\]\) : "";/);
   assert.match(mediaSource, /function renderProviderPanel\(settings, keys\) \{[\s\S]*const safeSettings = objectValue\(settings\) \|\| \{\};[\s\S]*const safeKeys = objectValue\(keys\) \|\| \{\};[\s\S]*providerRoleHtml\("Coach", "coachProvider", safeSettings, safeKeys\)/);
   assert.match(mediaSource, /function providerModelSummary\(setting, option, settings\) \{[\s\S]*const model = scalarField\(settings, modelSetting\);[\s\S]*\.map\(\(item\) => scalarField\(settings, item\.setting\)\)/);
-  assert.match(mediaSource, /function normalizeProviderForSetting\(setting, raw\) \{[\s\S]*const provider = scalarText\(raw\)\.toLowerCase\(\);[\s\S]*provider === "minimax"/);
+  assert.match(mediaSource, /function normalizeProviderForSetting\(setting, raw\) \{[\s\S]*const provider = scalarText\(raw\)\.toLowerCase\(\);[\s\S]*provider === "qwen"/);
   assert.match(mediaSource, /function providerCardHtml\(setting, option, settings, keys\) \{[\s\S]*normalizeProviderForSetting\(setting, scalarField\(settings, setting\)\) === option\.value/);
   assert.match(mediaSource, /function providerKeySaved\(keys, provider\) \{[\s\S]*const safeKeys = objectValue\(keys\) \|\| \{\};[\s\S]*return safeKeys\[provider\] === true;/);
   assert.match(mediaSource, /function keyStripHtml\(keys\) \{[\s\S]*const saved = providerKeySaved\(safeKeys, name\)/);
   assert.match(mediaSource, /function recorderSettingsHtml\(settings\) \{[\s\S]*const backend = scalarField\(settings, "recorderBackend"\) \|\| "macLocal";[\s\S]*const mic = scalarField\(settings, "preferredMicrophoneName"\) \|\| "Auto \(prefer Mac built-in\)"/);
-  assert.match(mediaSource, /renderMinimaxVoicePicker\(objectValue\(state && state\.settings\) \|\| safeSettings\);\s*applySidebarCommandBusyState\(\);/);
+  assert.match(mediaSource, /renderQwenVoicePicker\(objectValue\(state && state\.settings\) \|\| safeSettings\);\s*applySidebarCommandBusyState\(\);/);
   assert.match(mediaSource, /function postSetupAction\(payload, label, button\)/);
   assert.match(mediaSource, /function postSidebarCommand\(command, label, button\)/);
   assert.match(mediaSource, /function postSidebarCommand\(command, label, button\) \{\s*return postSetupAction\(\{ type: "command", command \}, label, button\);\s*\}/);
@@ -501,7 +510,7 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /\[data-slow-read\]"[\s\S]*blockIfPracticeTurnInProgress\("Finish or stop the current turn before generating slow-read audio\."\)[\s\S]*const target = datasetText\(slowTrigger, "slowRead"\);[\s\S]*type: "slowRead", text, target/);
   assert.match(mediaSource, /datasetText\(actionTrigger, "action"\) === "today-tts"[\s\S]*blockIfPracticeTurnInProgress\("Finish or stop the current turn before generating example audio\."\)[\s\S]*blockIfTransientActionInProgress\("generating example audio"\)[\s\S]*type: "todayTts", requestId/);
   assert.match(mediaSource, /button\[data-speed\]"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*Number\(datasetText\(button, "speed"\)\)[\s\S]*type: "setTtsSpeed"/);
-  assert.match(mediaSource, /button\[data-voice-id\]"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*const voiceId = datasetText\(button, "voiceId"\);[\s\S]*if \(!voiceId\) return;[\s\S]*type: "setMinimaxVoice"/);
+  assert.match(mediaSource, /button\[data-voice-id\]"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*const voiceId = datasetText\(button, "voiceId"\);[\s\S]*if \(!voiceId\) return;[\s\S]*type: "setQwenVoice"/);
   assert.match(mediaSource, /#useOpenAIStack"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*type: "useOpenAIStack"/);
   assert.match(mediaSource, /\[data-key\]"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*const provider = datasetText\(keyTrigger, "key"\);[\s\S]*if \(!provider\) return;[\s\S]*type: "configureKey"/);
   assert.match(mediaSource, /\[data-provider-setting\]"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*const setting = datasetText\(providerTrigger, "providerSetting"\);[\s\S]*const value = datasetText\(providerTrigger, "providerValue"\);[\s\S]*if \(!setting \|\| !value\) return;[\s\S]*type: "setProvider"/);
@@ -594,6 +603,6 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
     extensionSource,
     /englishTraining\.useOpenAIRealtimeAudioUnderstanding"[\s\S]*setOpenAIRealtimeSpeechInput/,
   );
-  assert.match(providerRoutesSource, /const providers: ProviderName\[\] = \["openai", "gemini", "minimax", "mimo"\]/);
+  assert.match(providerRoutesSource, /const providers: ProviderName\[\] = \["openai", "gemini", "qwen", "mimo"\]/);
   assert.match(providerRoutesSource, /API key was empty; nothing was saved/);
 });

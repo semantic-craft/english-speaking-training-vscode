@@ -861,7 +861,7 @@
       .route-summary { grid-template-columns: 1fr; }
     }
     .row { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
-    #minimaxVoicePicker { row-gap: 6px; }
+    #qwenVoicePicker { row-gap: 6px; }
     .voice-group-label {
       flex-basis: 100%;
       color: var(--muted);
