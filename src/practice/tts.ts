@@ -5,8 +5,6 @@ import * as vscode from "vscode";
 import {
   normalizedGeminiTtsVoice,
   normalizedMimoTtsVoice,
-  normalizedOpenAITtsResponseFormat,
-  normalizedOpenAITtsVoice,
   normalizedQwenTtsEndpoint,
   normalizedQwenTtsLanguageType,
   normalizedQwenTtsModel,
@@ -33,21 +31,14 @@ export function speechOutputFileName(provider: string): string {
 
 export function normalizeSpeechOutputProvider(provider: unknown): string {
   const normalized = normalizedProviderName(provider);
-  return normalized === "qwen" || normalized === "gemini" || normalized === "openai" || normalized === "mimo"
+  return normalized === "qwen" || normalized === "gemini" || normalized === "mimo"
     ? normalized
-    : "openai";
+    : "qwen";
 }
 
 export function speechOutputExtension(provider: string): string {
-  const selectedProvider = normalizeSpeechOutputProvider(provider);
-  if (selectedProvider === "gemini" || selectedProvider === "mimo" || selectedProvider === "qwen") return "wav";
-  if (selectedProvider === "openai") {
-    const fmt = openaiResponseFormat();
-    // pcm has no container; we wrap it in a .wav header before writing.
-    if (fmt === "pcm") return "wav";
-    return fmt;
-  }
-  return "mp3";
+  void normalizeSpeechOutputProvider(provider);
+  return "wav";
 }
 
 export function mimeTypeForAudioPath(filePath: string): string {
@@ -59,32 +50,12 @@ export function mimeTypeForAudioPath(filePath: string): string {
   return "audio/mpeg";
 }
 
-function openaiResponseFormat(): string {
-  return normalizedOpenAITtsResponseFormat();
-}
-
-export const DEFAULT_OPENAI_TTS_INSTRUCTIONS =
-  "Speak in clear, patient academic English with measured pace; emphasize key legal or scholarly terms; keep a warm, encouraging tone suitable for a learner shadowing the sentence.";
-
-function resolveOpenAIInstructions(overrideStyle?: string): string {
-  const explicit = configString("openaiTtsInstructions");
-  const fromCoach = (overrideStyle || "").trim();
-  return explicit || fromCoach || DEFAULT_OPENAI_TTS_INSTRUCTIONS;
-}
-
-export function resolveOpenAITtsVoice(model: string): string {
-  void model;
-  return normalizedOpenAITtsVoice();
-}
-
 export interface SynthesizeOptions {
   speedOverride?: number;
   /**
-   * Optional one-off style direction. OpenAI maps it to `instructions`
-   * unless the user has pinned englishTraining.openaiTtsInstructions. Qwen
-   * sends it only when qwen3-tts-instruct-flash is selected. MiMo sends it
-   * as an optional user style prompt while keeping the text to read in the
-   * assistant message.
+   * Optional one-off style direction. Qwen sends it only when
+   * qwen3-tts-instruct-flash is selected. MiMo sends it as an optional user
+   * style prompt while keeping the text to read in the assistant message.
    */
   ttsStyle?: string;
 }
@@ -104,9 +75,6 @@ export async function synthesizeWithConfiguredTts(
   if (selectedProvider === "gemini") {
     return { provider: selectedProvider, filePath: await synthesizeGemini(context, text, outPath) };
   }
-  if (selectedProvider === "openai") {
-    return { provider: selectedProvider, filePath: await synthesizeOpenAI(context, text, outPath, options) };
-  }
   if (selectedProvider === "mimo") {
     return { provider: selectedProvider, filePath: await synthesizeMiMo(context, text, outPath, options) };
   }
@@ -118,53 +86,6 @@ export async function synthesizeWithConfiguredTts(
 
 function resolveSpeed(speedOverride?: number): number {
   return normalizeTtsSpeed(speedOverride ?? config<unknown>("ttsSpeed"), 0.9);
-}
-
-async function synthesizeOpenAI(
-  context: vscode.ExtensionContext,
-  text: string,
-  outPath: string,
-  options: SynthesizeOptions = {},
-): Promise<string> {
-  const apiKey = await getRequiredKey(context, "openai");
-  const model = configString("openaiTtsModel", "gpt-4o-mini-tts");
-  const voice = resolveOpenAITtsVoice(model);
-  const responseFormat = openaiResponseFormat();
-  // gpt-4o-mini-tts supports instructions; the older tts-1 / tts-1-hd do not.
-  const supportsInstructions = model.includes("gpt-4o-mini-tts") || model.includes("gpt-4o-tts");
-  const instructions = supportsInstructions ? resolveOpenAIInstructions(options.ttsStyle) : "";
-
-  const body: JsonObject = {
-    model,
-    voice,
-    input: text,
-    response_format: responseFormat,
-    speed: resolveSpeed(options.speedOverride),
-  };
-  if (instructions) body.instructions = instructions;
-
-  const response = await fetchWithTimeout("https://api.openai.com/v1/audio/speech", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  const payload = Buffer.from(await response.arrayBuffer());
-  if (!response.ok) {
-    throw new Error(`OpenAI TTS failed (${response.status}): ${payload.toString("utf8").slice(0, 1200)}`);
-  }
-  const audioPayload = ensureNonEmptyAudioData(payload, "OpenAI TTS");
-  if (responseFormat === "pcm") {
-    // OpenAI documents pcm as raw 24kHz 16-bit signed little-endian mono.
-    // Wrap it in a RIFF/WAVE header so VS Code's media element (HTMLAudio)
-    // can play it back without an external decoder.
-    writePcm16Wav(outPath, audioPayload, 24000, 1);
-    return outPath;
-  }
-  fs.writeFileSync(outPath, audioPayload);
-  return outPath;
 }
 
 async function synthesizeGemini(
@@ -426,7 +347,7 @@ export function extractGeminiInlineAudio(parsed: JsonObject): { data: Buffer; mi
   throw new Error("Gemini TTS returned no inline audio data.");
 }
 
-function writePcm16Wav(filePath: string, pcm: Buffer, sampleRate: number, channels: number): void {
+export function writePcm16Wav(filePath: string, pcm: Buffer, sampleRate: number, channels: number): void {
   const bitsPerSample = 16;
   const bytesPerSample = bitsPerSample / 8;
   const byteRate = sampleRate * channels * bytesPerSample;

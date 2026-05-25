@@ -110,8 +110,7 @@ async function startNativeFfmpegRecordingLocked(
   // are gone (so the take sounds muffled / "phone quality") AND the SRC
   // adds a perceptible noise floor. The downstream STT path resamples to
   // 16 kHz mono inside ffmpeg/swresample when needed (convertAudioToWav
-  // for Gemini/MiMo; OpenAI file mode and Whisper accept any rate and do
-  // the resample internally), so recording at the device's native rate is
+  // for Gemini/Qwen-ASR/MiMo), so recording at the device's native rate is
   // pure quality upside with no STT cost. 48 kHz is the safe modern
   // default; the new englishTraining.recordSampleRate setting lets users
   // pin a different rate for unusual interfaces.

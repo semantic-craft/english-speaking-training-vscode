@@ -23,11 +23,14 @@ import { expandHome } from "../runtime/training-root.js";
 export async function migrateGeminiModelDefaults(): Promise<boolean> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
   let changed = false;
-  changed = (await migrateProviderSetting(settings, "coachProvider", "kimi", "openai")) || changed;
-  // DeepSeek was removed as a coach provider; fall existing users back to
-  // the current default so a now-unrouteable value can't wedge the coach step.
-  changed = (await migrateProviderSetting(settings, "coachProvider", "deepseek", "openai")) || changed;
-  changed = (await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "openai")) || changed;
+  // Retired provider values (kimi/deepseek/azure/openai) are migrated to the
+  // current default so a now-unrouteable value can't wedge the matching step.
+  changed = (await migrateProviderSetting(settings, "coachProvider", "kimi", "qwen")) || changed;
+  changed = (await migrateProviderSetting(settings, "coachProvider", "deepseek", "qwen")) || changed;
+  changed = (await migrateProviderSetting(settings, "coachProvider", "openai", "qwen")) || changed;
+  changed = (await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "qwen")) || changed;
+  changed = (await migrateProviderSetting(settings, "audioUnderstandingProvider", "openai", "qwen")) || changed;
+  changed = (await migrateProviderSetting(settings, "ttsProvider", "openai", "qwen")) || changed;
   changed = (await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-flash", "gemini-3-flash-preview")) || changed;
   changed = (await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-pro", "gemini-3.1-pro-preview")) || changed;
   changed = (await migrateGeminiSetting(settings, "geminiAudioUnderstandingModel", "gemini-2.5-flash", "gemini-3-flash-preview")) || changed;
@@ -84,7 +87,6 @@ function normalizedMigrationValue(value: unknown): string {
 
 export async function apiKeyAvailability(context: vscode.ExtensionContext): Promise<KeyAvailability> {
   return {
-    openai: Boolean((await context.secrets.get(secretKeys.openai) || "").trim()),
     gemini: Boolean((await context.secrets.get(secretKeys.gemini) || "").trim()),
     qwen: Boolean(storedOrEnvApiKey(await context.secrets.get(secretKeys.qwen), "qwen")),
     mimo: Boolean((await context.secrets.get(secretKeys.mimo) || "").trim()),
@@ -124,7 +126,7 @@ export async function configureApiKey(
 }
 
 export async function pickAndConfigureProviderKey(context: vscode.ExtensionContext): Promise<void> {
-  const providers: ProviderName[] = ["openai", "gemini", "qwen", "mimo"];
+  const providers: ProviderName[] = ["gemini", "qwen", "mimo"];
   const availability = await apiKeyAvailability(context);
   const items: (vscode.QuickPickItem & { provider: ProviderName })[] = providers.map((provider) => ({
     provider,
@@ -184,12 +186,12 @@ export function normalizeProviderForSetting(
 ): ProviderName {
   const provider = normalizedProviderName(raw);
   if (setting === "coachProvider") {
-    return isCoachProvider(provider) ? provider : "openai";
+    return isCoachProvider(provider) ? provider : "qwen";
   }
   if (setting === "audioUnderstandingProvider") {
-    return isAudioUnderstandingProvider(provider) ? provider : "openai";
+    return isAudioUnderstandingProvider(provider) ? provider : "qwen";
   }
-  return isTtsProvider(provider) ? provider : "openai";
+  return isTtsProvider(provider) ? provider : "qwen";
 }
 
 export async function clearApiKeys(context: vscode.ExtensionContext): Promise<void> {
@@ -276,19 +278,6 @@ function isValidProviderForSetting(setting: ProviderSettingName, provider: strin
   return isTtsProvider(provider);
 }
 
-export async function setOpenAIRealtimeSpeechInput(): Promise<void> {
-  const settings = vscode.workspace.getConfiguration("englishTraining");
-  let changed = false;
-  changed = (await updateUserSettingIfChanged(settings, "audioUnderstandingProvider", "openai")) || changed;
-  changed = (await updateUserSettingIfChanged(settings, "openaiTranscriptionMode", "realtime")) || changed;
-  if (!changed) {
-    vscode.window.showInformationMessage("English Training OpenAI Realtime speech input is already enabled.");
-    return;
-  }
-  vscode.window.showInformationMessage("English Training OpenAI Realtime speech input enabled.");
-  await refreshAll();
-}
-
 export async function setGeminiOnlyProviders(): Promise<void> {
   const settings = vscode.workspace.getConfiguration("englishTraining");
   let changed = false;
@@ -300,25 +289,6 @@ export async function setGeminiOnlyProviders(): Promise<void> {
     return;
   }
   vscode.window.showInformationMessage("English Training Gemini-only mode enabled: Gemini coach + speech input + speech output.");
-  await refreshAll();
-}
-
-export async function setOpenAIStackProviders(): Promise<void> {
-  const settings = vscode.workspace.getConfiguration("englishTraining");
-  let changed = false;
-  changed = (await updateUserSettingIfChanged(settings, "coachProvider", "openai")) || changed;
-  changed = (await updateUserSettingIfChanged(settings, "audioUnderstandingProvider", "openai")) || changed;
-  changed = (await updateUserSettingIfChanged(settings, "ttsProvider", "openai")) || changed;
-  // file mode benefits from the domain prompt and is more accurate for
-  // bounded recordings; users can switch back to realtime in settings.
-  changed = (await updateUserSettingIfChanged(settings, "openaiTranscriptionMode", "file")) || changed;
-  if (!changed) {
-    vscode.window.showInformationMessage("English Training OpenAI stack is already enabled.");
-    return;
-  }
-  vscode.window.showInformationMessage(
-    "English Training OpenAI stack enabled: coach (gpt-4o) + transcribe (gpt-4o-transcribe, domain prompt) + TTS (gpt-4o-mini-tts, marin, coach-driven style).",
-  );
   await refreshAll();
 }
 

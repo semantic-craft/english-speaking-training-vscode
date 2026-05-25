@@ -402,12 +402,12 @@
     function normalizeProviderForSetting(setting, raw) {
       const provider = scalarText(raw).toLowerCase();
       if (setting === "coachProvider") {
-        return provider === "gemini" || provider === "mimo" || provider === "qwen" || provider === "openai" ? provider : "openai";
+        return provider === "gemini" || provider === "mimo" || provider === "qwen" ? provider : "qwen";
       }
       if (setting === "audioUnderstandingProvider") {
-        return provider === "gemini" || provider === "openai" || provider === "qwen" || provider === "mimo" ? provider : "openai";
+        return provider === "gemini" || provider === "qwen" || provider === "mimo" ? provider : "qwen";
       }
-      return provider === "qwen" || provider === "gemini" || provider === "openai" || provider === "mimo" ? provider : "openai";
+      return provider === "qwen" || provider === "gemini" || provider === "mimo" ? provider : "qwen";
     }
 
     function activeRouteProviders(settings) {
@@ -415,9 +415,9 @@
       const seen = new Set();
       const providers = [];
       const defaults = {
-        coachProvider: "openai",
-        audioUnderstandingProvider: "openai",
-        ttsProvider: "openai",
+        coachProvider: "qwen",
+        audioUnderstandingProvider: "qwen",
+        ttsProvider: "qwen",
       };
       ROUTE_KEY_SETTINGS.forEach((setting) => {
         const raw = scalarField(safeSettings, setting) || defaults[setting];
@@ -495,7 +495,7 @@
       }
       const settings = objectValue(currentState && currentState.settings) || {};
       const keys = objectValue(currentState && currentState.keys) || {};
-      const provider = normalizeProviderForSetting("ttsProvider", scalarField(settings, "ttsProvider") || "openai");
+      const provider = normalizeProviderForSetting("ttsProvider", scalarField(settings, "ttsProvider") || "qwen");
       if (!providerKeySaved(keys, provider)) {
         return "Add " + providerLabel(provider) + " API key in Quick setup above to " + actionLabel + ".";
       }
@@ -708,19 +708,15 @@
       if (!chips) return;
       const current = normalizedTtsSpeed(settings && settings.ttsSpeed);
       const hasPresetMatch = SPEED_OPTIONS.some((speed) => Math.abs(speed - current) < 0.01);
-      // Only OpenAI's `/v1/audio/speech` accepts a `speed` request parameter
-      // today; Qwen-TTS, Gemini-TTS, and MiMo TTS do not expose that field
-      // through their official APIs (Qwen3-TTS-Instruct-Flash can be nudged
-      // via `instructions` text, but plain Qwen3-TTS-Flash cannot). Without
-      // this hint a learner who clicks 0.6× on the Qwen stack would think it
-      // failed silently — the click DOES persist the preference for when the
-      // user switches back to OpenAI, but the next Qwen TTS turn still plays
-      // at the model's native rate.
-      const ttsProvider = scalarField(settings, "ttsProvider") || "openai";
-      const honorsSpeed = ttsProvider === "openai";
-      const inactiveTitle = honorsSpeed
-        ? ""
-        : ' title="Speed currently only affects OpenAI TTS — ' + esc(providerLabel(ttsProvider)) + " ignores it. Switch speech-output to OpenAI to hear this rate.\"";
+      // None of the active providers (Qwen-TTS, Gemini-TTS, MiMo TTS) expose
+      // a true `speed` request parameter today. Qwen3-TTS-Instruct-Flash can
+      // be nudged via `instructions` text, but plain Qwen3-TTS-Flash cannot.
+      // Speed selections still persist so the value is ready when a future
+      // provider gains speed support — and Slow Re-read goes through a
+      // different path that does adjust phrasing.
+      const ttsProvider = scalarField(settings, "ttsProvider") || "qwen";
+      const inactiveTitle =
+        ' title="Speed presets are saved but the current ' + esc(providerLabel(ttsProvider)) + " TTS does not accept a request-time speed parameter. Use 🐢 Slow for word-by-word shadowing instead.\"";
       const fragments = SPEED_OPTIONS.map((speed) => {
         const pressed = !hasPresetMatch ? false : Math.abs(speed - current) < 0.01;
         const label = (speed.toFixed(1) + "×").replace(".0", "");
@@ -731,9 +727,7 @@
           ? String(current)
           : current.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
         const label = labelText + "×";
-        const customTitle = honorsSpeed
-          ? ' title="Custom speed from settings.json"'
-          : ' title="Custom speed from settings.json — ' + esc(providerLabel(ttsProvider)) + " TTS ignores speed; switch speech-output to OpenAI to hear this rate.\"";
+        const customTitle = ' title="Custom speed from settings.json — saved but ignored by the current ' + esc(providerLabel(ttsProvider)) + ' TTS."';
         fragments.push('<button type="button" class="speed-chip" data-speed="' + current + '" aria-pressed="true"' + customTitle + '>' + esc(label) + '</button>');
       }
       chips.innerHTML = fragments.join("");
@@ -764,36 +758,21 @@
     const PROVIDER_LABELS = {
       qwen: "Qwen",
       mimo: "MiMo",
-      openai: "OpenAI",
       gemini: "Gemini"
     };
 
     const PROVIDER_ROUTES = {
       coachProvider: [
-        { value: "openai", label: "OpenAI", note: "default coach — chat-completions JSON", modelSetting: "openaiCoachModel" },
         { value: "qwen", label: "Qwen", note: "DashScope Chat Completions", modelSetting: "qwenCoachModel", extraSetting: "qwenCompatibleBaseUrl", extraLabel: "Endpoint" },
         { value: "gemini", label: "Gemini", note: "alternate coach", modelSetting: "geminiCoachModel" },
         { value: "mimo", label: "MiMo", note: "Xiaomi Token Plan", modelSetting: "mimoCoachModel" },
       ],
       audioUnderstandingProvider: [
-        { value: "openai", label: "OpenAI", note: "default STT — gpt-4o-transcribe with domain prompt (realtime optional)", modelSetting: "openaiFileTranscriptionModel", extraSetting: "openaiTranscriptionMode", extraLabel: "Mode" },
         { value: "qwen", label: "Qwen-ASR", note: "DashScope short-recording ASR", modelSetting: "qwenAudioUnderstandingModel", extraSetting: "qwenCompatibleBaseUrl", extraLabel: "Endpoint" },
         { value: "gemini", label: "Gemini", note: "alternate STT", modelSetting: "geminiAudioUnderstandingModel" },
         { value: "mimo", label: "MiMo", note: "Xiaomi audio understanding", modelSetting: "mimoAudioUnderstandingModel" },
       ],
       ttsProvider: [
-        {
-          value: "openai",
-          label: "OpenAI",
-          note: "default TTS — gpt-4o-mini-tts (marin), coach-driven style",
-          modelSetting: "openaiTtsModel",
-          extraSettings: [
-            { setting: "openaiTtsVoice", label: "Voice" },
-            { setting: "openaiTtsInstructions", label: "Style" },
-            { setting: "openaiTtsResponseFormat", label: "Format" },
-          ],
-        },
-        { value: "gemini", label: "Gemini", note: "alternate TTS", modelSetting: "geminiTtsModel", extraSetting: "geminiTtsVoice", extraLabel: "Voice" },
         {
           value: "qwen",
           label: "Qwen-TTS",
@@ -806,6 +785,7 @@
             { setting: "qwenTtsEndpoint", label: "Endpoint" },
           ],
         },
+        { value: "gemini", label: "Gemini", note: "alternate TTS", modelSetting: "geminiTtsModel", extraSetting: "geminiTtsVoice", extraLabel: "Voice" },
         { value: "mimo", label: "MiMo", note: "Xiaomi voices", modelSetting: "mimoTtsModel", extraSetting: "mimoTtsVoice", extraLabel: "Voice" },
       ],
     };
@@ -815,28 +795,20 @@
     }
 
     function providerModelSetting(setting, option, settings) {
-      if (setting === "audioUnderstandingProvider" && option.value === "openai") {
-        const mode = scalarField(settings, "openaiTranscriptionMode") === "realtime" ? "realtime" : "file";
-        return mode === "realtime" ? "openaiRealtimeTranscriptionModel" : "openaiFileTranscriptionModel";
-      }
+      void setting;
+      void settings;
       return option.modelSetting || "";
     }
 
     function providerModelButtonLabel(setting, option, settings) {
-      if (setting === "audioUnderstandingProvider" && option.value === "openai") {
-        const mode = scalarField(settings, "openaiTranscriptionMode") === "realtime" ? "realtime" : "file";
-        return mode === "realtime" ? "Realtime model" : "File model";
-      }
+      void setting;
+      void settings;
       return option.modelLabel || "Model";
     }
 
     function providerNote(setting, option, settings) {
-      if (setting === "audioUnderstandingProvider" && option.value === "openai") {
-        const mode = scalarField(settings, "openaiTranscriptionMode") === "realtime" ? "realtime" : "file";
-        return mode === "realtime"
-          ? "realtime STT — gpt-realtime-whisper"
-          : "default STT — gpt-4o-transcribe with domain prompt";
-      }
+      void setting;
+      void settings;
       return option.note || "";
     }
 
@@ -952,7 +924,7 @@
 
     function keyStripHtml(keys) {
       const safeKeys = objectValue(keys) || {};
-      return '<div class="key-strip">' + ["gemini", "openai", "qwen", "mimo"].map((name) => {
+      return '<div class="key-strip">' + ["gemini", "qwen", "mimo"].map((name) => {
         const saved = providerKeySaved(safeKeys, name);
         return '<button class="key-pill ' + (saved ? "saved" : "") + '" data-key="' + esc(name) + '">' + esc(providerLabel(name)) + ': ' + (saved ? "saved" : "missing") + '</button>';
       }).join("") + '</div>';
@@ -971,7 +943,6 @@
           routeSummaryHtml("Speech out", "ttsProvider", safeSettings),
         '</div>',
         '<div class="provider-presets">',
-          '<button class="secondary" id="useOpenAIStack" title="Set coach, speech input, and speech output all to OpenAI file-mode defaults">Use OpenAI stack</button>',
           '<button class="secondary" id="useQwenStack" title="Set coach, speech input, and speech output all to Qwen/DashScope">Use Qwen stack</button>',
           '<button class="secondary" id="useGeminiOnly" title="Set coach, speech input, and speech output all to Gemini">Reset to all-Gemini route</button>',
         '</div>',
@@ -1329,7 +1300,7 @@
       const goal = firstScalarField(training, "goal") || firstScalarField(next, "goal", "completion_label") || "Today's practice";
       const scenario = firstScalarField(training, "scenario") || firstScalarField(next, "scenario");
       const setup = firstScalarField(training, "chinese_setup") || firstScalarField(next, "chinese_setup");
-      const ttsProvider = scalarField(settings, "ttsProvider") || "openai";
+      const ttsProvider = scalarField(settings, "ttsProvider") || "qwen";
       const practiceBlocked = !line || !isPracticeSetupReady(state);
       const todayTtsBlocked = todayTtsBlockMessage(state, line);
       host.innerHTML = `
@@ -2483,7 +2454,6 @@
         "#configureMaterials",
         "#openTask",
         "#openFolder",
-        "#useOpenAIStack",
         "#useQwenStack",
         "#useGeminiOnly",
         "[data-onboard]",
@@ -3379,12 +3349,6 @@
       if (geminiTrigger) {
         if (blockSetupChangeDuringPractice()) return;
         postSetupAction({ type: "useGeminiOnly" }, "Switching to Gemini route", geminiTrigger);
-        return;
-      }
-      const openAIStackTrigger = event.target.closest && event.target.closest("#useOpenAIStack");
-      if (openAIStackTrigger) {
-        if (blockSetupChangeDuringPractice()) return;
-        postSetupAction({ type: "useOpenAIStack" }, "Switching to OpenAI stack", openAIStackTrigger);
         return;
       }
       const qwenStackTrigger = event.target.closest && event.target.closest("#useQwenStack");

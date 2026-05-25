@@ -34,7 +34,6 @@ import {
   errorMessage,
   expandHomePath,
   extractGeminiText,
-  extractOpenAIText,
   fetchWithTimeout,
   getRequiredKey,
   isAudioUnderstandingProvider,
@@ -62,7 +61,6 @@ import {
   extensionFromMime,
   extractQwenAsrTranscript,
   extractMimoTranscript,
-  extractOpenAIFileTranscript,
   prepareInlineAudio,
   resolveAudioUnderstandingProvider,
   transcribeAudio,
@@ -75,7 +73,6 @@ import {
   extractQwenTtsAudioData,
   mimeTypeForAudioPath,
   normalizeSpeechOutputProvider,
-  resolveOpenAITtsVoice,
   speechOutputExtension,
   synthesizeWithConfiguredTts,
 } from "./practice/tts.js";
@@ -114,9 +111,6 @@ import {
   normalizedCoachProvider,
   normalizedGeminiTtsVoice,
   normalizedMimoTtsVoice,
-  normalizedOpenAITranscriptionMode,
-  normalizedOpenAITtsResponseFormat,
-  normalizedOpenAITtsVoice,
   normalizedQwenAudioUnderstandingModel,
   normalizedQwenCompatibleBaseUrl,
   normalizedQwenTtsEndpoint,
@@ -141,8 +135,6 @@ import {
   migrateProviderSetting,
   normalizeProviderForSetting,
   setGeminiOnlyProviders,
-  setOpenAIRealtimeSpeechInput,
-  setOpenAIStackProviders,
   setProviderSetting,
   setQwenStackProviders,
   setQwenTtsVoice,
@@ -325,9 +317,6 @@ export function activate(context: vscode.ExtensionContext): void {
   register("englishTraining.configureLocalMaterials", async () => {
     await configureLocalMaterialsRoot({ onChanged: invalidateNextPackageCache });
   });
-  register("englishTraining.configureOpenAIKey", async () => {
-    await configureApiKey(context, "openai");
-  });
   register("englishTraining.configureGeminiKey", async () => {
     await configureApiKey(context, "gemini");
   });
@@ -349,29 +338,17 @@ export function activate(context: vscode.ExtensionContext): void {
   register("englishTraining.useQwenCoach", async () => {
     await setProviderSetting("coachProvider", "qwen");
   });
-  register("englishTraining.useOpenAICoach", async () => {
-    await setProviderSetting("coachProvider", "openai");
-  });
-  register("englishTraining.useOpenAIRealtimeAudioUnderstanding", async () => {
-    await setOpenAIRealtimeSpeechInput();
-  });
   register("englishTraining.useQwenAudioUnderstanding", async () => {
     await setProviderSetting("audioUnderstandingProvider", "qwen");
   });
   register("englishTraining.useQwenTts", async () => {
     await setProviderSetting("ttsProvider", "qwen");
   });
-  register("englishTraining.useOpenAITts", async () => {
-    await setProviderSetting("ttsProvider", "openai");
-  });
   register("englishTraining.useGeminiTts", async () => {
     await setProviderSetting("ttsProvider", "gemini");
   });
   register("englishTraining.useGeminiOnly", async () => {
     await setGeminiOnlyProviders();
-  });
-  register("englishTraining.useOpenAIStack", async () => {
-    await setOpenAIStackProviders();
   });
   register("englishTraining.useQwenStack", async () => {
     await setQwenStackProviders();
@@ -470,14 +447,12 @@ export const __test__ = {
   expandHomePath,
   extensionFromMime,
   extractGeminiText,
-  extractOpenAIText,
   extractGeminiInlineAudio,
   errorMessage,
   extractMimoTranscript,
   extractMimoTtsAudioData,
   extractQwenAsrTranscript,
   extractQwenTtsAudioData,
-  extractOpenAIFileTranscript,
   fetchWithTimeout,
   firstNonBlankString,
   findTrainingRoot,
@@ -500,9 +475,6 @@ export const __test__ = {
   normalizedCoachProvider,
   normalizedGeminiTtsVoice,
   normalizedMimoTtsVoice,
-  normalizedOpenAITranscriptionMode,
-  normalizedOpenAITtsResponseFormat,
-  normalizedOpenAITtsVoice,
   normalizedQwenAudioUnderstandingModel,
   normalizedQwenCompatibleBaseUrl,
   normalizedQwenTtsEndpoint,
@@ -540,16 +512,13 @@ export const __test__ = {
   resolveNativeFfmpegAudioDevice,
   resolveFfmpegPath,
   resolveNextPackage,
-  resolveOpenAITtsVoice,
   resolveRecordingSampleRate,
   runCommandTask,
   runStartupTask,
   selectRecordingMicrophone,
-  setOpenAIRealtimeSpeechInput,
   setProviderSetting,
   setQwenTtsVoice,
   setTtsSpeedConfig,
-  setOpenAIStackProviders,
   speechOutputExtension,
   startNativeFfmpegRecording,
   StatusProvider,
@@ -629,9 +598,6 @@ function configSettingEffectiveValue(setting: ConfigSettingName, fallback: strin
   const settings = trainingSettings();
   switch (setting) {
     case "mimoCoachModel": return settings.mimoCoachModel;
-    case "openaiRealtimeTranscriptionModel": return settings.openaiRealtimeTranscriptionModel;
-    case "openaiFileTranscriptionModel": return settings.openaiFileTranscriptionModel;
-    case "openaiCoachModel": return settings.openaiCoachModel;
     case "geminiCoachModel": return settings.geminiCoachModel;
     case "geminiAudioUnderstandingModel": return settings.geminiAudioUnderstandingModel;
     case "qwenCompatibleBaseUrl": return normalizedQwenCompatibleBaseUrl();
@@ -644,12 +610,8 @@ function configSettingEffectiveValue(setting: ConfigSettingName, fallback: strin
     case "qwenTtsLanguageType": return normalizedQwenTtsLanguageType();
     case "qwenTtsInstructions": return settings.qwenTtsInstructions;
     case "mimoTtsModel": return settings.mimoTtsModel;
-    case "openaiTtsModel": return settings.openaiTtsModel;
     case "geminiTtsModel": return settings.geminiTtsModel;
-    case "openaiTranscriptionMode": return normalizedOpenAITranscriptionMode();
-    case "openaiTtsResponseFormat": return normalizedOpenAITtsResponseFormat();
     case "recorderBackend": return normalizedRecorderBackend();
-    case "openaiTtsVoice": return normalizedOpenAITtsVoice();
     case "geminiTtsVoice": return normalizedGeminiTtsVoice();
     case "mimoTtsVoice": return normalizedMimoTtsVoice();
     default: return fallback;
@@ -657,13 +619,11 @@ function configSettingEffectiveValue(setting: ConfigSettingName, fallback: strin
 }
 
 function configSettingAllowsBlank(setting: ConfigSettingName): boolean {
-  return setting === "openaiTtsInstructions" || setting === "qwenTtsInstructions";
+  return setting === "qwenTtsInstructions";
 }
 
 function configSettingAllowsCustom(setting: ConfigSettingName): boolean {
   return (
-    setting !== "openaiTranscriptionMode" &&
-    setting !== "openaiTtsResponseFormat" &&
     setting !== "recorderBackend" &&
     setting !== "qwenCompatibleBaseUrl" &&
     setting !== "qwenAudioUnderstandingModel" &&
@@ -671,7 +631,6 @@ function configSettingAllowsCustom(setting: ConfigSettingName): boolean {
     setting !== "qwenTtsModel" &&
     setting !== "qwenTtsVoice" &&
     setting !== "qwenTtsLanguageType" &&
-    setting !== "openaiTtsVoice" &&
     setting !== "geminiTtsVoice" &&
     setting !== "mimoTtsVoice"
   );
@@ -689,10 +648,6 @@ async function promptForConfigValue(setting: ConfigSettingName, current: string)
 function configSettingLabel(setting: ConfigSettingName): string {
   switch (setting) {
     case "mimoCoachModel": return "MiMo coach model";
-    case "openaiTranscriptionMode": return "OpenAI speech-input mode";
-    case "openaiRealtimeTranscriptionModel": return "OpenAI Realtime speech-input model";
-    case "openaiFileTranscriptionModel": return "OpenAI file speech-input model";
-    case "openaiCoachModel": return "OpenAI coach model";
     case "geminiCoachModel": return "Gemini coach model";
     case "geminiAudioUnderstandingModel": return "Gemini speech-input model";
     case "qwenCompatibleBaseUrl": return "Qwen compatible base URL";
@@ -706,10 +661,6 @@ function configSettingLabel(setting: ConfigSettingName): string {
     case "qwenTtsInstructions": return "Qwen-TTS style";
     case "mimoTtsModel": return "MiMo speech-output model";
     case "mimoTtsVoice": return "MiMo voice";
-    case "openaiTtsModel": return "OpenAI speech-output model";
-    case "openaiTtsVoice": return "OpenAI voice";
-    case "openaiTtsInstructions": return "OpenAI speech style";
-    case "openaiTtsResponseFormat": return "OpenAI audio format";
     case "recorderBackend": return "recording backend";
     case "geminiTtsModel": return "Gemini speech-output model";
     case "geminiTtsVoice": return "Gemini voice";
@@ -718,11 +669,6 @@ function configSettingLabel(setting: ConfigSettingName): string {
 
 function configSettingPrompt(setting: ConfigSettingName): string {
   switch (setting) {
-    case "openaiRealtimeTranscriptionModel": return "OpenAI Realtime transcription model id.";
-    case "openaiTranscriptionMode": return "Choose file for accurate bounded recordings or realtime for low-latency transcription.";
-    case "openaiTtsVoice": return "OpenAI TTS voice name.";
-    case "openaiTtsInstructions": return "Optional OpenAI TTS instructions. Leave blank to let the coach choose per turn.";
-    case "openaiTtsResponseFormat": return "OpenAI TTS audio container.";
     case "qwenCompatibleBaseUrl": return "DashScope OpenAI-compatible base URL used by Qwen coach and Qwen-ASR.";
     case "qwenAudioUnderstandingModel": return "Qwen-ASR model id for short recorded clips.";
     case "qwenTtsEndpoint": return "DashScope Qwen-TTS endpoint.";
@@ -739,10 +685,6 @@ function configSettingPrompt(setting: ConfigSettingName): string {
 function configSettingOptions(setting: ConfigSettingName): string[] {
   switch (setting) {
     case "mimoCoachModel": return ["mimo-v2.5-pro", "mimo-v2.5-flash"];
-    case "openaiTranscriptionMode": return ["file", "realtime"];
-    case "openaiRealtimeTranscriptionModel": return ["gpt-realtime-whisper"];
-    case "openaiFileTranscriptionModel": return ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize", "whisper-1"];
-    case "openaiCoachModel": return ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"];
     case "geminiCoachModel": return GEMINI_TEXT_MODEL_OPTIONS;
     case "geminiAudioUnderstandingModel": return GEMINI_TEXT_MODEL_OPTIONS;
     case "qwenCompatibleBaseUrl": return QWEN_COMPATIBLE_BASE_URL_OPTIONS;
@@ -756,10 +698,6 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
     case "qwenTtsInstructions": return [];
     case "mimoTtsModel": return ["mimo-v2.5-tts"];
     case "mimoTtsVoice": return ["Mia", "Chloe", "Milo", "Dean", "mimo_default"];
-    case "openaiTtsInstructions": return [];
-    case "openaiTtsModel": return ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"];
-    case "openaiTtsVoice": return ["marin", "cedar", "coral", "alloy", "ash", "ballad", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"];
-    case "openaiTtsResponseFormat": return ["wav", "mp3", "opus", "aac", "flac", "pcm"];
     case "recorderBackend": return ["macLocal", "webview", "auto"];
     case "geminiTtsModel": return GEMINI_TTS_MODEL_OPTIONS;
     case "geminiTtsVoice": return ["Kore", "Puck", "Charon", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
@@ -771,6 +709,5 @@ function providerSetupHint(provider: ProviderName): string {
     case "gemini": return "Gemini · alternate coach + speech input + native-version TTS";
     case "qwen": return "Qwen · DashScope coach + Qwen-ASR + Qwen-TTS";
     case "mimo": return "Xiaomi MiMo · coach + speech input + speech-output (Token Plan)";
-    case "openai": return "OpenAI · default coach + file/realtime speech input + TTS";
   }
 }

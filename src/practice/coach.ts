@@ -365,13 +365,8 @@ async function requestProviderJson(
       model: configString("mimoCoachModel", "mimo-v2.5-pro"),
     });
   }
-  if (provider === "gemini") {
-    const apiKey = await getRequiredKey(context, "gemini");
-    return callGeminiJson(apiKey, configString("geminiCoachModel", "gemini-3-flash-preview"), system, user);
-  }
-  // OpenAI is the default coach and the fallback for any stale/removed value.
-  const apiKey = await getRequiredKey(context, "openai");
-  return callOpenAIJson(apiKey, configString("openaiCoachModel", "gpt-4o"), system, user);
+  const apiKey = await getRequiredKey(context, "gemini");
+  return callGeminiJson(apiKey, configString("geminiCoachModel", "gemini-3-flash-preview"), system, user);
 }
 
 async function callQwenJson(
@@ -389,12 +384,12 @@ async function callQwenJson(
     },
     body: JSON.stringify({
       model,
-      // Match the OpenAI coach path: force a JSON object body so coach
-      // turns don't fail mid-flight on `<think>` blocks or Markdown fences
-      // around the JSON. The DashScope OpenAI-compatible endpoint honors
-      // response_format on qwen-plus / qwen-max / qwen3-* chat models; the
-      // stripThinkBlocks + parseLooseJson fallback below stays in place so
-      // a model that ignores the hint still parses.
+      // Force a JSON object body so coach turns don't fail mid-flight on
+      // `<think>` blocks or Markdown fences around the JSON. The DashScope
+      // OpenAI-compatible endpoint honors response_format on qwen-plus /
+      // qwen-max / qwen3-* chat models; the stripThinkBlocks +
+      // parseLooseJson fallback below stays in place so a model that
+      // ignores the hint still parses.
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: system },
@@ -481,35 +476,6 @@ async function callGeminiJson(
   }
   const parsed = parseJsonObject(body, "Gemini coach");
   return parseLooseJson(extractGeminiText(parsed));
-}
-
-async function callOpenAIJson(
-  apiKey: string,
-  model: string,
-  system: string,
-  user: string,
-): Promise<JsonObject> {
-  const response = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
-  });
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(`OpenAI request failed (${response.status}): ${body.slice(0, 1200)}`);
-  }
-  const parsed = parseJsonObject(body, "OpenAI coach");
-  return parseLooseJson(extractChatCompletionText(parsed));
 }
 
 function extractChatCompletionText(parsed: JsonObject): string {

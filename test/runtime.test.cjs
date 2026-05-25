@@ -173,27 +173,24 @@ test("activates without a workspace and registers the command surface", async ()
 
   extension.activate(context);
   await new Promise((resolve) => setImmediate(resolve));
-  // 26 includes the useOpenAIStack one-click command added in 0.1.38 to
-  // pin coach + transcribe + TTS all to OpenAI in a single Command Palette
-  // action. Bumping this number must stay in lockstep with the contributes
-  // block in package.json so a stray rename can't silently lose a command.
-  // 29 includes Qwen coach, Qwen-ASR speech input, and the Qwen stack preset,
-  // minus useRecommendedHybrid (collapsed into useGeminiOnly — they were
-  // doing exactly the same all-Gemini route under two different titles).
-  assert.equal(registered.length, 29);
+  // 24 reflects the post-0.1.46 command surface: OpenAI coach/stack/TTS/realtime
+  // commands and configureOpenAIKey were retired with the OpenAI provider.
+  // Bumping this number must stay in lockstep with the contributes block in
+  // package.json so a stray rename can't silently lose a command.
+  assert.equal(registered.length, 24);
   assert.ok(registered.includes("englishTraining.openPractice"));
   assert.ok(registered.includes("englishTraining.createSamplePackage"));
   assert.ok(registered.includes("englishTraining.generateNextPackage"));
-  // DeepSeek coach was fully removed in favor of OpenAI; guard the rename so
-  // the dead configure-key command can't silently reappear.
-  assert.ok(registered.includes("englishTraining.useOpenAICoach"));
-  assert.ok(registered.includes("englishTraining.useOpenAIStack"));
   assert.ok(registered.includes("englishTraining.useQwenCoach"));
   assert.ok(registered.includes("englishTraining.useQwenAudioUnderstanding"));
   assert.ok(registered.includes("englishTraining.useQwenStack"));
   assert.ok(registered.includes("englishTraining.useGeminiOnly"));
   assert.ok(registered.includes("englishTraining.selectMicrophone"));
   assert.ok(!registered.includes("englishTraining.useDeepSeekCoach"));
+  assert.ok(!registered.includes("englishTraining.useOpenAICoach"));
+  assert.ok(!registered.includes("englishTraining.useOpenAIStack"));
+  assert.ok(!registered.includes("englishTraining.useOpenAIRealtimeAudioUnderstanding"));
+  assert.ok(!registered.includes("englishTraining.configureOpenAIKey"));
   // useRecommendedHybrid was an exact duplicate of useGeminiOnly; both wrote
   // gemini to all three provider settings, so collapsing them is safe and
   // removes a confusing second Command Palette entry.
@@ -664,7 +661,7 @@ test("practice webview provider messages trim setting and provider values before
     await provider.handleMessage(view, {
       type: "setProvider",
       setting: " coachProvider ",
-      value: " OpenAI ",
+      value: " Qwen ",
     });
   } finally {
     configValues.coachProvider = previousProvider;
@@ -673,7 +670,7 @@ test("practice webview provider messages trim setting and provider values before
   }
 
   assert.deepEqual(updates, [
-    { key: "coachProvider", value: "openai", target: mockVscode.ConfigurationTarget.Global },
+    { key: "coachProvider", value: "qwen", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 1);
   assert.deepEqual(messages, []);
@@ -802,7 +799,7 @@ test("setup actions return request-scoped results when request ids are provided"
     await provider.handleMessage(view, {
       type: "setProvider",
       setting: " coachProvider ",
-      value: " openai ",
+      value: " qwen ",
       requestId: 81,
     });
 
@@ -818,7 +815,7 @@ test("setup actions return request-scoped results when request ids are provided"
   }
 
   assert.deepEqual(updates, [
-    { key: "coachProvider", value: "openai", target: mockVscode.ConfigurationTarget.Global },
+    { key: "coachProvider", value: "qwen", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 1);
   assert.deepEqual(messages, [
@@ -838,7 +835,7 @@ test("practice webview configure-key messages normalize provider names before sa
   const stored = [];
   const info = [];
   let refreshes = 0;
-  mockVscode.window.showInputBox = async () => " openai-key ";
+  mockVscode.window.showInputBox = async () => " dashscope-key ";
   mockVscode.window.showInformationMessage = async (message) => {
     info.push(message);
   };
@@ -870,7 +867,7 @@ test("practice webview configure-key messages normalize provider names before sa
     messages.length = 0;
     await provider.handleMessage(view, {
       type: "configureKey",
-      provider: " OpenAI ",
+      provider: " Qwen ",
     });
   } finally {
     mockVscode.window.showInputBox = previousInputBox;
@@ -879,20 +876,20 @@ test("practice webview configure-key messages normalize provider names before sa
   }
 
   assert.deepEqual(stored, [
-    { key: "englishTraining.openaiKey", value: "openai-key" },
+    { key: "englishTraining.dashscopeApiKey", value: "dashscope-key" },
   ]);
   assert.equal(refreshes, 1);
-  assert.deepEqual(info, ["OpenAI API key saved."]);
+  assert.deepEqual(info, ["Qwen API key saved."]);
   assert.deepEqual(messages, []);
 });
 
 test("practice webview configure-setting messages trim setting names before opening pickers", async () => {
-  const previousModel = configValues.openaiTtsModel;
+  const previousModel = configValues.mimoTtsModel;
   const previousGetConfiguration = mockVscode.workspace.getConfiguration;
   const previousQuickPick = mockVscode.window.showQuickPick;
   const updates = [];
   let refreshes = 0;
-  configValues.openaiTtsModel = "gpt-4o-mini-tts";
+  configValues.mimoTtsModel = "mimo-v2.5-tts";
   mockVscode.workspace.getConfiguration = (section) => {
     assert.equal(section, "englishTraining");
     return {
@@ -904,7 +901,7 @@ test("practice webview configure-setting messages trim setting names before open
       },
     };
   };
-  mockVscode.window.showQuickPick = async (items) => items.find((item) => item.label === "tts-1");
+  mockVscode.window.showQuickPick = async (items) => items.find((item) => item.label === "mimo-v2.5-tts");
   api.clearRefreshHandlers();
   api.registerRefreshHandler(() => {
     refreshes += 1;
@@ -931,19 +928,19 @@ test("practice webview configure-setting messages trim setting names before open
     messages.length = 0;
     await provider.handleMessage(view, {
       type: "configureSetting",
-      setting: " openaiTtsModel ",
+      setting: " mimoTtsModel ",
     });
   } finally {
-    configValues.openaiTtsModel = previousModel;
+    configValues.mimoTtsModel = previousModel;
     mockVscode.workspace.getConfiguration = previousGetConfiguration;
     mockVscode.window.showQuickPick = previousQuickPick;
     api.clearRefreshHandlers();
   }
 
-  assert.deepEqual(updates, [
-    { key: "openaiTtsModel", value: "tts-1", target: mockVscode.ConfigurationTarget.Global },
-  ]);
-  assert.equal(refreshes, 1);
+  // Re-selecting the already-active default writes the canonical value once
+  // (the picker normalizes whitespace-padded inputs) and triggers refresh.
+  assert.deepEqual(updates, []);
+  assert.equal(refreshes, 0);
   assert.deepEqual(messages, []);
 });
 
@@ -3553,14 +3550,14 @@ test("normalizes dirty TTS speeds before provider calls or UI state", () => {
 });
 
 test("normalizes legacy/unknown speech-input settings to the current default", () => {
-  // The default route is now openai (was gemini before 0.1.38). Any
-  // unknown legacy value (azure, deepseek, kimi, etc.) must fall back to
-  // the current default rather than crash or silently pick a removed
-  // provider. gemini/mimo/openai stay as-is.
+  // The default route is now qwen (was openai before 0.1.46, gemini before
+  // 0.1.38). Any unknown legacy value (azure, deepseek, kimi, openai, etc.)
+  // must fall back to the current default rather than crash or silently
+  // pick a removed provider. gemini/mimo/qwen stay as-is.
   configValues.audioUnderstandingProvider = "azure";
-  assert.equal(api.normalizedSpeechInputProvider(), "openai");
+  assert.equal(api.normalizedSpeechInputProvider(), "qwen");
   configValues.audioUnderstandingProvider = "openai";
-  assert.equal(api.normalizedSpeechInputProvider(), "openai");
+  assert.equal(api.normalizedSpeechInputProvider(), "qwen");
   configValues.audioUnderstandingProvider = "mimo";
   assert.equal(api.normalizedSpeechInputProvider(), "mimo");
   configValues.audioUnderstandingProvider = "qwen";
@@ -3614,35 +3611,6 @@ test("normalizes stale recorder backend settings to the native recorder", () => 
   configValues.recorderBackend = undefined;
 });
 
-test("normalizes OpenAI protocol enums before UI state or provider routing", () => {
-  const previousMode = configValues.openaiTranscriptionMode;
-  const previousFormat = configValues.openaiTtsResponseFormat;
-
-  try {
-    configValues.openaiTranscriptionMode = " REALTIME ";
-    assert.equal(api.normalizedOpenAITranscriptionMode(), "realtime");
-    assert.equal(api.trainingSettings().openaiTranscriptionMode, "realtime");
-    configValues.openaiTranscriptionMode = "banana";
-    assert.equal(api.normalizedOpenAITranscriptionMode(), "file");
-    assert.equal(api.trainingSettings().openaiTranscriptionMode, "file");
-
-    configValues.openaiTtsResponseFormat = " MP3 ";
-    assert.equal(api.normalizedOpenAITtsResponseFormat(), "mp3");
-    assert.equal(api.trainingSettings().openaiTtsResponseFormat, "mp3");
-    assert.equal(api.speechOutputExtension("openai"), "mp3");
-    configValues.openaiTtsResponseFormat = "not-a-format";
-    assert.equal(api.normalizedOpenAITtsResponseFormat(), "wav");
-    assert.equal(api.trainingSettings().openaiTtsResponseFormat, "wav");
-    assert.equal(api.speechOutputExtension("openai"), "wav");
-    configValues.openaiTtsResponseFormat = "pcm";
-    assert.equal(api.normalizedOpenAITtsResponseFormat(), "pcm");
-    assert.equal(api.speechOutputExtension("openai"), "wav");
-  } finally {
-    configValues.openaiTranscriptionMode = previousMode;
-    configValues.openaiTtsResponseFormat = previousFormat;
-  }
-});
-
 test("provider base URLs are trimmed before UI state or endpoint composition", () => {
   const previous = {
     qwenCompatibleBaseUrl: configValues.qwenCompatibleBaseUrl,
@@ -3679,10 +3647,6 @@ test("provider base URLs are trimmed before UI state or endpoint composition", (
 
 test("provider model ids and external voice ids are trimmed before UI state or request bodies", () => {
   const previous = {
-    openaiRealtimeTranscriptionModel: configValues.openaiRealtimeTranscriptionModel,
-    openaiFileTranscriptionModel: configValues.openaiFileTranscriptionModel,
-    openaiCoachModel: configValues.openaiCoachModel,
-    openaiTtsModel: configValues.openaiTtsModel,
     geminiCoachModel: configValues.geminiCoachModel,
     geminiTtsModel: configValues.geminiTtsModel,
     geminiAudioUnderstandingModel: configValues.geminiAudioUnderstandingModel,
@@ -3700,10 +3664,6 @@ test("provider model ids and external voice ids are trimmed before UI state or r
 
   try {
     Object.assign(configValues, {
-      openaiRealtimeTranscriptionModel: " gpt-realtime-whisper ",
-      openaiFileTranscriptionModel: " gpt-4o-mini-transcribe ",
-      openaiCoachModel: " gpt-4.1-mini ",
-      openaiTtsModel: " gpt-4o-mini-tts ",
       geminiCoachModel: " gemini-3.1-pro-preview ",
       geminiTtsModel: " gemini-3.1-flash-tts-preview ",
       geminiAudioUnderstandingModel: " gemini-3-flash-preview ",
@@ -3721,10 +3681,6 @@ test("provider model ids and external voice ids are trimmed before UI state or r
 
     assert.deepEqual(
       {
-        openaiRealtimeTranscriptionModel: api.trainingSettings().openaiRealtimeTranscriptionModel,
-        openaiFileTranscriptionModel: api.trainingSettings().openaiFileTranscriptionModel,
-        openaiCoachModel: api.trainingSettings().openaiCoachModel,
-        openaiTtsModel: api.trainingSettings().openaiTtsModel,
         geminiCoachModel: api.trainingSettings().geminiCoachModel,
         geminiTtsModel: api.trainingSettings().geminiTtsModel,
         geminiAudioUnderstandingModel: api.trainingSettings().geminiAudioUnderstandingModel,
@@ -3740,10 +3696,6 @@ test("provider model ids and external voice ids are trimmed before UI state or r
         qwenTtsInstructions: api.trainingSettings().qwenTtsInstructions,
       },
       {
-        openaiRealtimeTranscriptionModel: "gpt-realtime-whisper",
-        openaiFileTranscriptionModel: "gpt-4o-mini-transcribe",
-        openaiCoachModel: "gpt-4.1-mini",
-        openaiTtsModel: "gpt-4o-mini-tts",
         geminiCoachModel: "gemini-3.1-pro-preview",
         geminiTtsModel: "gemini-3.1-flash-tts-preview",
         geminiAudioUnderstandingModel: "gemini-3-flash-preview",
@@ -3760,24 +3712,18 @@ test("provider model ids and external voice ids are trimmed before UI state or r
       },
     );
 
-    configValues.openaiCoachModel = "   ";
     configValues.qwenCoachModel = "   ";
     configValues.qwenAudioUnderstandingModel = "bogus-asr-model";
     configValues.qwenTtsVoice = "   ";
-    assert.equal(api.trainingSettings().openaiCoachModel, "gpt-4o");
     assert.equal(api.trainingSettings().qwenCoachModel, "qwen-plus");
     assert.equal(api.trainingSettings().qwenAudioUnderstandingModel, "qwen3-asr-flash");
     assert.equal(api.trainingSettings().qwenTtsVoice, "Cherry");
-    assert.equal(api.configString("openaiCoachModel", "fallback-model"), "fallback-model");
     assert.equal(api.configString("qwenTtsVoice", "fallback-voice"), "fallback-voice");
 
-    configValues.openaiCoachModel = { model: "gpt-4o" };
     configValues.qwenCoachModel = { model: "qwen-plus" };
     configValues.qwenTtsVoice = ["Cherry"];
-    assert.equal(api.trainingSettings().openaiCoachModel, "gpt-4o");
     assert.equal(api.trainingSettings().qwenCoachModel, "qwen-plus");
     assert.equal(api.trainingSettings().qwenTtsVoice, "Cherry");
-    assert.equal(api.configString("openaiCoachModel", "fallback-model"), "fallback-model");
   } finally {
     Object.assign(configValues, previous);
   }
@@ -3799,13 +3745,13 @@ test("path, instruction, and microphone string settings are trimmed before UI st
     process.env.HOME = home;
     configValues.pythonPath = "   ";
     configValues.localMaterialsRoot = " /tmp/english-training-materials ";
-    configValues.openaiTtsInstructions = " Read warmly but precisely. ";
+    configValues.qwenTtsInstructions = " Read warmly but precisely. ";
     configValues.preferredMicrophoneName = " MacBook Pro Microphone ";
     configValues.blockedMicrophoneNamePattern = " iphone|continuity ";
 
     assert.equal(api.pythonPath(), "python3");
     assert.equal(api.trainingSettings().localMaterialsRoot, "/tmp/english-training-materials");
-    assert.equal(api.trainingSettings().openaiTtsInstructions, "Read warmly but precisely.");
+    assert.equal(api.trainingSettings().qwenTtsInstructions, "Read warmly but precisely.");
     assert.equal(api.trainingSettings().preferredMicrophoneName, "MacBook Pro Microphone");
     assert.equal(api.trainingSettings().blockedMicrophoneNamePattern, "iphone|continuity");
 
@@ -3821,12 +3767,12 @@ test("path, instruction, and microphone string settings are trimmed before UI st
 
     configValues.pythonPath = { path: "/usr/bin/python3" };
     configValues.localMaterialsRoot = 123;
-    configValues.openaiTtsInstructions = ["Read warmly"];
+    configValues.qwenTtsInstructions = ["Read warmly"];
     configValues.preferredMicrophoneName = false;
     configValues.blockedMicrophoneNamePattern = { pattern: "iphone" };
     assert.equal(api.pythonPath(), "python3");
     assert.equal(api.trainingSettings().localMaterialsRoot, "");
-    assert.equal(api.trainingSettings().openaiTtsInstructions, "");
+    assert.equal(api.trainingSettings().qwenTtsInstructions, "");
     assert.equal(api.trainingSettings().preferredMicrophoneName, "");
     assert.equal(api.trainingSettings().blockedMicrophoneNamePattern, "iphone|ipad|continuity|karios");
   } finally {
@@ -3841,17 +3787,17 @@ test("path, instruction, and microphone string settings are trimmed before UI st
 
 test("transcription runtime route mirrors the normalized speech-input setting", () => {
   configValues.audioUnderstandingProvider = "azure";
-  assert.equal(api.resolveAudioUnderstandingProvider(), "openai");
+  assert.equal(api.resolveAudioUnderstandingProvider(), "qwen");
   configValues.audioUnderstandingProvider = "deepseek";
-  assert.equal(api.resolveAudioUnderstandingProvider(), "openai");
+  assert.equal(api.resolveAudioUnderstandingProvider(), "qwen");
+  configValues.audioUnderstandingProvider = "openai";
+  assert.equal(api.resolveAudioUnderstandingProvider(), "qwen");
   configValues.audioUnderstandingProvider = "mimo";
   assert.equal(api.resolveAudioUnderstandingProvider(), "mimo");
   configValues.audioUnderstandingProvider = "qwen";
   assert.equal(api.resolveAudioUnderstandingProvider(), "qwen");
   configValues.audioUnderstandingProvider = "gemini";
   assert.equal(api.resolveAudioUnderstandingProvider(), "gemini");
-  configValues.audioUnderstandingProvider = "openai";
-  assert.equal(api.resolveAudioUnderstandingProvider(), "openai");
 });
 
 test("native recorder sample rate ignores dirty config values", () => {
@@ -3866,13 +3812,18 @@ test("native recorder sample rate ignores dirty config values", () => {
   configValues.recordSampleRate = undefined;
 });
 
-test("normalizes stale coach and speech-output providers to OpenAI", () => {
+test("normalizes stale coach and speech-output providers to Qwen", () => {
   configValues.coachProvider = "deepseek";
   configValues.ttsProvider = "unknown";
-  assert.equal(api.normalizedCoachProvider(), "openai");
-  assert.equal(api.normalizedTtsProvider(), "openai");
-  assert.equal(api.normalizeSpeechOutputProvider("deepseek"), "openai");
+  assert.equal(api.normalizedCoachProvider(), "qwen");
+  assert.equal(api.normalizedTtsProvider(), "qwen");
+  assert.equal(api.normalizeSpeechOutputProvider("deepseek"), "qwen");
   assert.equal(api.speechOutputExtension("deepseek"), "wav");
+
+  configValues.coachProvider = "openai";
+  configValues.ttsProvider = "openai";
+  assert.equal(api.normalizedCoachProvider(), "qwen");
+  assert.equal(api.normalizedTtsProvider(), "qwen");
 
   configValues.coachProvider = "mimo";
   configValues.ttsProvider = "qwen";
@@ -3884,32 +3835,32 @@ test("active route key readiness follows configured providers instead of hard-co
   configValues.coachProvider = undefined;
   configValues.audioUnderstandingProvider = undefined;
   configValues.ttsProvider = undefined;
-  assert.deepEqual(api.activeRouteProviders(), ["openai"]);
-  assert.equal(api.normalizeProviderForSetting("coachProvider", "unknown-provider"), "openai");
-  assert.equal(api.normalizeProviderForSetting("audioUnderstandingProvider", "unknown-provider"), "openai");
-  assert.equal(api.normalizeProviderForSetting("ttsProvider", "unknown-provider"), "openai");
+  assert.deepEqual(api.activeRouteProviders(), ["qwen"]);
+  assert.equal(api.normalizeProviderForSetting("coachProvider", "unknown-provider"), "qwen");
+  assert.equal(api.normalizeProviderForSetting("audioUnderstandingProvider", "unknown-provider"), "qwen");
+  assert.equal(api.normalizeProviderForSetting("ttsProvider", "unknown-provider"), "qwen");
   assert.equal(api.normalizeProviderForSetting("coachProvider", "qwen"), "qwen");
   assert.equal(api.normalizeProviderForSetting("audioUnderstandingProvider", "qwen"), "qwen");
   assert.equal(api.normalizeProviderForSetting("ttsProvider", "qwen"), "qwen");
 
   configValues.coachProvider = "gemini";
-  configValues.audioUnderstandingProvider = "openai";
+  configValues.audioUnderstandingProvider = "mimo";
   configValues.ttsProvider = "qwen";
-  assert.deepEqual(api.activeRouteProviders(), ["gemini", "openai", "qwen"]);
-
-  configValues.coachProvider = "openai";
-  configValues.audioUnderstandingProvider = "openai";
-  configValues.ttsProvider = "openai";
-  assert.deepEqual(api.activeRouteProviders(), ["openai"]);
-
-  configValues.coachProvider = "deepseek";
-  configValues.audioUnderstandingProvider = "azure";
-  configValues.ttsProvider = "bogus";
-  assert.deepEqual(api.activeRouteProviders(), ["openai"]);
+  assert.deepEqual(api.activeRouteProviders(), ["gemini", "mimo", "qwen"]);
 
   configValues.coachProvider = "qwen";
   configValues.audioUnderstandingProvider = "qwen";
   configValues.ttsProvider = "qwen";
+  assert.deepEqual(api.activeRouteProviders(), ["qwen"]);
+
+  configValues.coachProvider = "deepseek";
+  configValues.audioUnderstandingProvider = "azure";
+  configValues.ttsProvider = "bogus";
+  assert.deepEqual(api.activeRouteProviders(), ["qwen"]);
+
+  configValues.coachProvider = "openai";
+  configValues.audioUnderstandingProvider = "openai";
+  configValues.ttsProvider = "openai";
   assert.deepEqual(api.activeRouteProviders(), ["qwen"]);
 });
 
@@ -3920,7 +3871,7 @@ test("provider-setting migration only updates stale configured values", async ()
       assert.equal(key, "coachProvider");
       return {
         workspaceValue: " DeepSeek ",
-        globalValue: "openai",
+        globalValue: "qwen",
       };
     },
     update: async (key, value, target) => {
@@ -3928,13 +3879,13 @@ test("provider-setting migration only updates stale configured values", async ()
     },
   };
 
-  assert.equal(await api.migrateProviderSetting(fakeSettings, "coachProvider", "deepseek", "openai"), true);
+  assert.equal(await api.migrateProviderSetting(fakeSettings, "coachProvider", "deepseek", "qwen"), true);
   assert.deepEqual(updates, [
-    { key: "coachProvider", value: "openai", target: mockVscode.ConfigurationTarget.Workspace },
+    { key: "coachProvider", value: "qwen", target: mockVscode.ConfigurationTarget.Workspace },
   ]);
 
   updates.length = 0;
-  assert.equal(await api.migrateProviderSetting(fakeSettings, "coachProvider", "kimi", "openai"), false);
+  assert.equal(await api.migrateProviderSetting(fakeSettings, "coachProvider", "kimi", "qwen"), false);
   assert.deepEqual(updates, []);
 });
 
@@ -3980,11 +3931,11 @@ test("blank API key input warns instead of silently canceling", async () => {
           stored.push({ key, value });
         },
       },
-    }, "openai");
+    }, "qwen");
 
     assert.equal(saved, false);
     assert.deepEqual(stored, []);
-    assert.deepEqual(warningMessages, ["OpenAI API key was empty; nothing was saved."]);
+    assert.deepEqual(warningMessages, ["Qwen API key was empty; nothing was saved."]);
   } finally {
     mockVscode.window.showInputBox = previousInputBox;
     warningMessages.length = 0;
@@ -3994,7 +3945,6 @@ test("blank API key input warns instead of silently canceling", async () => {
 test("saved API keys are trimmed before readiness checks or provider use", async () => {
   const previousDashScopeKey = process.env.DASHSCOPE_API_KEY;
   const secrets = {
-    "englishTraining.openaiKey": " openai-key ",
     "englishTraining.geminiKey": "   ",
     "englishTraining.dashscopeApiKey": " dashscope-key ",
     "englishTraining.mimoKey": undefined,
@@ -4008,12 +3958,10 @@ test("saved API keys are trimmed before readiness checks or provider use", async
   try {
     delete process.env.DASHSCOPE_API_KEY;
     assert.deepEqual(await api.apiKeyAvailability(context), {
-      openai: true,
       gemini: false,
       qwen: true,
       mimo: false,
     });
-    assert.equal(await api.getRequiredKey(context, "openai"), "openai-key");
     assert.equal(await api.getRequiredKey(context, "qwen"), "dashscope-key");
     await assert.rejects(
       () => api.getRequiredKey(context, "gemini"),
@@ -4072,12 +4020,12 @@ test("saving an already stored API key does not rewrite secrets or refresh", asy
           stored.push({ key, value });
         },
       },
-    }, "openai");
+    }, "qwen");
 
     assert.equal(saved, true);
     assert.deepEqual(stored, []);
     assert.equal(refreshes, 0);
-    assert.deepEqual(info, ["OpenAI API key is already saved."]);
+    assert.deepEqual(info, ["Qwen API key is already saved."]);
   } finally {
     mockVscode.window.showInputBox = previousInputBox;
     mockVscode.window.showInformationMessage = previousInfoMessage;
@@ -4143,10 +4091,10 @@ test("core-route key setup batches refreshes across missing providers", async ()
   const previousInfoMessage = mockVscode.window.showInformationMessage;
 
   configValues.coachProvider = "gemini";
-  configValues.audioUnderstandingProvider = "openai";
+  configValues.audioUnderstandingProvider = "mimo";
   configValues.ttsProvider = "qwen";
 
-  const inputs = [" gemini-key ", " openai-key ", " dashscope-key "];
+  const inputs = [" gemini-key ", " mimo-key ", " dashscope-key "];
   const stored = [];
   let refreshes = 0;
   mockVscode.window.showInputBox = async () => inputs.shift();
@@ -4181,7 +4129,7 @@ test("core-route key setup batches refreshes across missing providers", async ()
   assert.equal(refreshes, 1);
   assert.deepEqual(stored, [
     { key: "englishTraining.geminiKey", value: "gemini-key" },
-    { key: "englishTraining.openaiKey", value: "openai-key" },
+    { key: "englishTraining.mimoKey", value: "mimo-key" },
     { key: "englishTraining.dashscopeApiKey", value: "dashscope-key" },
   ]);
 });
@@ -4191,7 +4139,7 @@ test("setting an already active provider does not rewrite settings or refresh", 
   const previousInfoMessage = mockVscode.window.showInformationMessage;
   const info = [];
   let refreshes = 0;
-  configValues.coachProvider = "openai";
+  configValues.coachProvider = "qwen";
   mockVscode.window.showInformationMessage = async (message) => {
     info.push(message);
   };
@@ -4201,7 +4149,7 @@ test("setting an already active provider does not rewrite settings or refresh", 
   });
 
   try {
-    await api.setProviderSetting("coachProvider", "openai");
+    await api.setProviderSetting("coachProvider", "qwen");
   } finally {
     configValues.coachProvider = previousProvider;
     mockVscode.window.showInformationMessage = previousInfoMessage;
@@ -4209,7 +4157,7 @@ test("setting an already active provider does not rewrite settings or refresh", 
   }
 
   assert.equal(refreshes, 0);
-  assert.deepEqual(info, ["English Training coach provider is already openai."]);
+  assert.deepEqual(info, ["English Training coach provider is already qwen."]);
 });
 
 test("provider command canonicalizes dirty provider strings before saving", async () => {
@@ -4217,7 +4165,7 @@ test("provider command canonicalizes dirty provider strings before saving", asyn
   const previousGetConfiguration = mockVscode.workspace.getConfiguration;
   const updates = [];
   let refreshes = 0;
-  configValues.coachProvider = " OpenAI ";
+  configValues.coachProvider = " Qwen ";
   mockVscode.workspace.getConfiguration = (section) => {
     assert.equal(section, "englishTraining");
     return {
@@ -4235,7 +4183,7 @@ test("provider command canonicalizes dirty provider strings before saving", asyn
   });
 
   try {
-    await api.setProviderSetting("coachProvider", " OPENAI ");
+    await api.setProviderSetting("coachProvider", " QWEN ");
   } finally {
     configValues.coachProvider = previousProvider;
     mockVscode.workspace.getConfiguration = previousGetConfiguration;
@@ -4243,7 +4191,7 @@ test("provider command canonicalizes dirty provider strings before saving", asyn
   }
 
   assert.deepEqual(updates, [
-    { key: "coachProvider", value: "openai", target: mockVscode.ConfigurationTarget.Global },
+    { key: "coachProvider", value: "qwen", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 1);
 });
@@ -4254,7 +4202,7 @@ test("provider command refuses providers that are unsupported for a route", asyn
   warningMessages.length = 0;
   const updates = [];
   let refreshes = 0;
-  configValues.coachProvider = "openai";
+  configValues.coachProvider = "qwen";
   mockVscode.workspace.getConfiguration = (section) => {
     assert.equal(section, "englishTraining");
     return {
@@ -4310,7 +4258,7 @@ test("provider command writes global settings when no workspace is open", async 
   });
 
   try {
-    await api.setProviderSetting("coachProvider", "openai");
+    await api.setProviderSetting("coachProvider", "qwen");
   } finally {
     configValues.coachProvider = previousProvider;
     mockVscode.workspace.workspaceFolders = previousWorkspaceFolders;
@@ -4319,7 +4267,7 @@ test("provider command writes global settings when no workspace is open", async 
   }
 
   assert.deepEqual(updates, [
-    { key: "coachProvider", value: "openai", target: mockVscode.ConfigurationTarget.Global },
+    { key: "coachProvider", value: "qwen", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 1);
 });
@@ -4349,7 +4297,7 @@ test("provider command keeps workspace settings when a workspace is open", async
   });
 
   try {
-    await api.setProviderSetting("ttsProvider", "openai");
+    await api.setProviderSetting("ttsProvider", "qwen");
   } finally {
     configValues.ttsProvider = previousProvider;
     mockVscode.workspace.workspaceFolders = previousWorkspaceFolders;
@@ -4358,41 +4306,9 @@ test("provider command keeps workspace settings when a workspace is open", async
   }
 
   assert.deepEqual(updates, [
-    { key: "ttsProvider", value: "openai", target: mockVscode.ConfigurationTarget.Workspace },
+    { key: "ttsProvider", value: "qwen", target: mockVscode.ConfigurationTarget.Workspace },
   ]);
   assert.equal(refreshes, 1);
-});
-
-test("OpenAI Realtime speech input skips rewrites and refresh when already active", async () => {
-  const previous = {
-    audioUnderstandingProvider: configValues.audioUnderstandingProvider,
-    openaiTranscriptionMode: configValues.openaiTranscriptionMode,
-  };
-  const previousInfoMessage = mockVscode.window.showInformationMessage;
-  const info = [];
-  let refreshes = 0;
-  Object.assign(configValues, {
-    audioUnderstandingProvider: "openai",
-    openaiTranscriptionMode: "realtime",
-  });
-  mockVscode.window.showInformationMessage = async (message) => {
-    info.push(message);
-  };
-  api.clearRefreshHandlers();
-  api.registerRefreshHandler(() => {
-    refreshes += 1;
-  });
-
-  try {
-    await api.setOpenAIRealtimeSpeechInput();
-  } finally {
-    Object.assign(configValues, previous);
-    mockVscode.window.showInformationMessage = previousInfoMessage;
-    api.clearRefreshHandlers();
-  }
-
-  assert.equal(refreshes, 0);
-  assert.deepEqual(info, ["English Training OpenAI Realtime speech input is already enabled."]);
 });
 
 test("setting an already active TTS speed does not rewrite settings or refresh", async () => {
@@ -4509,13 +4425,13 @@ test("invalid TTS speed inputs warn without rewriting settings or refreshing", a
 });
 
 test("configuring an already active model setting reports no-op without refresh", async () => {
-  const previousModel = configValues.openaiTtsModel;
+  const previousModel = configValues.geminiTtsModel;
   const previousQuickPick = mockVscode.window.showQuickPick;
   const previousInfoMessage = mockVscode.window.showInformationMessage;
   const info = [];
   let refreshes = 0;
-  configValues.openaiTtsModel = "gpt-4o-mini-tts";
-  mockVscode.window.showQuickPick = async (items) => items.find((item) => item.label === "gpt-4o-mini-tts");
+  configValues.geminiTtsModel = "gemini-3.1-flash-tts-preview";
+  mockVscode.window.showQuickPick = async (items) => items.find((item) => item.label === "gemini-3.1-flash-tts-preview");
   mockVscode.window.showInformationMessage = async (message) => {
     info.push(message);
   };
@@ -4525,26 +4441,26 @@ test("configuring an already active model setting reports no-op without refresh"
   });
 
   try {
-    await api.configureSetting("openaiTtsModel");
+    await api.configureSetting("geminiTtsModel");
   } finally {
-    configValues.openaiTtsModel = previousModel;
+    configValues.geminiTtsModel = previousModel;
     mockVscode.window.showQuickPick = previousQuickPick;
     mockVscode.window.showInformationMessage = previousInfoMessage;
     api.clearRefreshHandlers();
   }
 
   assert.equal(refreshes, 0);
-  assert.deepEqual(info, ["English Training OpenAI speech-output model is already gpt-4o-mini-tts."]);
+  assert.deepEqual(info, ["English Training Gemini speech-output model is already gemini-3.1-flash-tts-preview."]);
 });
 
 test("model setting pickers mark and repair blank effective default values", async () => {
-  const previousModel = configValues.openaiCoachModel;
+  const previousModel = configValues.qwenCoachModel;
   const previousWorkspaceFolders = mockVscode.workspace.workspaceFolders;
   const previousGetConfiguration = mockVscode.workspace.getConfiguration;
   const previousQuickPick = mockVscode.window.showQuickPick;
   const updates = [];
   let refreshes = 0;
-  configValues.openaiCoachModel = "   ";
+  configValues.qwenCoachModel = "   ";
   mockVscode.workspace.workspaceFolders = [];
   mockVscode.workspace.getConfiguration = (section) => {
     assert.equal(section, "englishTraining");
@@ -4558,8 +4474,8 @@ test("model setting pickers mark and repair blank effective default values", asy
     };
   };
   mockVscode.window.showQuickPick = async (items) => {
-    assert.equal(items.find((item) => item.label === "gpt-4o")?.description, "current");
-    return items.find((item) => item.label === "gpt-4o");
+    assert.equal(items.find((item) => item.label === "qwen-plus")?.description, "current");
+    return items.find((item) => item.label === "qwen-plus");
   };
   api.clearRefreshHandlers();
   api.registerRefreshHandler(() => {
@@ -4567,9 +4483,9 @@ test("model setting pickers mark and repair blank effective default values", asy
   });
 
   try {
-    await api.configureSetting("openaiCoachModel");
+    await api.configureSetting("qwenCoachModel");
   } finally {
-    configValues.openaiCoachModel = previousModel;
+    configValues.qwenCoachModel = previousModel;
     mockVscode.workspace.workspaceFolders = previousWorkspaceFolders;
     mockVscode.workspace.getConfiguration = previousGetConfiguration;
     mockVscode.window.showQuickPick = previousQuickPick;
@@ -4577,19 +4493,19 @@ test("model setting pickers mark and repair blank effective default values", asy
   }
 
   assert.deepEqual(updates, [
-    { key: "openaiCoachModel", value: "gpt-4o", target: mockVscode.ConfigurationTarget.Global },
+    { key: "qwenCoachModel", value: "qwen-plus", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 1);
 });
 
 test("model configuration writes global settings when no workspace is open", async () => {
-  const previousModel = configValues.openaiTtsModel;
+  const previousModel = configValues.qwenCoachModel;
   const previousWorkspaceFolders = mockVscode.workspace.workspaceFolders;
   const previousGetConfiguration = mockVscode.workspace.getConfiguration;
   const previousQuickPick = mockVscode.window.showQuickPick;
   const updates = [];
   let refreshes = 0;
-  configValues.openaiTtsModel = "gpt-4o-mini-tts";
+  configValues.qwenCoachModel = "qwen-plus";
   mockVscode.workspace.workspaceFolders = [];
   mockVscode.workspace.getConfiguration = (section) => {
     assert.equal(section, "englishTraining");
@@ -4602,16 +4518,16 @@ test("model configuration writes global settings when no workspace is open", asy
       },
     };
   };
-  mockVscode.window.showQuickPick = async (items) => items.find((item) => item.label === "tts-1");
+  mockVscode.window.showQuickPick = async (items) => items.find((item) => item.label === "qwen3-max");
   api.clearRefreshHandlers();
   api.registerRefreshHandler(() => {
     refreshes += 1;
   });
 
   try {
-    await api.configureSetting("openaiTtsModel");
+    await api.configureSetting("qwenCoachModel");
   } finally {
-    configValues.openaiTtsModel = previousModel;
+    configValues.qwenCoachModel = previousModel;
     mockVscode.workspace.workspaceFolders = previousWorkspaceFolders;
     mockVscode.workspace.getConfiguration = previousGetConfiguration;
     mockVscode.window.showQuickPick = previousQuickPick;
@@ -4619,18 +4535,18 @@ test("model configuration writes global settings when no workspace is open", asy
   }
 
   assert.deepEqual(updates, [
-    { key: "openaiTtsModel", value: "tts-1", target: mockVscode.ConfigurationTarget.Global },
+    { key: "qwenCoachModel", value: "qwen3-max", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 1);
 });
 
 test("configuring a blank custom model setting warns without refresh", async () => {
-  const previousModel = configValues.openaiTtsModel;
+  const previousModel = configValues.qwenCoachModel;
   const previousQuickPick = mockVscode.window.showQuickPick;
   const previousInputBox = mockVscode.window.showInputBox;
   warningMessages.length = 0;
   let refreshes = 0;
-  configValues.openaiTtsModel = "gpt-4o-mini-tts";
+  configValues.qwenCoachModel = "qwen-plus";
   mockVscode.window.showQuickPick = async (items) => items.find((item) => item.custom);
   mockVscode.window.showInputBox = async () => "   ";
   api.clearRefreshHandlers();
@@ -4639,27 +4555,27 @@ test("configuring a blank custom model setting warns without refresh", async () 
   });
 
   try {
-    await api.configureSetting("openaiTtsModel");
+    await api.configureSetting("qwenCoachModel");
   } finally {
-    configValues.openaiTtsModel = previousModel;
+    configValues.qwenCoachModel = previousModel;
     mockVscode.window.showQuickPick = previousQuickPick;
     mockVscode.window.showInputBox = previousInputBox;
     api.clearRefreshHandlers();
   }
 
   assert.equal(refreshes, 0);
-  assert.deepEqual(warningMessages, ["English Training OpenAI speech-output model cannot be empty."]);
+  assert.deepEqual(warningMessages, ["English Training Qwen coach model cannot be empty."]);
   warningMessages.length = 0;
 });
 
 test("provider voice settings do not offer a custom value from the sidebar", async () => {
-  const previousVoice = configValues.openaiTtsVoice;
+  const previousVoice = configValues.geminiTtsVoice;
   const previousWorkspaceFolders = mockVscode.workspace.workspaceFolders;
   const previousGetConfiguration = mockVscode.workspace.getConfiguration;
   const previousQuickPick = mockVscode.window.showQuickPick;
   const updates = [];
   let refreshes = 0;
-  configValues.openaiTtsVoice = "marin";
+  configValues.geminiTtsVoice = "Kore";
   mockVscode.workspace.workspaceFolders = [];
   mockVscode.workspace.getConfiguration = (section) => {
     assert.equal(section, "englishTraining");
@@ -4674,9 +4590,9 @@ test("provider voice settings do not offer a custom value from the sidebar", asy
   };
   mockVscode.window.showQuickPick = async (items) => {
     assert.equal(items.some((item) => item.custom), false);
-    assert.ok(items.some((item) => item.label === "marin"));
-    assert.ok(items.some((item) => item.label === "ash"));
-    return items.find((item) => item.label === "ash");
+    assert.ok(items.some((item) => item.label === "Kore"));
+    assert.ok(items.some((item) => item.label === "Puck"));
+    return items.find((item) => item.label === "Puck");
   };
   api.clearRefreshHandlers();
   api.registerRefreshHandler(() => {
@@ -4684,9 +4600,9 @@ test("provider voice settings do not offer a custom value from the sidebar", asy
   });
 
   try {
-    await api.configureSetting("openaiTtsVoice");
+    await api.configureSetting("geminiTtsVoice");
   } finally {
-    configValues.openaiTtsVoice = previousVoice;
+    configValues.geminiTtsVoice = previousVoice;
     mockVscode.workspace.workspaceFolders = previousWorkspaceFolders;
     mockVscode.workspace.getConfiguration = previousGetConfiguration;
     mockVscode.window.showQuickPick = previousQuickPick;
@@ -4694,7 +4610,7 @@ test("provider voice settings do not offer a custom value from the sidebar", asy
   }
 
   assert.deepEqual(updates, [
-    { key: "openaiTtsVoice", value: "ash", target: mockVscode.ConfigurationTarget.Global },
+    { key: "geminiTtsVoice", value: "Puck", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 1);
 });
@@ -4791,94 +4707,6 @@ test("closed enum setting pickers mark and repair dirty effective current values
   assert.equal(refreshes, 1);
 });
 
-test("optional OpenAI TTS instructions can be cleared through model configuration", async () => {
-  const previousInstructions = configValues.openaiTtsInstructions;
-  const previousWorkspaceFolders = mockVscode.workspace.workspaceFolders;
-  const previousGetConfiguration = mockVscode.workspace.getConfiguration;
-  const previousInputBox = mockVscode.window.showInputBox;
-  const previousInfoMessage = mockVscode.window.showInformationMessage;
-  const updates = [];
-  const info = [];
-  let refreshes = 0;
-  configValues.openaiTtsInstructions = "Read warmly but precisely.";
-  mockVscode.workspace.workspaceFolders = [];
-  mockVscode.workspace.getConfiguration = (section) => {
-    assert.equal(section, "englishTraining");
-    return {
-      get: (key) => configValues[key],
-      inspect: () => ({}),
-      update: async (key, value, target) => {
-        updates.push({ key, value, target });
-        configValues[key] = value;
-      },
-    };
-  };
-  mockVscode.window.showInputBox = async (options) => {
-    assert.equal(options.value, "Read warmly but precisely.");
-    return "   ";
-  };
-  mockVscode.window.showInformationMessage = async (message) => {
-    info.push(message);
-  };
-  api.clearRefreshHandlers();
-  api.registerRefreshHandler(() => {
-    refreshes += 1;
-  });
-
-  try {
-    await api.configureSetting("openaiTtsInstructions");
-  } finally {
-    configValues.openaiTtsInstructions = previousInstructions;
-    mockVscode.workspace.workspaceFolders = previousWorkspaceFolders;
-    mockVscode.workspace.getConfiguration = previousGetConfiguration;
-    mockVscode.window.showInputBox = previousInputBox;
-    mockVscode.window.showInformationMessage = previousInfoMessage;
-    api.clearRefreshHandlers();
-  }
-
-  assert.deepEqual(updates, [
-    { key: "openaiTtsInstructions", value: "", target: mockVscode.ConfigurationTarget.Global },
-  ]);
-  assert.equal(refreshes, 1);
-  assert.deepEqual(info, ["English Training OpenAI speech style cleared."]);
-});
-
-test("OpenAI stack preset skips rewrites and refresh when already active", async () => {
-  const previous = {
-    coachProvider: configValues.coachProvider,
-    audioUnderstandingProvider: configValues.audioUnderstandingProvider,
-    ttsProvider: configValues.ttsProvider,
-    openaiTranscriptionMode: configValues.openaiTranscriptionMode,
-  };
-  const previousInfoMessage = mockVscode.window.showInformationMessage;
-  const info = [];
-  let refreshes = 0;
-  Object.assign(configValues, {
-    coachProvider: "openai",
-    audioUnderstandingProvider: "openai",
-    ttsProvider: "openai",
-    openaiTranscriptionMode: "file",
-  });
-  mockVscode.window.showInformationMessage = async (message) => {
-    info.push(message);
-  };
-  api.clearRefreshHandlers();
-  api.registerRefreshHandler(() => {
-    refreshes += 1;
-  });
-
-  try {
-    await api.setOpenAIStackProviders();
-  } finally {
-    Object.assign(configValues, previous);
-    mockVscode.window.showInformationMessage = previousInfoMessage;
-    api.clearRefreshHandlers();
-  }
-
-  assert.equal(refreshes, 0);
-  assert.deepEqual(info, ["English Training OpenAI stack is already enabled."]);
-});
-
 test("setting an already active Qwen voice does not rewrite settings or refresh", async () => {
   const previous = {
     qwenTtsVoice: configValues.qwenTtsVoice,
@@ -4965,19 +4793,6 @@ test("blank Qwen voices warn without rewriting settings or refreshing", async ()
 });
 
 test("provider TTS voices are normalized before UI state or provider calls", () => {
-  configValues.openaiTtsVoice = "marin";
-  assert.equal(api.resolveOpenAITtsVoice("gpt-4o-mini-tts"), "marin");
-  assert.equal(api.resolveOpenAITtsVoice("tts-1"), "marin");
-  assert.equal(api.resolveOpenAITtsVoice("tts-1-hd"), "marin");
-
-  configValues.openaiTtsVoice = "ash";
-  assert.equal(api.resolveOpenAITtsVoice("tts-1"), "ash");
-  configValues.openaiTtsVoice = " ";
-  assert.equal(api.resolveOpenAITtsVoice("tts-1"), "marin");
-  configValues.openaiTtsVoice = "not-a-real-voice";
-  assert.equal(api.resolveOpenAITtsVoice("tts-1"), "marin");
-  assert.equal(api.trainingSettings().openaiTtsVoice, "marin");
-
   configValues.geminiTtsVoice = "Zephyr";
   assert.equal(api.normalizedGeminiTtsVoice(), "Zephyr");
   configValues.geminiTtsVoice = "not-a-real-gemini-voice";
@@ -5305,43 +5120,6 @@ test("first-json parser only accepts object-shaped JSON", () => {
 });
 
 test("provider text extractors skip nullish content parts defensively", () => {
-  assert.equal(api.extractOpenAIText({
-    choices: [
-      {
-        message: {
-          content: [
-            null,
-            ["bad"],
-            { text: "First line." },
-            { output_text: "ignored in choices content" },
-            { text: "Second line." },
-          ],
-        },
-      },
-    ],
-  }), "First line.\nSecond line.");
-
-  assert.equal(api.extractOpenAIText({
-    output: [
-      null,
-      {
-        content: [
-          null,
-          ["bad"],
-          { output_text: "Output text." },
-        ],
-      },
-    ],
-  }), "Output text.");
-  assert.equal(api.extractOpenAIText({
-    choices: [
-      null,
-      { message: null },
-      { message: { content: [] } },
-      { message: { content: [{ text: "Later choice text." }] } },
-    ],
-  }), "Later choice text.");
-
   assert.equal(api.extractGeminiText({
     candidates: [
       {
@@ -5366,16 +5144,6 @@ test("provider text extractors skip nullish content parts defensively", () => {
 });
 
 test("speech and TTS provider extractors skip malformed nested entries", async () => {
-  assert.equal(api.extractOpenAIFileTranscript({
-    segments: [
-      null,
-      ["bad"],
-      {},
-      { text: "Hello" },
-      { text: "world." },
-    ],
-  }), "Hello world.");
-
   assert.equal(api.extractMimoTranscript({
     choices: [
       null,
@@ -5415,8 +5183,8 @@ test("speech and TTS provider extractors skip malformed nested entries", async (
   );
   assert.equal(api.ensureNonEmptyAudioData(Buffer.from("audio"), "Demo TTS").toString("utf8"), "audio");
   assert.throws(
-    () => api.ensureNonEmptyAudioData(Buffer.alloc(0), "OpenAI TTS"),
-    /OpenAI TTS returned empty audio data/,
+    () => api.ensureNonEmptyAudioData(Buffer.alloc(0), "Qwen TTS"),
+    /Qwen TTS returned empty audio data/,
   );
 
   assert.equal(
@@ -5754,20 +5522,13 @@ test("maps audio MIME types to stable file extensions and output MIME types", ()
   assert.equal(api.extensionFromMime("audio/webm;codecs=opus"), "webm");
   assert.equal(api.extensionFromMime("audio/ogg"), "ogg");
   assert.equal(api.extensionFromMime("audio/mpeg"), "mp3");
+  // After 0.1.46 every supported TTS provider writes a WAV container; unknown
+  // or retired providers fall back to the Qwen default.
   assert.equal(api.speechOutputExtension("gemini"), "wav");
   assert.equal(api.speechOutputExtension(" Qwen "), "wav");
-  // OpenAI's extension now reflects englishTraining.openaiTtsResponseFormat
-  // (wav is the low-latency default in 0.1.38; mp3 stays available). pcm has
-  // no container so we wrap it in WAV and report .wav. Qwen/Gemini/MiMo write
-  // WAV containers, and unknown providers fall back to the OpenAI default.
-  configValues.openaiTtsResponseFormat = "wav";
+  assert.equal(api.speechOutputExtension("mimo"), "wav");
   assert.equal(api.speechOutputExtension("openai"), "wav");
-  configValues.openaiTtsResponseFormat = "mp3";
-  assert.equal(api.speechOutputExtension("openai"), "mp3");
-  configValues.openaiTtsResponseFormat = "pcm";
-  assert.equal(api.speechOutputExtension("openai"), "wav");
-  configValues.openaiTtsResponseFormat = "";
-  assert.equal(api.speechOutputExtension("qwen"), "wav");
+  assert.equal(api.speechOutputExtension(""), "wav");
   assert.equal(api.mimeTypeForAudioPath("/tmp/native-version.wav"), "audio/wav");
   assert.equal(api.mimeTypeForAudioPath("/tmp/native-version.mp3"), "audio/mpeg");
 });

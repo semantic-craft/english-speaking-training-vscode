@@ -65,13 +65,6 @@ test("every registered command is contributed exactly once", () => {
 test("sidebar model presets stay inside package configuration enums", () => {
   for (const setting of [
     "mimoCoachModel",
-    "openaiTranscriptionMode",
-    "openaiRealtimeTranscriptionModel",
-    "openaiFileTranscriptionModel",
-    "openaiCoachModel",
-    "openaiTtsModel",
-    "openaiTtsVoice",
-    "openaiTtsResponseFormat",
     "recorderBackend",
     "geminiCoachModel",
     "geminiAudioUnderstandingModel",
@@ -94,19 +87,8 @@ test("sidebar model presets stay inside package configuration enums", () => {
   }
 });
 
-test("OpenAI TTS source fallback matches package default", () => {
-  const packageDefault = packageJson.contributes.configuration.properties["englishTraining.openaiTtsVoice"].default;
-  assert.match(settingsSource, new RegExp(`configString\\("openaiTtsVoice", "${packageDefault}"\\)`));
-  assert.match(settingsSource, new RegExp(`\\? voice : "${packageDefault}"`));
-  assert.match(ttsSource, /return normalizedOpenAITtsVoice\(\)/);
-});
-
 test("runtime model strings are trimmed before UI state and provider calls", () => {
   for (const [source, pattern] of [
-    [settingsSource, /openaiRealtimeTranscriptionModel: configString\("openaiRealtimeTranscriptionModel", "gpt-realtime-whisper"\)/],
-    [settingsSource, /openaiFileTranscriptionModel: configString\("openaiFileTranscriptionModel", "gpt-4o-transcribe"\)/],
-    [settingsSource, /openaiCoachModel: configString\("openaiCoachModel", "gpt-4o"\)/],
-    [settingsSource, /openaiTtsModel: configString\("openaiTtsModel", "gpt-4o-mini-tts"\)/],
     [settingsSource, /geminiCoachModel: configString\("geminiCoachModel", "gemini-3-flash-preview"\)/],
     [settingsSource, /geminiTtsModel: configString\("geminiTtsModel", "gemini-3\.1-flash-tts-preview"\)/],
     [settingsSource, /geminiAudioUnderstandingModel: configString\("geminiAudioUnderstandingModel", "gemini-3-flash-preview"\)/],
@@ -123,21 +105,17 @@ test("runtime model strings are trimmed before UI state and provider calls", () 
     [coachSource, /configString\("mimoCoachModel", "mimo-v2\.5-pro"\)/],
     [coachSource, /configString\("qwenCoachModel", "qwen-plus"\)/],
     [coachSource, /configString\("geminiCoachModel", "gemini-3-flash-preview"\)/],
-    [coachSource, /configString\("openaiCoachModel", "gpt-4o"\)/],
-    [transcribeSource, /configString\("openaiFileTranscriptionModel", "gpt-4o-transcribe"\)/],
     [transcribeSource, /configString\("mimoAudioUnderstandingModel", "mimo-v2\.5"\)/],
     [transcribeSource, /normalizedQwenAudioUnderstandingModel\(\)/],
     [transcribeSource, /normalizedQwenCompatibleBaseUrl\(\)/],
-    [transcribeSource, /configString\("openaiRealtimeTranscriptionModel", "gpt-realtime-whisper"\)/],
     [transcribeSource, /configString\("geminiAudioUnderstandingModel", "gemini-3-flash-preview"\)/],
-    [ttsSource, /configString\("openaiTtsModel", "gpt-4o-mini-tts"\)/],
     [ttsSource, /configString\("geminiTtsModel", "gemini-3\.1-flash-tts-preview"\)/],
     [ttsSource, /normalizedQwenTtsModel\(\)/],
     [ttsSource, /normalizedQwenTtsVoice\(\)/],
     [ttsSource, /normalizedQwenTtsLanguageType\(\)/],
     [ttsSource, /configString\("mimoTtsModel", "mimo-v2\.5-tts"\)/],
-    [extensionSource, /const settings = trainingSettings\(\);[\s\S]*case "openaiCoachModel": return settings\.openaiCoachModel/],
-    [extensionSource, /case "openaiTtsModel": return settings\.openaiTtsModel/],
+    [extensionSource, /const settings = trainingSettings\(\);[\s\S]*case "qwenCoachModel": return settings\.qwenCoachModel/],
+    [extensionSource, /case "mimoTtsModel": return settings\.mimoTtsModel/],
   ]) {
     assert.match(source, pattern);
   }
@@ -164,7 +142,7 @@ test("runtime free-form path and microphone strings are trimmed before state or 
   assert.match(coreSource, /export function resolveFfmpegPath\(\): string \{\s*const configured = expandHomePath\(configString\("nativeRecorderFfmpegPath", "ffmpeg"\)\);/);
   assert.match(settingsSource, /export function pythonPath\(\): string \{\s*return expandHomePath\(configString\("pythonPath", "python3"\)\);/);
   assert.match(settingsSource, /localMaterialsRoot: configString\("localMaterialsRoot"\)/);
-  assert.match(settingsSource, /openaiTtsInstructions: configString\("openaiTtsInstructions"\)/);
+  assert.match(settingsSource, /qwenTtsInstructions: configString\("qwenTtsInstructions"\)/);
   assert.match(settingsSource, /preferredMicrophoneName: configString\("preferredMicrophoneName"\)/);
   assert.match(settingsSource, /blockedMicrophoneNamePattern: configString\("blockedMicrophoneNamePattern", DEFAULT_BLOCKED_MICROPHONE_PATTERN\)/);
   assert.match(practiceViewSource, /const configuredRoot = expandHome\(configString\("localMaterialsRoot"\)\)/);
@@ -187,40 +165,43 @@ test("runtime source files stay text-searchable", () => {
   assert.match(nativeRecorderSource, /await previousStart;[\s\S]*startNativeFfmpegRecordingLocked/);
 });
 
-test("speech input manifest no longer exposes Azure", () => {
+test("speech input manifest no longer exposes Azure or OpenAI", () => {
   const speechInput = packageJson.contributes.configuration.properties["englishTraining.audioUnderstandingProvider"];
-  // Default switched from gemini → openai when the OpenAI stack became the
-  // primary route in 0.1.38 (gpt-4o-transcribe with domain prompt).
-  assert.equal(speechInput.default, "openai");
-  assert.deepEqual(speechInput.enum, ["gemini", "openai", "qwen", "mimo"]);
+  // Default switched to qwen after OpenAI was retired in 0.1.46.
+  assert.equal(speechInput.default, "qwen");
+  assert.deepEqual([...speechInput.enum].sort(), ["gemini", "mimo", "qwen"]);
   assert.equal(packageJson.contributes.configuration.properties["englishTraining.azureSpeechRegion"], undefined);
   assert.equal(packageJson.contributes.configuration.properties["englishTraining.azureSpeechLocale"], undefined);
   assert.equal(
-    packageJson.contributes.commands.some((item) => item.command.includes("Azure")),
+    packageJson.contributes.commands.some((item) => item.command.includes("Azure") || item.command.includes("OpenAI")),
     false,
   );
 });
 
-test("OpenAI-first UX and packaging metadata stay aligned", () => {
+test("Qwen-first UX and packaging metadata stay aligned", () => {
   assert.equal(packageLock.version, packageJson.version);
   assert.equal(packageLock.packages[""].version, packageJson.version);
   assert.equal(
     packageJson.contributes.configuration.properties["englishTraining.openaiTtsLanguage"],
     undefined,
-    "OpenAI speech endpoint has no language field; do not expose a dead setting",
+    "Retired OpenAI settings must not return",
+  );
+  assert.equal(
+    packageJson.contributes.configuration.properties["englishTraining.openaiCoachModel"],
+    undefined,
+    "Retired OpenAI settings must not return",
   );
   assert.match(mediaSource, /function routeKeyStatus/);
   assert.match(mediaSource, /function normalizeProviderForSetting/);
   assert.match(mediaSource, /function renderMissingSourceSetup/);
-  assert.match(mediaSource, /value: "openai", label: "OpenAI", note: "default STT[\s\S]*modelSetting: "openaiFileTranscriptionModel", extraSetting: "openaiTranscriptionMode", extraLabel: "Mode"/);
-  assert.match(mediaSource, /extraSettings: \[[\s\S]*setting: "openaiTtsVoice", label: "Voice"[\s\S]*setting: "openaiTtsInstructions", label: "Style"[\s\S]*setting: "openaiTtsResponseFormat", label: "Format"[\s\S]*\]/);
+  assert.match(mediaSource, /value: "qwen", label: "Qwen-ASR"[\s\S]*modelSetting: "qwenAudioUnderstandingModel"/);
+  assert.match(mediaSource, /extraSettings: \[[\s\S]*setting: "qwenTtsVoice", label: "Voice"[\s\S]*setting: "qwenTtsLanguageType", label: "Language"[\s\S]*setting: "qwenTtsInstructions", label: "Style"[\s\S]*setting: "qwenTtsEndpoint", label: "Endpoint"[\s\S]*\]/);
   assert.match(mediaSource, /function providerExtraSettings\(option\)/);
   assert.match(mediaSource, /function recorderSettingsHtml\(settings\)/);
   assert.match(mediaSource, /data-config-setting="recorderBackend"/);
   assert.match(mediaSource, /data-sidebar-command="selectMicrophone"/);
   assert.match(coachSource, /normalizedCoachProvider\(\)/);
   assert.match(transcribeSource, /normalizedSpeechInputProvider\(\)/);
-  assert.match(transcribeSource, /normalizedOpenAITranscriptionMode\(\)/);
   assert.match(transcribeSource, /chatCompletionsUrl\(baseUrl\)/);
   assert.match(transcribeSource, /chatCompletionsUrl\(normalizedQwenCompatibleBaseUrl\(\)\)/);
   assert.match(transcribeSource, /configString\("mimoAudioBaseUrl", MIMO_OPENAI_BASE_URL\)/);
@@ -233,7 +214,7 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(providerRoutesSource, /const rawCurrent = settings\.get<unknown>\("ttsSpeed"\)/);
   assert.match(providerRoutesSource, /const currentIsCanonical = typeof rawCurrent === "number" && rawCurrent === clamped/);
   assert.match(providerRoutesSource, /const currentVoice = configString\("qwenTtsVoice", "Cherry"\)/);
-  assert.match(providerRoutesSource, /Boolean\(\(await context\.secrets\.get\(secretKeys\.openai\) \|\| ""\)\.trim\(\)\)/);
+  assert.match(providerRoutesSource, /Boolean\(storedOrEnvApiKey\(await context\.secrets\.get\(secretKeys\.qwen\)/);
   assert.match(coreSource, /await context\.secrets\.get\(secretKeys\[provider\]\)/);
   assert.match(coreSource, /process\.env\.DASHSCOPE_API_KEY/);
   assert.match(practiceViewSource, /normalizedProviderName\(payload\.value\)/);
@@ -243,7 +224,6 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(settingsSource, /configString\("mimoTtsBaseUrl", MIMO_OPENAI_BASE_URL\)/);
   assert.match(settingsSource, /normalizedQwenCompatibleBaseUrl\(\)/);
   assert.match(settingsSource, /normalizedQwenAudioUnderstandingModel\(\)/);
-  assert.match(ttsSource, /normalizedOpenAITtsResponseFormat\(\)/);
   assert.match(ttsSource, /normalizedProviderName\(provider\)/);
   assert.match(ttsSource, /fetchWithTimeout\(normalizedQwenTtsEndpoint\(\)/);
   assert.match(ttsSource, /language_type: normalizedQwenTtsLanguageType\(\)/);
@@ -254,7 +234,6 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(ttsSource, /provider = normalizedTtsProvider\(\)/);
   assert.match(pipelineSource, /const ttsProvider = normalizedTtsProvider\(\)/);
   assert.match(audioSynthesisSource, /const provider = normalizedTtsProvider\(\)/);
-  assert.match(ttsSource, /normalizedOpenAITtsVoice\(\)/);
   assert.match(ttsSource, /const voiceName = normalizedGeminiTtsVoice\(\)/);
   assert.match(ttsSource, /const voice = normalizedMimoTtsVoice\(\)/);
   assert.match(mediaSource, /function recorderBackend\(\) \{[\s\S]*scalarField\(settings, "recorderBackend"\)\.toLowerCase\(\)[\s\S]*backend === "maclocal"[\s\S]*backend === "webview"[\s\S]*backend === "auto"[\s\S]*: "macLocal"/);
@@ -270,9 +249,9 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /function webviewMimeTypeSupported\(mimeType\) \{[\s\S]*typeof MediaRecorder\.isTypeSupported === "function"[\s\S]*MediaRecorder\.isTypeSupported\(mimeType\)/);
   assert.match(mediaSource, /function createWebviewMediaRecorder\(mediaStream\) \{[\s\S]*"audio\/webm;codecs=opus"[\s\S]*\.find\(webviewMimeTypeSupported\)[\s\S]*new MediaRecorder\(mediaStream, webviewRecorderOptions\(mimeType\)\)[\s\S]*new MediaRecorder\(mediaStream, \{ mimeType \}\)[\s\S]*catch \(_\)[\s\S]*new MediaRecorder\(mediaStream\);/);
   assert.match(mediaSource, /function stopWebviewStreamTracks\(mediaStream\) \{[\s\S]*typeof mediaStream\.getTracks !== "function"[\s\S]*typeof track\.stop === "function"[\s\S]*track\.stop\(\);[\s\S]*catch \(_\)/);
-  assert.match(extensionSource, /function configSettingEffectiveValue\(setting: ConfigSettingName, fallback: string\): string \{[\s\S]*normalizedOpenAITranscriptionMode\(\)[\s\S]*normalizedOpenAITtsResponseFormat\(\)[\s\S]*normalizedRecorderBackend\(\)[\s\S]*normalizedOpenAITtsVoice\(\)[\s\S]*normalizedGeminiTtsVoice\(\)[\s\S]*normalizedMimoTtsVoice\(\)/);
-  assert.match(extensionSource, /function configSettingAllowsBlank\(setting: ConfigSettingName\): boolean \{[\s\S]*openaiTtsInstructions/);
-  assert.match(extensionSource, /function configSettingAllowsCustom\(setting: ConfigSettingName\): boolean \{[\s\S]*openaiTranscriptionMode[\s\S]*openaiTtsResponseFormat[\s\S]*recorderBackend[\s\S]*openaiTtsVoice[\s\S]*geminiTtsVoice[\s\S]*mimoTtsVoice/);
+  assert.match(extensionSource, /function configSettingEffectiveValue\(setting: ConfigSettingName, fallback: string\): string \{[\s\S]*normalizedRecorderBackend\(\)[\s\S]*normalizedGeminiTtsVoice\(\)[\s\S]*normalizedMimoTtsVoice\(\)/);
+  assert.match(extensionSource, /function configSettingAllowsBlank\(setting: ConfigSettingName\): boolean \{[\s\S]*qwenTtsInstructions/);
+  assert.match(extensionSource, /function configSettingAllowsCustom\(setting: ConfigSettingName\): boolean \{[\s\S]*recorderBackend[\s\S]*geminiTtsVoice[\s\S]*mimoTtsVoice/);
   assert.match(mediaSource, /value: "mimo", label: "MiMo", note: "Xiaomi audio understanding", modelSetting: "mimoAudioUnderstandingModel"/);
   assert.match(mediaSource, /value: "qwen", label: "Qwen"[\s\S]*modelSetting: "qwenCoachModel"/);
   assert.match(mediaSource, /value: "qwen", label: "Qwen-ASR"[\s\S]*modelSetting: "qwenAudioUnderstandingModel"/);
@@ -343,7 +322,6 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /function addElementListener\(id, eventName, handler\) \{[\s\S]*const element = \$\(id\);[\s\S]*if \(!element\) return null;[\s\S]*element\.addEventListener\(eventName, handler\);[\s\S]*return element;/);
   assert.match(mediaSource, /const firstTextField = \(obj, \.\.\.keys\) => \{[\s\S]*for \(const key of keys\)[\s\S]*return "";/);
   assert.match(mediaSource, /const firstTextList = \(obj, \.\.\.keys\) => \{[\s\S]*const items = textList\(obj && obj\[key\]\)[\s\S]*return \[\];/);
-  assert.match(coreSource, /function extractOpenAIText[\s\S]*for \(const choice of choices\)/);
   assert.match(coreSource, /function extractGeminiText[\s\S]*for \(const candidate of candidates\)/);
   assert.match(mediaSource, /function normalizePracticeDrillExamples\(value\)[\s\S]*const text = scalarField\(source, "text"\)[\s\S]*source: scalarField\(source, "source"\) \|\| "coach"/);
   assert.match(mediaSource, /function normalizePracticeResult\(value\) \{[\s\S]*nativeVersion: firstTextField\(result, "nativeVersion", "native_version"\)[\s\S]*quickFix: firstTextField\(result, "quickFix", "quick_fix"\)[\s\S]*errorTags: firstTextList\(result, "errorTags", "error_tags"\)[\s\S]*audioUri: firstTextField\(result, "audioUri", "audio_uri"\)[\s\S]*localAudioUri: firstTextField\(result, "localAudioUri", "local_audio_uri"\)[\s\S]*priorTurn: objectValue\(result\.priorTurn\)/);
@@ -526,7 +504,7 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /datasetText\(actionTrigger, "action"\) === "today-tts"[\s\S]*blockIfPracticeTurnInProgress\("Finish or stop the current turn before generating example audio\."\)[\s\S]*blockIfTransientActionInProgress\("generating example audio"\)[\s\S]*type: "todayTts", requestId/);
   assert.match(mediaSource, /button\[data-speed\]"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*Number\(datasetText\(button, "speed"\)\)[\s\S]*type: "setTtsSpeed"/);
   assert.match(mediaSource, /button\[data-voice-id\]"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*const voiceId = datasetText\(button, "voiceId"\);[\s\S]*if \(!voiceId\) return;[\s\S]*type: "setQwenVoice"/);
-  assert.match(mediaSource, /#useOpenAIStack"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*type: "useOpenAIStack"/);
+  assert.match(mediaSource, /#useQwenStack"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*type: "useQwenStack"/);
   assert.match(mediaSource, /\[data-key\]"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*const provider = datasetText\(keyTrigger, "key"\);[\s\S]*if \(!provider\) return;[\s\S]*type: "configureKey"/);
   assert.match(mediaSource, /\[data-provider-setting\]"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*const setting = datasetText\(providerTrigger, "providerSetting"\);[\s\S]*const value = datasetText\(providerTrigger, "providerValue"\);[\s\S]*if \(!setting \|\| !value\) return;[\s\S]*type: "setProvider"/);
   assert.match(mediaSource, /\[data-config-setting\]"[\s\S]*blockSetupChangeDuringPractice\(\)[\s\S]*const setting = datasetText\(configTrigger, "configSetting"\);[\s\S]*if \(!setting\) return;[\s\S]*type: "configureSetting"/);
@@ -574,7 +552,7 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /function routeKeyStatus\(currentState\) \{[\s\S]*const safeState = objectValue\(currentState\) \|\| \{\};[\s\S]*const keys = objectValue\(safeState\.keys\) \|\| \{\};[\s\S]*activeRouteProviders\(safeState\.settings\)[\s\S]*providers\.filter\(\(provider\) => !providerKeySaved\(keys, provider\)\)/);
   assert.match(mediaSource, /function setupReady\(currentState\) \{[\s\S]*const progress = objectValue\(currentState && currentState\.progress\) \|\| \{\};[\s\S]*const hasLessons = positiveInteger\(progress\.total\) > 0/);
   assert.match(mediaSource, /function setupBlockMessage\(currentState\) \{[\s\S]*const diag = objectValue\(currentState && currentState\.sourceDiagnostics\) \|\| \{\};[\s\S]*const packageJsonError = scalarField\(diag, "packageJsonError"\);[\s\S]*scalarField\(diag, "currentPackageDate"\) \|\| "\?"/);
-  assert.match(mediaSource, /const settings = objectValue\(currentState && currentState\.settings\) \|\| \{\};[\s\S]*const keys = objectValue\(currentState && currentState\.keys\) \|\| \{\};[\s\S]*normalizeProviderForSetting\("ttsProvider", scalarField\(settings, "ttsProvider"\) \|\| "openai"\)[\s\S]*!providerKeySaved\(keys, provider\)/);
+  assert.match(mediaSource, /const settings = objectValue\(currentState && currentState\.settings\) \|\| \{\};[\s\S]*const keys = objectValue\(currentState && currentState\.keys\) \|\| \{\};[\s\S]*normalizeProviderForSetting\("ttsProvider", scalarField\(settings, "ttsProvider"\) \|\| "qwen"\)[\s\S]*!providerKeySaved\(keys, provider\)/);
   assert.match(mediaSource, /todayTtsBlocked = todayTtsBlockMessage\(state, line\)/);
   assert.match(mediaSource, /blockMessage = todayTtsBlockMessage\(state, currentExampleText\)/);
   assert.match(mediaSource, /function ensurePracticeSetupReady/);
@@ -608,16 +586,10 @@ test("OpenAI-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /if \(!startDrillPractice\(example\)\) return;[\s\S]*bumpDrillAttempt/);
   assert.match(mediaSource, /No prebuilt\/ folder was found/);
   assert.match(mediaSource, /setting === "coachProvider"/);
-  assert.match(mediaSource, /id="useOpenAIStack"/);
-  assert.match(mediaSource, /type: "useOpenAIStack"/);
-  assert.match(mediaSource, /openaiRealtimeTranscriptionModel/);
-  assert.match(mediaSource, /Realtime model/);
+  assert.match(mediaSource, /id="useQwenStack"/);
+  assert.match(mediaSource, /type: "useQwenStack"/);
   assert.doesNotMatch(mediaSource, /Connect Gemini/);
   assert.doesNotMatch(mediaSource, /Add a Gemini API key/);
-  assert.match(
-    extensionSource,
-    /englishTraining\.useOpenAIRealtimeAudioUnderstanding"[\s\S]*setOpenAIRealtimeSpeechInput/,
-  );
-  assert.match(providerRoutesSource, /const providers: ProviderName\[\] = \["openai", "gemini", "qwen", "mimo"\]/);
+  assert.match(providerRoutesSource, /const providers: ProviderName\[\] = \["gemini", "qwen", "mimo"\]/);
   assert.match(providerRoutesSource, /API key was empty; nothing was saved/);
 });
