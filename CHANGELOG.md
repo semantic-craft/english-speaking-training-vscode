@@ -9,6 +9,34 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.1.47] — 2026-05-29
+
+### Changed
+- Qwen coach model default is now `qwen3.6-plus` (Alibaba Bailian's recommended
+  balanced model); the picker offers `qwen3.6-plus` / `qwen3.6-flash` /
+  `qwen3.7-max` with guidance. Coach requests now send `enable_thinking: false`
+  on the hybrid models so DashScope structured-output (JSON) stays reliable and
+  interactive latency drops; `qwen3.7-max` keeps the think-strip fallback.
+- Qwen-TTS default voice is now `Jennifer` (cinematic American English). The
+  voice picker is a curated 12-voice English set with descriptions; all 48
+  official Qwen3-TTS voices remain selectable via Custom… / settings.json.
+- Gemini fallback voices are now a curated 12-voice English set with
+  descriptions (default keeps `Kore`); all 30 official voices stay valid.
+- Provider-setting descriptions clarified: Qwen is primary; Gemini and MiMo are
+  fallback.
+
+### Added
+- Voice↔model guard: the premium English Qwen voices
+  (Jennifer/Aiden/Ryan/Katerina) exist only on `qwen3-tts-flash`. Selecting one
+  under `qwen3-tts-instruct-flash` now auto-falls back to `qwen3-tts-flash` for
+  that clip (sync and realtime paths) instead of a 400 error.
+
+### Fixed
+- Gemini coach / speech-input default moved off the deprecated
+  `gemini-3-flash-preview` to GA `gemini-3.5-flash`, and the shut-down
+  `gemini-3.1-flash-lite-preview` (retired 2026-05-25) was removed. Existing
+  settings migrate automatically on activation.
+
 ## [0.1.46] — 2026-05-25
 
 ### Added
