@@ -276,7 +276,7 @@ async function transcribeWithGemini(
   sessionDir: string,
 ): Promise<string> {
   const apiKey = await getRequiredKey(context, "gemini");
-  const model = configString("geminiAudioUnderstandingModel", "gemini-3-flash-preview");
+  const model = configString("geminiAudioUnderstandingModel", "gemini-3.5-flash");
   const audio = await prepareInlineAudio(audioPath, mimeType, sessionDir);
   const byteLength = Buffer.byteLength(audio.base64, "base64");
   if (byteLength > 18 * 1024 * 1024) {

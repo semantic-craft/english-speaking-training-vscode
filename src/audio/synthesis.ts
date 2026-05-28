@@ -2,11 +2,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-import { configString, getRequiredKey, stamp, stringValue } from "../core.js";
+import { appendOutput, configString, getRequiredKey, stamp, stringValue } from "../core.js";
 import type { JsonObject } from "../types.js";
 import { mimeTypeForAudioPath, speechOutputExtension, synthesizeWithConfiguredTts } from "../practice/tts.js";
 import { synthesizeQwenRealtime } from "../practice/qwen-tts-realtime.js";
 import {
+  effectiveQwenTtsBaseModel,
   normalizedQwenTtsLanguageType,
   normalizedQwenTtsModel,
   normalizedQwenTtsRealtimeEndpoint,
@@ -135,7 +136,12 @@ export async function streamQwenToFile(
   sink: QwenStreamSink,
 ): Promise<void> {
   const apiKey = await getRequiredKey(context, "qwen");
-  const baseModel = normalizedQwenTtsModel();
+  const voice = normalizedQwenTtsVoice();
+  const requestedBase = normalizedQwenTtsModel();
+  const baseModel = effectiveQwenTtsBaseModel(requestedBase, voice);
+  if (baseModel !== requestedBase) {
+    appendOutput(`Qwen-TTS Realtime: voice ${voice} is only available on qwen3-tts-flash; using it instead of ${requestedBase} for this clip.`);
+  }
   const model = qwenTtsRealtimeModel(baseModel);
   const explicit = configString("qwenTtsInstructions");
   const fromCoach = (ttsStyle || "").trim();
@@ -146,7 +152,7 @@ export async function streamQwenToFile(
       apiKey,
       endpoint: normalizedQwenTtsRealtimeEndpoint(),
       model,
-      voice: normalizedQwenTtsVoice(),
+      voice,
       languageType: normalizedQwenTtsLanguageType(),
       text,
       outPath,
