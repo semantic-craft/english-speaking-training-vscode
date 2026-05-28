@@ -89,11 +89,11 @@ test("sidebar model presets stay inside package configuration enums", () => {
 
 test("runtime model strings are trimmed before UI state and provider calls", () => {
   for (const [source, pattern] of [
-    [settingsSource, /geminiCoachModel: configString\("geminiCoachModel", "gemini-3-flash-preview"\)/],
+    [settingsSource, /geminiCoachModel: configString\("geminiCoachModel", "gemini-3\.5-flash"\)/],
     [settingsSource, /geminiTtsModel: configString\("geminiTtsModel", "gemini-3\.1-flash-tts-preview"\)/],
-    [settingsSource, /geminiAudioUnderstandingModel: configString\("geminiAudioUnderstandingModel", "gemini-3-flash-preview"\)/],
+    [settingsSource, /geminiAudioUnderstandingModel: configString\("geminiAudioUnderstandingModel", "gemini-3\.5-flash"\)/],
     [settingsSource, /qwenCompatibleBaseUrl: normalizedQwenCompatibleBaseUrl\(\)/],
-    [settingsSource, /qwenCoachModel: configString\("qwenCoachModel", "qwen-plus"\)/],
+    [settingsSource, /qwenCoachModel: configString\("qwenCoachModel", "qwen3\.6-plus"\)/],
     [settingsSource, /qwenAudioUnderstandingModel: normalizedQwenAudioUnderstandingModel\(\)/],
     [settingsSource, /mimoCoachModel: configString\("mimoCoachModel", "mimo-v2\.5-pro"\)/],
     [settingsSource, /mimoAudioUnderstandingModel: configString\("mimoAudioUnderstandingModel", "mimo-v2\.5"\)/],
@@ -103,12 +103,12 @@ test("runtime model strings are trimmed before UI state and provider calls", () 
     [settingsSource, /qwenTtsVoice: normalizedQwenTtsVoice\(\)/],
     [settingsSource, /qwenTtsLanguageType: normalizedQwenTtsLanguageType\(\)/],
     [coachSource, /configString\("mimoCoachModel", "mimo-v2\.5-pro"\)/],
-    [coachSource, /configString\("qwenCoachModel", "qwen-plus"\)/],
-    [coachSource, /configString\("geminiCoachModel", "gemini-3-flash-preview"\)/],
+    [coachSource, /configString\("qwenCoachModel", "qwen3\.6-plus"\)/],
+    [coachSource, /configString\("geminiCoachModel", "gemini-3\.5-flash"\)/],
     [transcribeSource, /configString\("mimoAudioUnderstandingModel", "mimo-v2\.5"\)/],
     [transcribeSource, /normalizedQwenAudioUnderstandingModel\(\)/],
     [transcribeSource, /normalizedQwenCompatibleBaseUrl\(\)/],
-    [transcribeSource, /configString\("geminiAudioUnderstandingModel", "gemini-3-flash-preview"\)/],
+    [transcribeSource, /configString\("geminiAudioUnderstandingModel", "gemini-3\.5-flash"\)/],
     [ttsSource, /configString\("geminiTtsModel", "gemini-3\.1-flash-tts-preview"\)/],
     [ttsSource, /normalizedQwenTtsModel\(\)/],
     [ttsSource, /normalizedQwenTtsVoice\(\)/],
@@ -213,7 +213,7 @@ test("Qwen-first UX and packaging metadata stay aligned", () => {
   assert.match(providerRoutesSource, /normalizedMigrationValue\(entry\[0\]\) === oldDefaultKey/);
   assert.match(providerRoutesSource, /const rawCurrent = settings\.get<unknown>\("ttsSpeed"\)/);
   assert.match(providerRoutesSource, /const currentIsCanonical = typeof rawCurrent === "number" && rawCurrent === clamped/);
-  assert.match(providerRoutesSource, /const currentVoice = configString\("qwenTtsVoice", "Cherry"\)/);
+  assert.match(providerRoutesSource, /const currentVoice = configString\("qwenTtsVoice", "Jennifer"\)/);
   assert.match(providerRoutesSource, /Boolean\(storedOrEnvApiKey\(await context\.secrets\.get\(secretKeys\.qwen\)/);
   assert.match(coreSource, /await context\.secrets\.get\(secretKeys\[provider\]\)/);
   assert.match(coreSource, /process\.env\.DASHSCOPE_API_KEY/);

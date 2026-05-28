@@ -351,7 +351,7 @@ async function requestProviderJson(
     return callQwenJson(
       apiKey,
       normalizedQwenCompatibleBaseUrl(),
-      configString("qwenCoachModel", "qwen-plus"),
+      configString("qwenCoachModel", "qwen3.6-plus"),
       system,
       user,
     );
@@ -366,7 +366,7 @@ async function requestProviderJson(
     });
   }
   const apiKey = await getRequiredKey(context, "gemini");
-  return callGeminiJson(apiKey, configString("geminiCoachModel", "gemini-3-flash-preview"), system, user);
+  return callGeminiJson(apiKey, configString("geminiCoachModel", "gemini-3.5-flash"), system, user);
 }
 
 async function callQwenJson(
@@ -385,11 +385,14 @@ async function callQwenJson(
     body: JSON.stringify({
       model,
       // Force a JSON object body so coach turns don't fail mid-flight on
-      // `<think>` blocks or Markdown fences around the JSON. The DashScope
-      // OpenAI-compatible endpoint honors response_format on qwen-plus /
-      // qwen-max / qwen3-* chat models; the stripThinkBlocks +
-      // parseLooseJson fallback below stays in place so a model that
-      // ignores the hint still parses.
+      // `<think>` blocks or Markdown fences around the JSON. DashScope's
+      // structured-output mode is incompatible with thinking mode, so disable
+      // thinking on the hybrid models (qwen3.6-plus / qwen3.6-flash / legacy
+      // qwen-plus) — that both guarantees response_format works and removes
+      // reasoning latency from this interactive turn. The *-max line is
+      // thinking-heavy and may reject enable_thinking:false, so we leave it on
+      // and lean on the stripThinkBlocks + parseLooseJson fallback below.
+      ...(model.includes("max") ? {} : { enable_thinking: false }),
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: system },

@@ -3744,15 +3744,15 @@ test("provider model ids and external voice ids are trimmed before UI state or r
     configValues.qwenCoachModel = "   ";
     configValues.qwenAudioUnderstandingModel = "bogus-asr-model";
     configValues.qwenTtsVoice = "   ";
-    assert.equal(api.trainingSettings().qwenCoachModel, "qwen-plus");
+    assert.equal(api.trainingSettings().qwenCoachModel, "qwen3.6-plus");
     assert.equal(api.trainingSettings().qwenAudioUnderstandingModel, "qwen3-asr-flash");
-    assert.equal(api.trainingSettings().qwenTtsVoice, "Cherry");
+    assert.equal(api.trainingSettings().qwenTtsVoice, "Jennifer");
     assert.equal(api.configString("qwenTtsVoice", "fallback-voice"), "fallback-voice");
 
     configValues.qwenCoachModel = { model: "qwen-plus" };
     configValues.qwenTtsVoice = ["Cherry"];
-    assert.equal(api.trainingSettings().qwenCoachModel, "qwen-plus");
-    assert.equal(api.trainingSettings().qwenTtsVoice, "Cherry");
+    assert.equal(api.trainingSettings().qwenCoachModel, "qwen3.6-plus");
+    assert.equal(api.trainingSettings().qwenTtsVoice, "Jennifer");
   } finally {
     Object.assign(configValues, previous);
   }
@@ -3934,16 +3934,16 @@ test("gemini model migration repairs dirty old default values", async () => {
   };
 
   assert.equal(
-    await api.migrateGeminiSetting(
+    await api.migrateModelDefault(
       fakeSettings,
       "geminiCoachModel",
       "gemini-2.5-flash",
-      "gemini-3-flash-preview",
+      "gemini-3.5-flash",
     ),
     true,
   );
   assert.deepEqual(updates, [
-    { key: "geminiCoachModel", value: "gemini-3-flash-preview", target: mockVscode.ConfigurationTarget.Workspace },
+    { key: "geminiCoachModel", value: "gemini-3.5-flash", target: mockVscode.ConfigurationTarget.Workspace },
   ]);
 });
 
@@ -4503,8 +4503,8 @@ test("model setting pickers mark and repair blank effective default values", asy
     };
   };
   mockVscode.window.showQuickPick = async (items) => {
-    assert.equal(items.find((item) => item.label === "qwen-plus")?.description, "current");
-    return items.find((item) => item.label === "qwen-plus");
+    assert.equal(items.find((item) => item.label === "qwen3.6-plus")?.description, "current");
+    return items.find((item) => item.label === "qwen3.6-plus");
   };
   api.clearRefreshHandlers();
   api.registerRefreshHandler(() => {
@@ -4522,7 +4522,7 @@ test("model setting pickers mark and repair blank effective default values", asy
   }
 
   assert.deepEqual(updates, [
-    { key: "qwenCoachModel", value: "qwen-plus", target: mockVscode.ConfigurationTarget.Global },
+    { key: "qwenCoachModel", value: "qwen3.6-plus", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 1);
 });
@@ -4547,7 +4547,7 @@ test("model configuration writes global settings when no workspace is open", asy
       },
     };
   };
-  mockVscode.window.showQuickPick = async (items) => items.find((item) => item.label === "qwen3-max");
+  mockVscode.window.showQuickPick = async (items) => items.find((item) => item.label === "qwen3.7-max");
   api.clearRefreshHandlers();
   api.registerRefreshHandler(() => {
     refreshes += 1;
@@ -4564,7 +4564,7 @@ test("model configuration writes global settings when no workspace is open", asy
   }
 
   assert.deepEqual(updates, [
-    { key: "qwenCoachModel", value: "qwen3-max", target: mockVscode.ConfigurationTarget.Global },
+    { key: "qwenCoachModel", value: "qwen3.7-max", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 1);
 });
@@ -4840,9 +4840,9 @@ test("provider TTS voices are normalized before UI state or provider calls", () 
   assert.equal(api.normalizedQwenTtsLanguageType(), "German");
   configValues.qwenTtsVoice = "not-a-real-qwen-voice";
   configValues.qwenTtsLanguageType = "Klingon";
-  assert.equal(api.normalizedQwenTtsVoice(), "Cherry");
+  assert.equal(api.normalizedQwenTtsVoice(), "Jennifer");
   assert.equal(api.normalizedQwenTtsLanguageType(), "English");
-  assert.equal(api.trainingSettings().qwenTtsVoice, "Cherry");
+  assert.equal(api.trainingSettings().qwenTtsVoice, "Jennifer");
   assert.equal(api.trainingSettings().qwenTtsLanguageType, "English");
 
   configValues.openaiTtsVoice = "";

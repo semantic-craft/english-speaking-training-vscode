@@ -31,12 +31,21 @@ export async function migrateGeminiModelDefaults(): Promise<boolean> {
   changed = (await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "qwen")) || changed;
   changed = (await migrateProviderSetting(settings, "audioUnderstandingProvider", "openai", "qwen")) || changed;
   changed = (await migrateProviderSetting(settings, "ttsProvider", "openai", "qwen")) || changed;
-  changed = (await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-flash", "gemini-3-flash-preview")) || changed;
-  changed = (await migrateGeminiSetting(settings, "geminiCoachModel", "gemini-2.5-pro", "gemini-3.1-pro-preview")) || changed;
-  changed = (await migrateGeminiSetting(settings, "geminiAudioUnderstandingModel", "gemini-2.5-flash", "gemini-3-flash-preview")) || changed;
-  changed = (await migrateGeminiSetting(settings, "geminiAudioUnderstandingModel", "gemini-2.5-pro", "gemini-3.1-pro-preview")) || changed;
-  changed = (await migrateGeminiSetting(settings, "geminiTtsModel", "gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview")) || changed;
-  changed = (await migrateGeminiSetting(settings, "geminiTtsModel", "gemini-2.5-pro-preview-tts", "gemini-3.1-flash-tts-preview")) || changed;
+  // Coach: move the old Qwen default and superseded Gemini previews to the
+  // current recommended models. qwen-plus -> qwen3.6-plus (Alibaba's balanced
+  // default); the deprecated gemini-3-flash-preview and the now-shut-down
+  // gemini-3.1-flash-lite-preview -> their GA replacements.
+  changed = (await migrateModelDefault(settings, "qwenCoachModel", "qwen-plus", "qwen3.6-plus")) || changed;
+  changed = (await migrateModelDefault(settings, "geminiCoachModel", "gemini-2.5-flash", "gemini-3.5-flash")) || changed;
+  changed = (await migrateModelDefault(settings, "geminiCoachModel", "gemini-3-flash-preview", "gemini-3.5-flash")) || changed;
+  changed = (await migrateModelDefault(settings, "geminiCoachModel", "gemini-3.1-flash-lite-preview", "gemini-3.1-flash-lite")) || changed;
+  changed = (await migrateModelDefault(settings, "geminiCoachModel", "gemini-2.5-pro", "gemini-3.1-pro-preview")) || changed;
+  changed = (await migrateModelDefault(settings, "geminiAudioUnderstandingModel", "gemini-2.5-flash", "gemini-3.5-flash")) || changed;
+  changed = (await migrateModelDefault(settings, "geminiAudioUnderstandingModel", "gemini-3-flash-preview", "gemini-3.5-flash")) || changed;
+  changed = (await migrateModelDefault(settings, "geminiAudioUnderstandingModel", "gemini-3.1-flash-lite-preview", "gemini-3.1-flash-lite")) || changed;
+  changed = (await migrateModelDefault(settings, "geminiAudioUnderstandingModel", "gemini-2.5-pro", "gemini-3.1-pro-preview")) || changed;
+  changed = (await migrateModelDefault(settings, "geminiTtsModel", "gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview")) || changed;
+  changed = (await migrateModelDefault(settings, "geminiTtsModel", "gemini-2.5-pro-preview-tts", "gemini-3.1-flash-tts-preview")) || changed;
   if (changed) {
     await refreshAll();
   }
@@ -62,9 +71,9 @@ export async function migrateProviderSetting(
   return targets.length > 0;
 }
 
-export async function migrateGeminiSetting(
+export async function migrateModelDefault(
   settings: vscode.WorkspaceConfiguration,
-  setting: "geminiCoachModel" | "geminiAudioUnderstandingModel" | "geminiTtsModel",
+  setting: "geminiCoachModel" | "geminiAudioUnderstandingModel" | "geminiTtsModel" | "qwenCoachModel",
   oldDefault: string,
   nextDefault: string,
 ): Promise<boolean> {
@@ -345,7 +354,7 @@ export async function setQwenTtsVoice(voiceId: unknown): Promise<void> {
     return;
   }
   const settings = vscode.workspace.getConfiguration("englishTraining");
-  const currentVoice = configString("qwenTtsVoice", "Cherry");
+  const currentVoice = configString("qwenTtsVoice", "Jennifer");
   if (currentVoice === trimmedVoiceId) {
     vscode.window.showInformationMessage(`Qwen-TTS voice is already ${trimmedVoiceId}.`);
     return;

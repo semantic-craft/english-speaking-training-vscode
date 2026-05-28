@@ -200,7 +200,7 @@
             "gemini",
             "mimo"
           ],
-          "description": "Language-model provider used for transcript correction and follow-up generation. Default routes through Qwen (qwen-plus) via the DashScope OpenAI-compatible Chat Completions endpoint; Gemini and Xiaomi MiMo remain available as alternates."
+          "description": "Language-model provider for transcript correction and follow-up generation. Qwen (DashScope OpenAI-compatible Chat Completions) is the primary coach; Gemini and Xiaomi MiMo are fallback."
         },
         "englishTraining.audioUnderstandingProvider": {
           "type": "string",
@@ -210,7 +210,7 @@
             "gemini",
             "mimo"
           ],
-          "description": "Speech input provider. Default routes through Qwen-ASR (qwen3-asr-flash) on DashScope; Gemini and Xiaomi MiMo remain available as alternates."
+          "description": "Speech input (speech-to-text) provider. Qwen-ASR (qwen3-asr-flash) on DashScope is primary; Gemini and Xiaomi MiMo are fallback."
         },
         "englishTraining.ttsProvider": {
           "type": "string",
@@ -220,29 +220,37 @@
             "gemini",
             "mimo"
           ],
-          "description": "Speech output provider used to generate the native-version follow-along audio. Default uses Qwen-TTS (qwen3-tts-flash) on DashScope; Gemini and Xiaomi MiMo remain available as alternates."
+          "description": "Speech output (text-to-speech) provider for native-version follow-along audio. Qwen-TTS (qwen3-tts-flash) on DashScope is primary; Gemini and Xiaomi MiMo are fallback."
         },
         "englishTraining.geminiCoachModel": {
           "type": "string",
-          "default": "gemini-3-flash-preview",
+          "default": "gemini-3.5-flash",
           "enum": [
-            "gemini-3-flash-preview",
+            "gemini-3.5-flash",
             "gemini-3.1-pro-preview",
-            "gemini-3.1-flash-lite",
-            "gemini-3.1-flash-lite-preview"
+            "gemini-3.1-flash-lite"
           ],
-          "description": "Gemini model used for correction and follow-up coaching. Gemini 3 Flash is the default; Gemini 3.1 Pro Preview and 3.1 Flash-Lite variants are available from Google AI Studio for stronger reasoning or lower latency."
+          "enumDescriptions": [
+            "Recommended fallback. GA frontier flash model (1M context), native structured output, low latency.",
+            "Strongest Gemini reasoning (still preview); use when you want maximum coaching quality.",
+            "GA, cheapest and fastest Gemini; use to lower cost/latency."
+          ],
+          "description": "Gemini coach model (fallback provider). gemini-3.5-flash is the GA default; gemini-3-flash-preview was a deprecated preview and gemini-3.1-flash-lite-preview was shut down, so both are removed."
         },
         "englishTraining.geminiAudioUnderstandingModel": {
           "type": "string",
-          "default": "gemini-3-flash-preview",
+          "default": "gemini-3.5-flash",
           "enum": [
-            "gemini-3-flash-preview",
+            "gemini-3.5-flash",
             "gemini-3.1-pro-preview",
-            "gemini-3.1-flash-lite",
-            "gemini-3.1-flash-lite-preview"
+            "gemini-3.1-flash-lite"
           ],
-          "description": "Gemini model used for speech input understanding/transcription when speech in is set to Gemini. Google audio-understanding examples use gemini-3-flash-preview; 3.1 Pro and Flash-Lite options are available when you want quality or speed tradeoffs."
+          "enumDescriptions": [
+            "Recommended fallback. Google's audio-understanding examples standardize on this GA model.",
+            "Strongest reasoning (preview); rarely needed for literal transcription.",
+            "GA, cheapest and fastest for transcription."
+          ],
+          "description": "Gemini speech-input (transcription) model, used only when speech input is set to Gemini (fallback). gemini-3.5-flash is the GA default; the deprecated gemini-3-flash-preview and the shut-down gemini-3.1-flash-lite-preview are removed."
         },
         "englishTraining.geminiTtsModel": {
           "type": "string",
@@ -257,15 +265,33 @@
           "default": "Kore",
           "enum": [
             "Kore",
-            "Puck",
             "Charon",
-            "Fenrir",
-            "Aoede",
+            "Iapetus",
+            "Erinome",
+            "Sulafat",
+            "Achird",
+            "Vindemiatrix",
+            "Puck",
+            "Zephyr",
             "Leda",
-            "Orus",
-            "Zephyr"
+            "Schedar",
+            "Sadaltager"
           ],
-          "description": "Gemini prebuilt voice name for native-version audio."
+          "enumDescriptions": [
+            "Firm, clear and steady — reliable default for shadowing and explanations.",
+            "Informative, articulate — natural for explanations and coaching.",
+            "Clear, crisp articulation — easy to imitate precisely.",
+            "Clear female voice — clean enunciation for shadowing.",
+            "Warm and friendly — encouraging tutor tone.",
+            "Friendly, approachable — relaxed conversational English.",
+            "Gentle, soft-paced — good for careful, slow shadowing.",
+            "Upbeat, energetic — lively dialogue practice.",
+            "Bright, expressive — engaging and lively.",
+            "Youthful, casual — younger conversational register.",
+            "Even, neutral — steady narration of longer passages.",
+            "Knowledgeable, authoritative — confident explainer."
+          ],
+          "description": "Gemini prebuilt voice for native-version audio (fallback provider). Curated for natural English; all 30 official Gemini voices are accepted if typed in settings.json. Gemini auto-detects language, so every voice speaks English well — the label is the speaking style."
         },
         "englishTraining.qwenCompatibleBaseUrl": {
           "type": "string",
@@ -278,17 +304,18 @@
         },
         "englishTraining.qwenCoachModel": {
           "type": "string",
-          "default": "qwen-plus",
+          "default": "qwen3.6-plus",
           "enum": [
-            "qwen-plus",
-            "qwen3.6-flash",
             "qwen3.6-plus",
-            "qwen3.6-max-preview",
-            "qwen3.5-flash",
-            "qwen3.5-plus",
-            "qwen3-max"
+            "qwen3.6-flash",
+            "qwen3.7-max"
           ],
-          "description": "Qwen chat model used for correction and follow-up coaching through the DashScope OpenAI-compatible Chat Completions endpoint."
+          "enumDescriptions": [
+            "Recommended. Alibaba's balanced flagship-class chat model (1M context); reliable JSON, good latency and cost. The coach forces non-thinking mode for stable structured output.",
+            "Faster and cheaper, near-flagship quality, same 1M context and tools. Best when latency matters most.",
+            "Strongest reasoning, but slower and pricier; its default deep-thinking mode is incompatible with strict JSON, so the coach relies on think-block stripping. Pick only when you want maximum quality and can wait."
+          ],
+          "description": "Qwen chat model (DashScope OpenAI-compatible Chat Completions) for correction and follow-up coaching. Qwen is the primary coach; qwen3.6-plus is the recommended default. Any other DashScope text model id can be typed manually."
         },
         "englishTraining.qwenAudioUnderstandingModel": {
           "type": "string",
@@ -298,7 +325,7 @@
             "qwen3-asr-flash-2026-02-10",
             "qwen3-asr-flash-2025-09-08"
           ],
-          "description": "Qwen-ASR model used for short recorded speech input through DashScope OpenAI-compatible Chat Completions."
+          "description": "Qwen-ASR model for short recorded English speech (DashScope OpenAI-compatible Chat Completions, ≤10 MB / ≤5 min per clip). qwen3-asr-flash is the current best dedicated ASR for English and accented English; keep the default unless you need a pinned dated snapshot."
         },
         "englishTraining.mimoAnthropicBaseUrl": {
           "type": "string",
@@ -369,22 +396,44 @@
             "qwen3-tts-flash",
             "qwen3-tts-instruct-flash"
           ],
-          "description": "Qwen-TTS model used for native-version audio. qwen3-tts-flash is the default; qwen3-tts-instruct-flash accepts optional speaking instructions."
+          "enumDescriptions": [
+            "Recommended. Fastest Qwen3-TTS with the full voice catalog, including the premium American-English voices (Jennifer, Aiden, Ryan, Katerina).",
+            "Adds natural-language style control via the qwenTtsInstructions field, but does NOT support the premium English-only voices; pairing it with one of those voices auto-falls back to qwen3-tts-flash for that clip."
+          ],
+          "description": "Qwen-TTS model for native-version audio. qwen3-tts-flash (default) exposes every voice and is used for both the realtime-streaming and one-shot paths; qwen3-tts-instruct-flash trades the English-only voices for spoken-style instructions."
         },
         "englishTraining.qwenTtsVoice": {
           "type": "string",
-          "default": "Cherry",
+          "default": "Jennifer",
           "enum": [
+            "Jennifer",
+            "Aiden",
+            "Ryan",
+            "Katerina",
             "Cherry",
             "Serena",
             "Ethan",
             "Chelsie",
-            "Momo",
-            "Vivian",
-            "Moon",
-            "Maia"
+            "Maia",
+            "Kai",
+            "Neil",
+            "Elias"
           ],
-          "description": "Qwen-TTS voice used for native-version follow-along audio."
+          "enumDescriptions": [
+            "American female, brand/cinematic quality — the most natural English default (qwen3-tts-flash only).",
+            "American young male, friendly and natural — great for dialogue practice (qwen3-tts-flash only).",
+            "American male, expressive and dramatic — energetic intonation practice (qwen3-tts-flash only).",
+            "Mature female with rich prosody (qwen3-tts-flash only).",
+            "Bright, friendly female; sunny everyday-tutor tone (works on flash and instruct).",
+            "Gentle, calm female; clear and slow — good for careful shadowing.",
+            "Warm, upbeat male.",
+            "Soft, encouraging female.",
+            "Intellectual, gentle female.",
+            "Soothing, relaxed male.",
+            "News-anchor male: even baseline, crisp articulation.",
+            "Lecturer voice: explanatory, narrative clarity."
+          ],
+          "description": "Qwen-TTS voice for native-version follow-along audio. This curated list is tuned for English; all 48 official Qwen3-TTS voices are also accepted if typed via Custom… or settings.json. Voices marked 'qwen3-tts-flash only' are unavailable on qwen3-tts-instruct-flash (the extension auto-falls back to qwen3-tts-flash for them)."
         },
         "englishTraining.qwenTtsLanguageType": {
           "type": "string",

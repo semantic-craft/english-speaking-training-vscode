@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 import {
+  effectiveQwenTtsBaseModel,
   normalizedGeminiTtsVoice,
   normalizedMimoTtsVoice,
   normalizedQwenTtsEndpoint,
@@ -12,6 +13,7 @@ import {
   normalizedTtsProvider,
 } from "../runtime/settings.js";
 import {
+  appendOutput,
   chatCompletionsUrl,
   config,
   configString,
@@ -144,10 +146,15 @@ async function synthesizeQwen(
     throw new Error("Qwen-TTS text was empty.");
   }
   const apiKey = await getRequiredKey(context, "qwen");
-  const model = normalizedQwenTtsModel();
+  const voice = normalizedQwenTtsVoice();
+  const requestedModel = normalizedQwenTtsModel();
+  const model = effectiveQwenTtsBaseModel(requestedModel, voice);
+  if (model !== requestedModel) {
+    appendOutput(`Qwen-TTS: voice ${voice} is only available on qwen3-tts-flash; using it instead of ${requestedModel} for this clip.`);
+  }
   const input: JsonObject = {
     text: trimmedText,
-    voice: normalizedQwenTtsVoice(),
+    voice,
     language_type: normalizedQwenTtsLanguageType(),
   };
   const instructions = qwenSupportsInstructions(model)

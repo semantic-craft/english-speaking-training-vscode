@@ -132,7 +132,7 @@ import {
   configureApiKey,
   configureCoreRouteKeys,
   configureLocalMaterialsRoot,
-  migrateGeminiSetting,
+  migrateModelDefault,
   migrateGeminiModelDefaults,
   migrateProviderSetting,
   normalizeProviderForSetting,
@@ -211,10 +211,9 @@ let statusProvider: StatusProvider;
 let practiceProvider: PracticeViewProvider;
 
 const GEMINI_TEXT_MODEL_OPTIONS = [
-  "gemini-3-flash-preview",
+  "gemini-3.5-flash",
   "gemini-3.1-pro-preview",
   "gemini-3.1-flash-lite",
-  "gemini-3.1-flash-lite-preview",
 ];
 
 const GEMINI_TTS_MODEL_OPTIONS = [
@@ -227,13 +226,9 @@ const QWEN_COMPATIBLE_BASE_URL_OPTIONS = [
 ];
 
 const QWEN_COACH_MODEL_OPTIONS = [
-  "qwen-plus",
-  "qwen3.6-flash",
   "qwen3.6-plus",
-  "qwen3.6-max-preview",
-  "qwen3.5-flash",
-  "qwen3.5-plus",
-  "qwen3-max",
+  "qwen3.6-flash",
+  "qwen3.7-max",
 ];
 
 const QWEN_AUDIO_UNDERSTANDING_MODEL_OPTIONS = [
@@ -248,14 +243,18 @@ const QWEN_TTS_MODEL_OPTIONS = [
 ];
 
 const QWEN_TTS_VOICE_OPTIONS = [
+  "Jennifer",
+  "Aiden",
+  "Ryan",
+  "Katerina",
   "Cherry",
   "Serena",
   "Ethan",
   "Chelsie",
-  "Momo",
-  "Vivian",
-  "Moon",
   "Maia",
+  "Kai",
+  "Neil",
+  "Elias",
 ];
 
 const QWEN_TTS_LANGUAGE_TYPE_OPTIONS = [
@@ -471,7 +470,7 @@ export const __test__ = {
   loadDrillPlan,
   looksLikeTrainingRoot,
   mimeTypeForAudioPath,
-  migrateGeminiSetting,
+  migrateModelDefault,
   migrateProviderSetting,
   microphoneQuickPickItems,
   normalizedCoachProvider,
@@ -633,7 +632,6 @@ function configSettingAllowsCustom(setting: ConfigSettingName): boolean {
     setting !== "qwenAudioUnderstandingModel" &&
     setting !== "qwenTtsEndpoint" &&
     setting !== "qwenTtsModel" &&
-    setting !== "qwenTtsVoice" &&
     setting !== "qwenTtsLanguageType" &&
     setting !== "geminiTtsVoice" &&
     setting !== "mimoTtsVoice"
@@ -704,7 +702,7 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
     case "mimoTtsVoice": return ["Mia", "Chloe", "Milo", "Dean", "mimo_default"];
     case "recorderBackend": return ["macLocal", "webview", "auto"];
     case "geminiTtsModel": return GEMINI_TTS_MODEL_OPTIONS;
-    case "geminiTtsVoice": return ["Kore", "Puck", "Charon", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
+    case "geminiTtsVoice": return ["Kore", "Charon", "Iapetus", "Erinome", "Sulafat", "Achird", "Vindemiatrix", "Puck", "Zephyr", "Leda", "Schedar", "Sadaltager"];
   }
 }
 
