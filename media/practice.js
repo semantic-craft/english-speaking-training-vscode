@@ -764,13 +764,13 @@
     const PROVIDER_ROUTES = {
       coachProvider: [
         { value: "qwen", label: "Qwen", note: "DashScope Chat Completions", modelSetting: "qwenCoachModel", extraSetting: "qwenCompatibleBaseUrl", extraLabel: "Endpoint" },
-        { value: "gemini", label: "Gemini", note: "alternate coach", modelSetting: "geminiCoachModel" },
         { value: "mimo", label: "MiMo", note: "Xiaomi Token Plan", modelSetting: "mimoCoachModel" },
+        { value: "gemini", label: "Gemini", note: "alternate coach", modelSetting: "geminiCoachModel" },
       ],
       audioUnderstandingProvider: [
         { value: "qwen", label: "Qwen-ASR", note: "DashScope short-recording ASR", modelSetting: "qwenAudioUnderstandingModel", extraSetting: "qwenCompatibleBaseUrl", extraLabel: "Endpoint" },
-        { value: "gemini", label: "Gemini", note: "alternate STT", modelSetting: "geminiAudioUnderstandingModel" },
         { value: "mimo", label: "MiMo", note: "Xiaomi audio understanding", modelSetting: "mimoAudioUnderstandingModel" },
+        { value: "gemini", label: "Gemini", note: "alternate STT", modelSetting: "geminiAudioUnderstandingModel" },
       ],
       ttsProvider: [
         {
@@ -785,8 +785,8 @@
             { setting: "qwenTtsEndpoint", label: "Endpoint" },
           ],
         },
-        { value: "gemini", label: "Gemini", note: "alternate TTS", modelSetting: "geminiTtsModel", extraSetting: "geminiTtsVoice", extraLabel: "Voice" },
         { value: "mimo", label: "MiMo", note: "Xiaomi voices", modelSetting: "mimoTtsModel", extraSetting: "mimoTtsVoice", extraLabel: "Voice" },
+        { value: "gemini", label: "Gemini", note: "alternate TTS", modelSetting: "geminiTtsModel", extraSetting: "geminiTtsVoice", extraLabel: "Voice" },
       ],
     };
 
