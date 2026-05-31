@@ -2,7 +2,7 @@
   "name": "english-speaking-training-vscode",
   "displayName": "English Speaking Training",
   "description": "Standalone VS Code speaking-practice cockpit for local EnglishSpeakingTraining files.",
-  "version": "0.1.47",
+  "version": "0.1.48",
   "publisher": "xianwei-zhang",
   "license": "MIT",
   "repository": {
@@ -25,7 +25,8 @@
     "onView:englishTraining.practice",
     "onView:englishTraining.status",
     "onCommand:englishTraining.refresh",
-    "onCommand:englishTraining.configureLocalMaterials"
+    "onCommand:englishTraining.configureLocalMaterials",
+    "onCommand:englishTraining.configureQwenTokenPlanKey"
   ],
   "main": "./out/extension.js",
   "icon": "media/marketplace-icon.png",
@@ -54,6 +55,11 @@
       {
         "command": "englishTraining.configureDashScopeKey",
         "title": "English Training: Configure DashScope API Key",
+        "category": "English Training"
+      },
+      {
+        "command": "englishTraining.configureQwenTokenPlanKey",
+        "title": "English Training: Set Qwen Token Plan Key",
         "category": "English Training"
       },
       {
@@ -200,7 +206,7 @@
             "gemini",
             "mimo"
           ],
-          "description": "Language-model provider for transcript correction and follow-up generation. Qwen (DashScope OpenAI-compatible Chat Completions) is the primary coach; Gemini and Xiaomi MiMo are fallback."
+          "description": "Language-model provider for transcript correction and follow-up generation. Qwen Token Plan is the primary coach; Gemini and Xiaomi MiMo are fallback."
         },
         "englishTraining.audioUnderstandingProvider": {
           "type": "string",
@@ -300,22 +306,29 @@
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
           ],
-          "description": "DashScope OpenAI-compatible base URL used by Qwen coach and Qwen-ASR. Use the intl endpoint only with a matching international DashScope API key."
+          "description": "DashScope OpenAI-compatible base URL used by Qwen-ASR speech input. Qwen Coach uses its separate Token Plan base URL."
+        },
+        "englishTraining.qwenCoachBaseUrl": {
+          "type": "string",
+          "default": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+          "enum": [
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+          ],
+          "description": "Bailian Token Plan base URL used by Qwen Coach/analysis. Qwen-ASR/TTS keep separate DashScope endpoints and a separate DashScope key."
         },
         "englishTraining.qwenCoachModel": {
           "type": "string",
           "default": "qwen3.6-plus",
           "enum": [
             "qwen3.6-plus",
-            "qwen3.6-flash",
-            "qwen3.7-max"
+            "qwen3.6-flash"
           ],
           "enumDescriptions": [
             "Recommended. Alibaba's balanced flagship-class chat model (1M context); reliable JSON, good latency and cost. The coach forces non-thinking mode for stable structured output.",
-            "Faster and cheaper, near-flagship quality, same 1M context and tools. Best when latency matters most.",
-            "Strongest reasoning, but slower and pricier; its default deep-thinking mode is incompatible with strict JSON, so the coach relies on think-block stripping. Pick only when you want maximum quality and can wait."
+            "Faster and cheaper, near-flagship quality, same 1M context and tools. Best when latency matters most."
           ],
-          "description": "Qwen chat model (DashScope OpenAI-compatible Chat Completions) for correction and follow-up coaching. Qwen is the primary coach; qwen3.6-plus is the recommended default. Any other DashScope text model id can be typed manually."
+          "description": "Qwen Token Plan chat model for correction and follow-up coaching. Qwen is the primary coach; qwen3.6-plus is the recommended default. Qwen-ASR/TTS continue to use the separate DashScope settings."
         },
         "englishTraining.qwenAudioUnderstandingModel": {
           "type": "string",
@@ -382,12 +395,12 @@
         },
         "englishTraining.qwenTtsEndpoint": {
           "type": "string",
-          "default": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+          "default": "https://dashscope.aliyuncs.com/api/v1",
           "enum": [
-            "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
-            "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+            "https://dashscope.aliyuncs.com/api/v1",
+            "https://dashscope-intl.aliyuncs.com/api/v1"
           ],
-          "description": "DashScope Qwen-TTS multimodal generation endpoint. Use the intl endpoint only with a matching international DashScope API key."
+          "description": "DashScope base_http_api_url for Qwen-TTS. The extension appends /services/aigc/multimodal-generation/generation."
         },
         "englishTraining.qwenTtsModel": {
           "type": "string",

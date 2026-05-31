@@ -10,6 +10,7 @@ import {
   normalizedProviderName,
   normalizeTtsSpeed,
   providerLabel,
+  qwenCoachSecretKey,
   secretKeys,
   storedOrEnvApiKey,
   stringValue,
@@ -102,6 +103,14 @@ export async function apiKeyAvailability(context: vscode.ExtensionContext): Prom
   };
 }
 
+export async function qwenCoachKeyAvailable(context: vscode.ExtensionContext): Promise<boolean> {
+  return Boolean(
+    ((await context.secrets.get(qwenCoachSecretKey)) || "").trim()
+    || (process.env.BAILIAN_TOKEN_PLAN_API_KEY || "").trim()
+    || (process.env.QWEN_TOKEN_PLAN_API_KEY || "").trim(),
+  );
+}
+
 export async function configureApiKey(
   context: vscode.ExtensionContext,
   provider: ProviderName,
@@ -158,11 +167,19 @@ export async function configureCoreRouteKeys(context: vscode.ExtensionContext): 
   const providers = activeRouteProviders();
   const availability = await apiKeyAvailability(context);
   const missing = providers.filter((provider) => !availability[provider]);
-  if (missing.length === 0) {
+  const settings = vscode.workspace.getConfiguration("englishTraining");
+  const needsQwenCoachKey = normalizeProviderForSetting("coachProvider", settings.get<string>("coachProvider")) === "qwen"
+    && !(await qwenCoachKeyAvailable(context));
+  if (missing.length === 0 && !needsQwenCoachKey) {
     vscode.window.showInformationMessage("English Training active route API keys are already saved.");
     return;
   }
   let savedAny = false;
+  if (needsQwenCoachKey) {
+    const saved = await configureQwenCoachKey(context, { refresh: false });
+    if (!saved) return;
+    savedAny = true;
+  }
   for (const provider of missing) {
     const saved = await configureApiKey(context, provider, { refresh: false });
     if (!saved) {
@@ -176,6 +193,32 @@ export async function configureCoreRouteKeys(context: vscode.ExtensionContext): 
   if (savedAny) {
     await refreshAll();
   }
+}
+
+export async function configureQwenCoachKey(
+  context: vscode.ExtensionContext,
+  options: { refresh?: boolean } = {},
+): Promise<boolean> {
+  const value = await vscode.window.showInputBox({
+    title: "Configure Qwen Coach/Analysis Key",
+    prompt: "Paste the Qwen Token Plan API key. Qwen ASR/TTS keeps using the separate DashScope key.",
+    password: true,
+    ignoreFocusOut: true,
+  });
+  if (value === undefined) return false;
+  const trimmed = value.trim();
+  if (!trimmed) {
+    vscode.window.showWarningMessage("Qwen Token Plan API key was empty; nothing was saved.");
+    return false;
+  }
+  if (((await context.secrets.get(qwenCoachSecretKey)) || "").trim() === trimmed) {
+    vscode.window.showInformationMessage("Qwen Token Plan API key is already saved.");
+    return true;
+  }
+  await context.secrets.store(qwenCoachSecretKey, trimmed);
+  vscode.window.showInformationMessage("Qwen Token Plan API key saved.");
+  if (options.refresh !== false) await refreshAll();
+  return true;
 }
 
 export function activeRouteProviders(
@@ -205,7 +248,8 @@ export function normalizeProviderForSetting(
 
 export async function clearApiKeys(context: vscode.ExtensionContext): Promise<void> {
   const availability = await apiKeyAvailability(context);
-  if (!Object.values(availability).some(Boolean)) {
+  const storedQwenCoachKey = Boolean(((await context.secrets.get(qwenCoachSecretKey)) || "").trim());
+  if (!Object.values(availability).some(Boolean) && !storedQwenCoachKey) {
     vscode.window.showInformationMessage("No English Training API keys are saved.");
     return;
   }
@@ -213,7 +257,7 @@ export async function clearApiKeys(context: vscode.ExtensionContext): Promise<vo
   if (choice !== "Clear") {
     return;
   }
-  await Promise.all(Object.values(secretKeys).map((key) => context.secrets.delete(key)));
+  await Promise.all([...Object.values(secretKeys), qwenCoachSecretKey].map((key) => context.secrets.delete(key)));
   vscode.window.showInformationMessage("English Training API keys cleared.");
   await refreshAll();
 }

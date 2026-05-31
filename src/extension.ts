@@ -112,6 +112,7 @@ import {
   normalizedGeminiTtsVoice,
   normalizedMimoTtsVoice,
   normalizedQwenAudioUnderstandingModel,
+  normalizedQwenCoachBaseUrl,
   normalizedQwenCompatibleBaseUrl,
   normalizedQwenTtsEndpoint,
   normalizedQwenTtsLanguageType,
@@ -131,6 +132,7 @@ import {
   clearApiKeys,
   configureApiKey,
   configureCoreRouteKeys,
+  configureQwenCoachKey,
   configureLocalMaterialsRoot,
   migrateModelDefault,
   migrateGeminiModelDefaults,
@@ -225,10 +227,14 @@ const QWEN_COMPATIBLE_BASE_URL_OPTIONS = [
   "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
 ];
 
+const QWEN_COACH_BASE_URL_OPTIONS = [
+  "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+  "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+];
+
 const QWEN_COACH_MODEL_OPTIONS = [
   "qwen3.6-plus",
   "qwen3.6-flash",
-  "qwen3.7-max",
 ];
 
 const QWEN_AUDIO_UNDERSTANDING_MODEL_OPTIONS = [
@@ -265,8 +271,8 @@ const QWEN_TTS_LANGUAGE_TYPE_OPTIONS = [
 ];
 
 const QWEN_TTS_ENDPOINT_OPTIONS = [
-  "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
-  "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+  "https://dashscope.aliyuncs.com/api/v1",
+  "https://dashscope-intl.aliyuncs.com/api/v1",
 ];
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -323,6 +329,9 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   register("englishTraining.configureDashScopeKey", async () => {
     await configureApiKey(context, "qwen");
+  });
+  register("englishTraining.configureQwenTokenPlanKey", async () => {
+    await configureQwenCoachKey(context);
   });
   register("englishTraining.configureMimoKey", async () => {
     await configureApiKey(context, "mimo");
@@ -477,6 +486,7 @@ export const __test__ = {
   normalizedGeminiTtsVoice,
   normalizedMimoTtsVoice,
   normalizedQwenAudioUnderstandingModel,
+  normalizedQwenCoachBaseUrl,
   normalizedQwenCompatibleBaseUrl,
   normalizedQwenTtsEndpoint,
   normalizedQwenTtsLanguageType,
@@ -603,6 +613,7 @@ function configSettingEffectiveValue(setting: ConfigSettingName, fallback: strin
     case "mimoCoachModel": return settings.mimoCoachModel;
     case "geminiCoachModel": return settings.geminiCoachModel;
     case "geminiAudioUnderstandingModel": return settings.geminiAudioUnderstandingModel;
+    case "qwenCoachBaseUrl": return normalizedQwenCoachBaseUrl();
     case "qwenCompatibleBaseUrl": return normalizedQwenCompatibleBaseUrl();
     case "qwenCoachModel": return settings.qwenCoachModel;
     case "qwenAudioUnderstandingModel": return normalizedQwenAudioUnderstandingModel();
@@ -652,7 +663,8 @@ function configSettingLabel(setting: ConfigSettingName): string {
     case "mimoCoachModel": return "MiMo coach model";
     case "geminiCoachModel": return "Gemini coach model";
     case "geminiAudioUnderstandingModel": return "Gemini speech-input model";
-    case "qwenCompatibleBaseUrl": return "Qwen compatible base URL";
+    case "qwenCoachBaseUrl": return "Qwen Coach Token Plan base URL";
+    case "qwenCompatibleBaseUrl": return "Qwen-ASR DashScope compatible base URL";
     case "qwenCoachModel": return "Qwen coach model";
     case "qwenAudioUnderstandingModel": return "Qwen-ASR speech-input model";
     case "mimoAudioUnderstandingModel": return "MiMo speech-input model";
@@ -671,9 +683,10 @@ function configSettingLabel(setting: ConfigSettingName): string {
 
 function configSettingPrompt(setting: ConfigSettingName): string {
   switch (setting) {
-    case "qwenCompatibleBaseUrl": return "DashScope OpenAI-compatible base URL used by Qwen coach and Qwen-ASR.";
+    case "qwenCoachBaseUrl": return "Qwen Token Plan base URL used by Qwen Coach.";
+    case "qwenCompatibleBaseUrl": return "DashScope OpenAI-compatible base URL used by Qwen-ASR.";
     case "qwenAudioUnderstandingModel": return "Qwen-ASR model id for short recorded clips.";
-    case "qwenTtsEndpoint": return "DashScope Qwen-TTS endpoint.";
+    case "qwenTtsEndpoint": return "DashScope Qwen-TTS base HTTP API URL.";
     case "qwenTtsVoice": return "Qwen-TTS voice name.";
     case "qwenTtsLanguageType": return "Qwen-TTS language_type: Auto, Chinese, English, or German.";
     case "qwenTtsInstructions": return "Optional Qwen-TTS speaking instructions. Sent only to qwen3-tts-instruct-flash.";
@@ -689,6 +702,7 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
     case "mimoCoachModel": return ["mimo-v2.5-pro", "mimo-v2.5-flash"];
     case "geminiCoachModel": return GEMINI_TEXT_MODEL_OPTIONS;
     case "geminiAudioUnderstandingModel": return GEMINI_TEXT_MODEL_OPTIONS;
+    case "qwenCoachBaseUrl": return QWEN_COACH_BASE_URL_OPTIONS;
     case "qwenCompatibleBaseUrl": return QWEN_COMPATIBLE_BASE_URL_OPTIONS;
     case "qwenCoachModel": return QWEN_COACH_MODEL_OPTIONS;
     case "qwenAudioUnderstandingModel": return QWEN_AUDIO_UNDERSTANDING_MODEL_OPTIONS;
@@ -709,7 +723,7 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
 function providerSetupHint(provider: ProviderName): string {
   switch (provider) {
     case "gemini": return "Gemini · alternate coach + speech input + native-version TTS";
-    case "qwen": return "Qwen · DashScope coach + Qwen-ASR + Qwen-TTS";
+    case "qwen": return "Qwen · Token Plan coach + DashScope ASR/TTS";
     case "mimo": return "Xiaomi MiMo · coach + speech input + speech-output (Token Plan)";
   }
 }

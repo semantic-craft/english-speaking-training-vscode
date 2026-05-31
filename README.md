@@ -113,20 +113,20 @@ Practice / Skip choices after each result, and coach-generated
 
 ## Provider Defaults
 
-- Coach: OpenAI by default with `gpt-4o`. Qwen, Gemini, and Xiaomi MiMo remain
-  optional coach routes from the sidebar or command palette.
-- Speech input: OpenAI file transcription by default with `gpt-4o-transcribe`
-  plus a lesson-specific domain prompt. OpenAI Realtime
-  `gpt-realtime-whisper`, Qwen-ASR, Gemini audio understanding, and Xiaomi
-  MiMo audio understanding remain optional alternates.
-- Speech output: OpenAI `gpt-4o-mini-tts` by default with the `marin` voice,
-  `wav` output, and coach-generated style instructions. Gemini, Qwen-TTS, and
-  Xiaomi MiMo speech output remain optional fallbacks.
-- Qwen uses DashScope / Alibaba Cloud Model Studio with
-  `DASHSCOPE_API_KEY` or the stored `dashscopeApiKey` SecretStorage value,
-  defaulting to `qwen-plus` for coaching, `qwen3-asr-flash` for speech input,
-  and `qwen3-tts-flash` with the `Cherry` voice and `language_type: English`
-  for speech output.
+- Coach: Qwen Token Plan by default with `qwen3.6-plus`; `qwen3.6-flash` is
+  available when latency matters most. Gemini and Xiaomi MiMo remain fallback
+  coach routes from the sidebar or command palette.
+- Speech input: Qwen-ASR by default through DashScope compatible mode, with
+  Gemini audio understanding and Xiaomi MiMo audio understanding as optional
+  alternates.
+- Speech output: Qwen-TTS by default through DashScope, with Gemini and Xiaomi
+  MiMo speech output as optional fallbacks.
+- Qwen text coaching uses Bailian Token Plan with a separate Token Plan key
+  (`BAILIAN_TOKEN_PLAN_API_KEY` / `QWEN_TOKEN_PLAN_API_KEY`, or the
+  `englishTraining.qwenTokenPlanApiKey` SecretStorage value). Qwen-ASR and
+  Qwen-TTS use DashScope with `DASHSCOPE_API_KEY` or the stored
+  `dashscopeApiKey` value. TTS defaults to DashScope `base_http_api_url`
+  `https://dashscope.aliyuncs.com/api/v1`.
 - The sidebar's **Routes & Models** panel shows the active route, key status,
   and model/voice controls in one place.
 
