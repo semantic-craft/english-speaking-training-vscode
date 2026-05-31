@@ -4832,9 +4832,11 @@ test("provider TTS voices are normalized before UI state or provider calls", () 
 
   configValues.mimoTtsVoice = "Dean";
   assert.equal(api.normalizedMimoTtsVoice(), "Dean");
+  configValues.mimoTtsVoice = "mimo_default";
+  assert.equal(api.normalizedMimoTtsVoice(), "Chloe");
   configValues.mimoTtsVoice = "not-a-real-mimo-voice";
-  assert.equal(api.normalizedMimoTtsVoice(), "Mia");
-  assert.equal(api.trainingSettings().mimoTtsVoice, "Mia");
+  assert.equal(api.normalizedMimoTtsVoice(), "Chloe");
+  assert.equal(api.trainingSettings().mimoTtsVoice, "Chloe");
 
   configValues.qwenTtsVoice = "Serena";
   configValues.qwenTtsLanguageType = "German";

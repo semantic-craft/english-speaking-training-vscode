@@ -383,15 +383,14 @@
         },
         "englishTraining.mimoTtsVoice": {
           "type": "string",
-          "default": "Mia",
+          "default": "Chloe",
           "enum": [
             "Mia",
             "Chloe",
             "Milo",
-            "Dean",
-            "mimo_default"
+            "Dean"
           ],
-          "description": "Xiaomi MiMo built-in voice for native-version audio. Mia and Chloe are female; Milo and Dean are male."
+          "description": "Xiaomi MiMo built-in English voice for native-version audio. Uses an explicit English voice because MiMo Default is region-dependent. Mia and Chloe are female; Milo and Dean are male."
         },
         "englishTraining.qwenTtsEndpoint": {
           "type": "string",

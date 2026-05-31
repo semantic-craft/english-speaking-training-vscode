@@ -713,7 +713,7 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
     case "qwenTtsLanguageType": return QWEN_TTS_LANGUAGE_TYPE_OPTIONS;
     case "qwenTtsInstructions": return [];
     case "mimoTtsModel": return ["mimo-v2.5-tts"];
-    case "mimoTtsVoice": return ["Mia", "Chloe", "Milo", "Dean", "mimo_default"];
+    case "mimoTtsVoice": return ["Mia", "Chloe", "Milo", "Dean"];
     case "recorderBackend": return ["macLocal", "webview", "auto"];
     case "geminiTtsModel": return GEMINI_TTS_MODEL_OPTIONS;
     case "geminiTtsVoice": return ["Kore", "Charon", "Iapetus", "Erinome", "Sulafat", "Achird", "Vindemiatrix", "Puck", "Zephyr", "Leda", "Schedar", "Sadaltager"];
