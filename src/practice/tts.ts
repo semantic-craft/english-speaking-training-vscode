@@ -23,6 +23,7 @@ import {
   normalizedProviderName,
   normalizeTtsSpeed,
   parseJsonObject,
+  qwenTtsGenerationUrl,
   stringValue,
 } from "../core.js";
 import type { JsonObject } from "../types.js";
@@ -163,7 +164,7 @@ async function synthesizeQwen(
   if (instructions) {
     input.instructions = instructions;
   }
-  const response = await fetchWithTimeout(normalizedQwenTtsEndpoint(), {
+  const response = await fetchWithTimeout(qwenTtsGenerationUrl(normalizedQwenTtsEndpoint()), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,

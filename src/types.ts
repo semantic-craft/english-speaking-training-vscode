@@ -89,6 +89,7 @@ export interface TrainingState {
     geminiTtsModel: string;
     geminiTtsVoice: string;
     geminiAudioUnderstandingModel: string;
+    qwenCoachBaseUrl: string;
     qwenCompatibleBaseUrl: string;
     qwenCoachModel: string;
     qwenAudioUnderstandingModel: string;

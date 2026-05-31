@@ -6,18 +6,21 @@ import type { JsonObject, ProviderName } from "./types.js";
 
 export const MIMO_ANTHROPIC_BASE_URL = "https://token-plan-cn.xiaomimimo.com/anthropic";
 export const MIMO_OPENAI_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1";
+export const QWEN_TOKEN_PLAN_ANTHROPIC_BASE_URL = "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic";
 export const QWEN_COMPATIBLE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 export const QWEN_COMPATIBLE_INTL_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
-export const QWEN_TTS_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
-export const QWEN_TTS_INTL_ENDPOINT = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+export const QWEN_TTS_BASE_HTTP_API_URL = "https://dashscope.aliyuncs.com/api/v1";
+export const QWEN_TTS_INTL_BASE_HTTP_API_URL = "https://dashscope-intl.aliyuncs.com/api/v1";
 export const QWEN_TTS_REALTIME_ENDPOINT = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime";
 export const QWEN_TTS_REALTIME_INTL_ENDPOINT = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime";
+const QWEN_TTS_GENERATION_PATH = "/services/aigc/multimodal-generation/generation";
 
 export const secretKeys: Record<ProviderName, string> = {
   gemini: "englishTraining.geminiKey",
   qwen: "englishTraining.dashscopeApiKey",
   mimo: "englishTraining.mimoKey",
 };
+export const qwenCoachSecretKey = "englishTraining.qwenTokenPlanApiKey";
 
 let _output: vscode.OutputChannel | undefined;
 
@@ -307,6 +310,18 @@ export async function getRequiredKey(
   return key;
 }
 
+export async function getRequiredQwenCoachKey(context: vscode.ExtensionContext): Promise<string> {
+  const key = stringValue(await context.secrets.get(qwenCoachSecretKey)).trim()
+    || stringValue(process.env.BAILIAN_TOKEN_PLAN_API_KEY).trim()
+    || stringValue(process.env.QWEN_TOKEN_PLAN_API_KEY).trim();
+  if (!key) {
+    throw new Error(
+      "Missing Qwen Coach/Analysis (Token Plan) API key. Open the Command Palette and run “English Training: Set Qwen Token Plan Key”.",
+    );
+  }
+  return key;
+}
+
 export function storedOrEnvApiKey(stored: unknown, provider: ProviderName): string {
   const storedKey = stringValue(stored).trim();
   if (storedKey) {
@@ -316,6 +331,12 @@ export function storedOrEnvApiKey(stored: unknown, provider: ProviderName): stri
     return stringValue(process.env.DASHSCOPE_API_KEY).trim();
   }
   return "";
+}
+
+export function qwenTtsGenerationUrl(baseHttpApiUrl: string): string {
+  const trimmed = baseHttpApiUrl.trim().replace(/\/+$/, "");
+  if (trimmed.endsWith(QWEN_TTS_GENERATION_PATH)) return trimmed;
+  return `${trimmed || QWEN_TTS_BASE_HTTP_API_URL}${QWEN_TTS_GENERATION_PATH}`;
 }
 
 // Exact Command Palette titles from package.json `contributes.commands`.

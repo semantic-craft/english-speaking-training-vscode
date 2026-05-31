@@ -1,11 +1,11 @@
 import * as vscode from "vscode";
 
 import {
-  chatCompletionsUrl,
   configString,
   extractGeminiText,
   fetchWithTimeout,
   getRequiredKey,
+  getRequiredQwenCoachKey,
   MIMO_ANTHROPIC_BASE_URL,
   parseJsonObject,
   parseLooseJson,
@@ -13,7 +13,7 @@ import {
 } from "../core.js";
 import {
   normalizedCoachProvider,
-  normalizedQwenCompatibleBaseUrl,
+  normalizedQwenCoachBaseUrl,
 } from "../runtime/settings.js";
 import type {
   CoachPriorTurn,
@@ -347,14 +347,13 @@ async function requestProviderJson(
 ): Promise<JsonObject> {
   const provider = normalizedCoachProvider();
   if (provider === "qwen") {
-    const apiKey = await getRequiredKey(context, "qwen");
-    return callQwenJson(
+    const apiKey = await getRequiredQwenCoachKey(context);
+    return callAnthropicJson(system, user, {
+      provider: "Qwen Token Plan",
       apiKey,
-      normalizedQwenCompatibleBaseUrl(),
-      configString("qwenCoachModel", "qwen3.6-plus"),
-      system,
-      user,
-    );
+      baseUrl: normalizedQwenCoachBaseUrl(),
+      model: configString("qwenCoachModel", "qwen3.6-plus"),
+    });
   }
   if (provider === "mimo") {
     const apiKey = await getRequiredKey(context, "mimo");
@@ -367,44 +366,6 @@ async function requestProviderJson(
   }
   const apiKey = await getRequiredKey(context, "gemini");
   return callGeminiJson(apiKey, configString("geminiCoachModel", "gemini-3.5-flash"), system, user);
-}
-
-async function callQwenJson(
-  apiKey: string,
-  baseUrl: string,
-  model: string,
-  system: string,
-  user: string,
-): Promise<JsonObject> {
-  const response = await fetchWithTimeout(chatCompletionsUrl(baseUrl), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      // Force a JSON object body so coach turns don't fail mid-flight on
-      // `<think>` blocks or Markdown fences around the JSON. DashScope's
-      // structured-output mode is incompatible with thinking mode, so disable
-      // thinking on the hybrid models (qwen3.6-plus / qwen3.6-flash / legacy
-      // qwen-plus) — that both guarantees response_format works and removes
-      // reasoning latency from this interactive turn. The *-max line is
-      // thinking-heavy and may reject enable_thinking:false, so we leave it on
-      // and lean on the stripThinkBlocks + parseLooseJson fallback below.
-      ...(model.includes("max") ? {} : { enable_thinking: false }),
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
-  });
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(`Qwen coach request failed (${response.status}): ${body.slice(0, 1200)}`);
-  }
-  return parseLooseJson(stripThinkBlocks(extractChatCompletionText(parseJsonObject(body, "Qwen coach"))));
 }
 
 async function callAnthropicJson(
@@ -479,17 +440,6 @@ async function callGeminiJson(
   }
   const parsed = parseJsonObject(body, "Gemini coach");
   return parseLooseJson(extractGeminiText(parsed));
-}
-
-function extractChatCompletionText(parsed: JsonObject): string {
-  const choices = parsed.choices;
-  const firstChoice = Array.isArray(choices) && choices.length && choices[0] && typeof choices[0] === "object"
-    ? choices[0] as JsonObject
-    : undefined;
-  const message = firstChoice?.message && typeof firstChoice.message === "object" && !Array.isArray(firstChoice.message)
-    ? firstChoice.message as JsonObject
-    : undefined;
-  return stringValue(message?.content);
 }
 
 function extractAnthropicText(parsed: JsonObject): string {

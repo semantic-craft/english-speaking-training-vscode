@@ -6,12 +6,13 @@ import {
   isTtsProvider,
   MIMO_ANTHROPIC_BASE_URL,
   MIMO_OPENAI_BASE_URL,
+  QWEN_TOKEN_PLAN_ANTHROPIC_BASE_URL,
   QWEN_COMPATIBLE_BASE_URL,
   QWEN_COMPATIBLE_INTL_BASE_URL,
   normalizedProviderName,
   normalizeTtsSpeed,
-  QWEN_TTS_ENDPOINT,
-  QWEN_TTS_INTL_ENDPOINT,
+  QWEN_TTS_BASE_HTTP_API_URL,
+  QWEN_TTS_INTL_BASE_HTTP_API_URL,
   QWEN_TTS_REALTIME_ENDPOINT,
   QWEN_TTS_REALTIME_INTL_ENDPOINT,
 } from "../core.js";
@@ -59,6 +60,7 @@ export type ConfigSettingName =
   | "mimoCoachModel"
   | "geminiCoachModel"
   | "geminiAudioUnderstandingModel"
+  | "qwenCoachBaseUrl"
   | "qwenCompatibleBaseUrl"
   | "qwenCoachModel"
   | "qwenAudioUnderstandingModel"
@@ -88,6 +90,7 @@ export function trainingSettings(): TrainingState["settings"] {
     geminiTtsModel: configString("geminiTtsModel", "gemini-3.1-flash-tts-preview"),
     geminiTtsVoice: normalizedGeminiTtsVoice(),
     geminiAudioUnderstandingModel: configString("geminiAudioUnderstandingModel", "gemini-3.5-flash"),
+    qwenCoachBaseUrl: normalizedQwenCoachBaseUrl(),
     qwenCompatibleBaseUrl: normalizedQwenCompatibleBaseUrl(),
     qwenCoachModel: configString("qwenCoachModel", "qwen3.6-plus"),
     qwenAudioUnderstandingModel: normalizedQwenAudioUnderstandingModel(),
@@ -149,18 +152,29 @@ export function normalizedQwenCompatibleBaseUrl(): string {
   return includesValue(QWEN_COMPATIBLE_BASE_URLS, baseUrl) ? baseUrl : QWEN_COMPATIBLE_BASE_URL;
 }
 
+export function normalizedQwenCoachBaseUrl(): string {
+  const baseUrl = configString("qwenCoachBaseUrl", QWEN_TOKEN_PLAN_ANTHROPIC_BASE_URL).replace(/\/+$/, "");
+  return baseUrl || QWEN_TOKEN_PLAN_ANTHROPIC_BASE_URL;
+}
+
 export function normalizedQwenAudioUnderstandingModel(): string {
   const model = configString("qwenAudioUnderstandingModel", "qwen3-asr-flash");
   return includesValue(QWEN_AUDIO_UNDERSTANDING_MODELS, model) ? model : "qwen3-asr-flash";
 }
 
 export function normalizedQwenTtsEndpoint(): string {
-  const endpoint = configString("qwenTtsEndpoint", QWEN_TTS_ENDPOINT).replace(/\/+$/, "");
-  return endpoint === QWEN_TTS_INTL_ENDPOINT ? QWEN_TTS_INTL_ENDPOINT : QWEN_TTS_ENDPOINT;
+  const endpoint = configString("qwenTtsEndpoint", QWEN_TTS_BASE_HTTP_API_URL).replace(/\/+$/, "");
+  if (
+    endpoint === QWEN_TTS_INTL_BASE_HTTP_API_URL
+    || endpoint === `${QWEN_TTS_INTL_BASE_HTTP_API_URL}/services/aigc/multimodal-generation/generation`
+  ) {
+    return QWEN_TTS_INTL_BASE_HTTP_API_URL;
+  }
+  return QWEN_TTS_BASE_HTTP_API_URL;
 }
 
 export function normalizedQwenTtsRealtimeEndpoint(): string {
-  return normalizedQwenTtsEndpoint() === QWEN_TTS_INTL_ENDPOINT
+  return normalizedQwenTtsEndpoint() === QWEN_TTS_INTL_BASE_HTTP_API_URL
     ? QWEN_TTS_REALTIME_INTL_ENDPOINT
     : QWEN_TTS_REALTIME_ENDPOINT;
 }
@@ -212,6 +226,7 @@ export function isConfigSettingName(value: unknown): value is ConfigSettingName 
     value === "mimoCoachModel" ||
     value === "geminiCoachModel" ||
     value === "geminiAudioUnderstandingModel" ||
+    value === "qwenCoachBaseUrl" ||
     value === "qwenCompatibleBaseUrl" ||
     value === "qwenCoachModel" ||
     value === "qwenAudioUnderstandingModel" ||

@@ -173,15 +173,17 @@ test("activates without a workspace and registers the command surface", async ()
 
   extension.activate(context);
   await new Promise((resolve) => setImmediate(resolve));
-  // 24 reflects the post-0.1.46 command surface: OpenAI coach/stack/TTS/realtime
+  // 25 reflects the post-0.1.46 command surface plus the split Qwen Token Plan
+  // coach key command. OpenAI coach/stack/TTS/realtime
   // commands and configureOpenAIKey were retired with the OpenAI provider.
   // Bumping this number must stay in lockstep with the contributes block in
   // package.json so a stray rename can't silently lose a command.
-  assert.equal(registered.length, 24);
+  assert.equal(registered.length, 25);
   assert.ok(registered.includes("englishTraining.openPractice"));
   assert.ok(registered.includes("englishTraining.createSamplePackage"));
   assert.ok(registered.includes("englishTraining.generateNextPackage"));
   assert.ok(registered.includes("englishTraining.useQwenCoach"));
+  assert.ok(registered.includes("englishTraining.configureQwenTokenPlanKey"));
   assert.ok(registered.includes("englishTraining.useQwenAudioUnderstanding"));
   assert.ok(registered.includes("englishTraining.useQwenStack"));
   assert.ok(registered.includes("englishTraining.useGeminiOnly"));
@@ -3733,7 +3735,7 @@ test("provider model ids and external voice ids are trimmed before UI state or r
         mimoCoachModel: "mimo-v2.5-flash",
         mimoAudioUnderstandingModel: "mimo-v2-omni",
         mimoTtsModel: "mimo-v2.5-tts",
-        qwenTtsEndpoint: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+        qwenTtsEndpoint: "https://dashscope-intl.aliyuncs.com/api/v1",
         qwenTtsModel: "qwen3-tts-instruct-flash",
         qwenTtsVoice: "Serena",
         qwenTtsLanguageType: "German",
@@ -4547,7 +4549,7 @@ test("model configuration writes global settings when no workspace is open", asy
       },
     };
   };
-  mockVscode.window.showQuickPick = async (items) => items.find((item) => item.label === "qwen3.7-max");
+  mockVscode.window.showQuickPick = async (items) => items.find((item) => item.label === "qwen3.6-flash");
   api.clearRefreshHandlers();
   api.registerRefreshHandler(() => {
     refreshes += 1;
@@ -4564,7 +4566,7 @@ test("model configuration writes global settings when no workspace is open", asy
   }
 
   assert.deepEqual(updates, [
-    { key: "qwenCoachModel", value: "qwen3.7-max", target: mockVscode.ConfigurationTarget.Global },
+    { key: "qwenCoachModel", value: "qwen3.6-flash", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 1);
 });
@@ -4985,17 +4987,17 @@ test("Qwen-ASR sends DashScope OpenAI-compatible audio requests", async () => {
   }
 });
 
-test("Qwen coach sends DashScope OpenAI-compatible chat requests", async () => {
+test("Qwen coach sends Token Plan Anthropic-compatible requests", async () => {
   const previous = {
     coachProvider: configValues.coachProvider,
-    qwenCompatibleBaseUrl: configValues.qwenCompatibleBaseUrl,
+    qwenCoachBaseUrl: configValues.qwenCoachBaseUrl,
     qwenCoachModel: configValues.qwenCoachModel,
   };
   const originalFetch = global.fetch;
   const calls = [];
   configValues.coachProvider = " qwen ";
-  configValues.qwenCompatibleBaseUrl = " https://dashscope-intl.aliyuncs.com/compatible-mode/v1/ ";
-  configValues.qwenCoachModel = " qwen3.5-flash ";
+  configValues.qwenCoachBaseUrl = " https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic/ ";
+  configValues.qwenCoachModel = " qwen3.6-flash ";
   global.fetch = async (url, init) => {
     calls.push({
       url: String(url),
@@ -5005,15 +5007,14 @@ test("Qwen coach sends DashScope OpenAI-compatible chat requests", async () => {
     return {
       ok: true,
       text: async () => JSON.stringify({
-        choices: [
+        content: [
           {
-            message: {
-              content: JSON.stringify({
-                lines: [
-                  { label: "claim", text: "I would frame the claim more narrowly.", reason: "替换 claim 槽位" },
-                ],
-              }),
-            },
+            type: "text",
+            text: JSON.stringify({
+              lines: [
+                { label: "claim", text: "I would frame the claim more narrowly.", reason: "替换 claim 槽位" },
+              ],
+            }),
           },
         ],
       }),
@@ -5021,7 +5022,7 @@ test("Qwen coach sends DashScope OpenAI-compatible chat requests", async () => {
   };
   const context = {
     secrets: {
-      get: async (key) => key === "englishTraining.dashscopeApiKey" ? " dashscope-coach-test " : "",
+      get: async (key) => key === "englishTraining.qwenTokenPlanApiKey" ? " token-plan-coach-test " : "",
     },
   };
   const state = {
@@ -5037,12 +5038,12 @@ test("Qwen coach sends DashScope OpenAI-compatible chat requests", async () => {
     assert.deepEqual(lines, [
       { label: "claim", text: "I would frame the claim more narrowly.", reason: "替换 claim 槽位", source: "coach" },
     ]);
-    assert.equal(calls[0].url, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions");
-    assert.equal(calls[0].headers.Authorization, "Bearer dashscope-coach-test");
-    assert.equal(calls[0].body.model, "qwen3.5-flash");
-    assert.deepEqual(calls[0].body.response_format, { type: "json_object" });
-    assert.equal(calls[0].body.messages[0].role, "system");
-    assert.equal(calls[0].body.messages[1].role, "user");
+    assert.equal(calls[0].url, "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1/messages");
+    assert.equal(calls[0].headers["X-Api-Key"], "token-plan-coach-test");
+    assert.equal(calls[0].headers["anthropic-version"], "2023-06-01");
+    assert.equal(calls[0].body.model, "qwen3.6-flash");
+    assert.equal(calls[0].body.system.includes("FSI-style English drill writer"), true);
+    assert.equal(calls[0].body.messages[0].role, "user");
   } finally {
     Object.assign(configValues, previous);
     global.fetch = originalFetch;
