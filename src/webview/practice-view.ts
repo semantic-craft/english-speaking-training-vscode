@@ -31,6 +31,7 @@ import {
   configureApiKey,
   configureCoreRouteKeys,
   configureLocalMaterialsRoot,
+  configureQwenCoachKey,
   setGeminiOnlyProviders,
   setProviderSetting,
   setQwenStackProviders,
@@ -336,6 +337,8 @@ export class PracticeViewProvider implements vscode.WebviewViewProvider {
           await this.runOptionalSidebarCommand(view, command, requestId, () => openSessionFolder(this.context));
         } else if (command === "setupProviderKey") {
           await this.runSidebarCommand(view, command, requestId, () => configureCoreRouteKeys(this.context));
+        } else if (command === "configureQwenCoachKey") {
+          await this.runSidebarCommand(view, command, requestId, () => configureQwenCoachKey(this.context));
         } else if (command === "createSamplePackage") {
           await this.runSidebarCommand(view, command, requestId, () => createSamplePackage(this.context));
         } else if (command === "generateNextPackage") {

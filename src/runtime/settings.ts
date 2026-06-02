@@ -29,7 +29,8 @@ const GEMINI_TTS_VOICES = [
   "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
   "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
 ] as const;
-const MIMO_TTS_VOICES = ["Mia", "Chloe", "Milo", "Dean", "mimo_default"] as const;
+const MIMO_TTS_DEFAULT_VOICE = "Chloe";
+const MIMO_TTS_VOICES = ["Mia", "Chloe", "Milo", "Dean"] as const;
 const QWEN_COMPATIBLE_BASE_URLS = [QWEN_COMPATIBLE_BASE_URL, QWEN_COMPATIBLE_INTL_BASE_URL] as const;
 const QWEN_AUDIO_UNDERSTANDING_MODELS = ["qwen3-asr-flash", "qwen3-asr-flash-2026-02-10", "qwen3-asr-flash-2025-09-08"] as const;
 const QWEN_TTS_MODELS = ["qwen3-tts-flash", "qwen3-tts-instruct-flash"] as const;
@@ -92,7 +93,7 @@ export function trainingSettings(): TrainingState["settings"] {
     geminiAudioUnderstandingModel: configString("geminiAudioUnderstandingModel", "gemini-3.5-flash"),
     qwenCoachBaseUrl: normalizedQwenCoachBaseUrl(),
     qwenCompatibleBaseUrl: normalizedQwenCompatibleBaseUrl(),
-    qwenCoachModel: configString("qwenCoachModel", "qwen3.6-plus"),
+    qwenCoachModel: configString("qwenCoachModel", "qwen3.7-plus"),
     qwenAudioUnderstandingModel: normalizedQwenAudioUnderstandingModel(),
     mimoAnthropicBaseUrl: configString("mimoAnthropicBaseUrl", MIMO_ANTHROPIC_BASE_URL),
     mimoCoachModel: configString("mimoCoachModel", "mimo-v2.5-pro"),
@@ -143,8 +144,8 @@ export function normalizedGeminiTtsVoice(): string {
 }
 
 export function normalizedMimoTtsVoice(): string {
-  const voice = configString("mimoTtsVoice", "Mia");
-  return includesValue(MIMO_TTS_VOICES, voice) ? voice : "Mia";
+  const voice = configString("mimoTtsVoice", MIMO_TTS_DEFAULT_VOICE);
+  return includesValue(MIMO_TTS_VOICES, voice) ? voice : MIMO_TTS_DEFAULT_VOICE;
 }
 
 export function normalizedQwenCompatibleBaseUrl(): string {

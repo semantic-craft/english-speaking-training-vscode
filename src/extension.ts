@@ -91,7 +91,10 @@ import {
   writeTextArtifact,
 } from "./practice/pipeline.js";
 import {
+  coachingSystemPrompt,
   coachingUserPrompt,
+  composeMaterialBriefSystemPrompt,
+  drillGenSystemPrompt,
   drillGenUserPrompt,
   generateDrillLines as coachGenerateDrillLines,
 } from "./practice/coach.js";
@@ -229,11 +232,11 @@ const QWEN_COMPATIBLE_BASE_URL_OPTIONS = [
 
 const QWEN_COACH_BASE_URL_OPTIONS = [
   "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
-  "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
 ];
 
 const QWEN_COACH_MODEL_OPTIONS = [
-  "qwen3.6-plus",
+  "qwen3.7-plus",
+  "qwen3.7-max",
   "qwen3.6-flash",
 ];
 
@@ -432,7 +435,9 @@ export const __test__ = {
   chatCompletionsUrl,
   chooseLocalAvfoundationAudioDevice,
   coachGenerateDrillLines,
+  coachingSystemPrompt,
   coachingUserPrompt,
+  composeMaterialBriefSystemPrompt,
   configString,
   compactStatusValue,
   clearApiKeys,
@@ -449,6 +454,7 @@ export const __test__ = {
   decodeBase64AudioData,
   decodeWebviewAudioBase64,
   drillExamplesFromState,
+  drillGenSystemPrompt,
   drillGenUserPrompt,
   ensureNonEmptyAudioData,
   existingDirectoryPath,
@@ -713,7 +719,7 @@ function configSettingOptions(setting: ConfigSettingName): string[] {
     case "qwenTtsLanguageType": return QWEN_TTS_LANGUAGE_TYPE_OPTIONS;
     case "qwenTtsInstructions": return [];
     case "mimoTtsModel": return ["mimo-v2.5-tts"];
-    case "mimoTtsVoice": return ["Mia", "Chloe", "Milo", "Dean", "mimo_default"];
+    case "mimoTtsVoice": return ["Mia", "Chloe", "Milo", "Dean"];
     case "recorderBackend": return ["macLocal", "webview", "auto"];
     case "geminiTtsModel": return GEMINI_TTS_MODEL_OPTIONS;
     case "geminiTtsVoice": return ["Kore", "Charon", "Iapetus", "Erinome", "Sulafat", "Achird", "Vindemiatrix", "Puck", "Zephyr", "Leda", "Schedar", "Sadaltager"];

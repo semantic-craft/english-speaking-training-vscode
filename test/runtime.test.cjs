@@ -881,7 +881,7 @@ test("practice webview configure-key messages normalize provider names before sa
     { key: "englishTraining.dashscopeApiKey", value: "dashscope-key" },
   ]);
   assert.equal(refreshes, 1);
-  assert.deepEqual(info, ["Qwen API key saved."]);
+  assert.deepEqual(info, ["Qwen DashScope API key saved."]);
   assert.deepEqual(messages, []);
 });
 
@@ -1768,6 +1768,21 @@ test("coach and drill prompts share cleaned lesson frame text", () => {
     "The review should stay proportionate.",
   ]);
   assert.deepEqual(drillPayload.task.frames, coachingPayload.task.frames);
+});
+
+test("coach system prompts carry SkillOpt-style strict JSON gates", () => {
+  const coach = api.coachingSystemPrompt();
+  const drill = api.drillGenSystemPrompt();
+  const brief = api.composeMaterialBriefSystemPrompt();
+
+  for (const prompt of [coach, drill, brief]) {
+    assert.match(prompt, /SkillOpt-style validation gate/);
+    assert.match(prompt, /schema gate/);
+    assert.match(prompt, /strict JSON/);
+  }
+  assert.match(coach, /shadow_target/);
+  assert.match(drill, /avoid_texts/);
+  assert.match(brief, /20-40s lesson/);
 });
 
 test("drill generation failures echo request ids for stale-result filtering", async () => {
@@ -2954,6 +2969,8 @@ test("builds a provider-agnostic generation prompt embedding the contract and an
   assert.ok(prompt.includes(api.CARD_SCHEMA_VERSION));
   assert.ok(prompt.includes("2026-06-02"), "targets the requested date");
   assert.ok(prompt.includes("Conference small talk about my research"), "embeds the learner brief");
+  assert.ok(prompt.includes("SkillOpt-style validation gate"), "adds a prompt self-check gate");
+  assert.ok(prompt.includes("render gate"), "checks render-critical fields before output");
   assert.ok(prompt.includes("english-training/card-schema"), "embeds the machine-readable contract");
   assert.ok(prompt.includes("english-training.json") && prompt.includes("followup-drill.json"), "states the output contract");
 });
@@ -3746,14 +3763,14 @@ test("provider model ids and external voice ids are trimmed before UI state or r
     configValues.qwenCoachModel = "   ";
     configValues.qwenAudioUnderstandingModel = "bogus-asr-model";
     configValues.qwenTtsVoice = "   ";
-    assert.equal(api.trainingSettings().qwenCoachModel, "qwen3.6-plus");
+    assert.equal(api.trainingSettings().qwenCoachModel, "qwen3.7-plus");
     assert.equal(api.trainingSettings().qwenAudioUnderstandingModel, "qwen3-asr-flash");
     assert.equal(api.trainingSettings().qwenTtsVoice, "Jennifer");
     assert.equal(api.configString("qwenTtsVoice", "fallback-voice"), "fallback-voice");
 
     configValues.qwenCoachModel = { model: "qwen-plus" };
     configValues.qwenTtsVoice = ["Cherry"];
-    assert.equal(api.trainingSettings().qwenCoachModel, "qwen3.6-plus");
+    assert.equal(api.trainingSettings().qwenCoachModel, "qwen3.7-plus");
     assert.equal(api.trainingSettings().qwenTtsVoice, "Jennifer");
   } finally {
     Object.assign(configValues, previous);
@@ -3966,7 +3983,7 @@ test("blank API key input warns instead of silently canceling", async () => {
 
     assert.equal(saved, false);
     assert.deepEqual(stored, []);
-    assert.deepEqual(warningMessages, ["Qwen API key was empty; nothing was saved."]);
+    assert.deepEqual(warningMessages, ["Qwen DashScope API key was empty; nothing was saved."]);
   } finally {
     mockVscode.window.showInputBox = previousInputBox;
     warningMessages.length = 0;
@@ -4056,7 +4073,7 @@ test("saving an already stored API key does not rewrite secrets or refresh", asy
     assert.equal(saved, true);
     assert.deepEqual(stored, []);
     assert.equal(refreshes, 0);
-    assert.deepEqual(info, ["Qwen API key is already saved."]);
+    assert.deepEqual(info, ["Qwen DashScope API key is already saved."]);
   } finally {
     mockVscode.window.showInputBox = previousInputBox;
     mockVscode.window.showInformationMessage = previousInfoMessage;
@@ -4505,8 +4522,8 @@ test("model setting pickers mark and repair blank effective default values", asy
     };
   };
   mockVscode.window.showQuickPick = async (items) => {
-    assert.equal(items.find((item) => item.label === "qwen3.6-plus")?.description, "current");
-    return items.find((item) => item.label === "qwen3.6-plus");
+    assert.equal(items.find((item) => item.label === "qwen3.7-plus")?.description, "current");
+    return items.find((item) => item.label === "qwen3.7-plus");
   };
   api.clearRefreshHandlers();
   api.registerRefreshHandler(() => {
@@ -4524,7 +4541,7 @@ test("model setting pickers mark and repair blank effective default values", asy
   }
 
   assert.deepEqual(updates, [
-    { key: "qwenCoachModel", value: "qwen3.6-plus", target: mockVscode.ConfigurationTarget.Global },
+    { key: "qwenCoachModel", value: "qwen3.7-plus", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 1);
 });
@@ -4832,9 +4849,11 @@ test("provider TTS voices are normalized before UI state or provider calls", () 
 
   configValues.mimoTtsVoice = "Dean";
   assert.equal(api.normalizedMimoTtsVoice(), "Dean");
+  configValues.mimoTtsVoice = "mimo_default";
+  assert.equal(api.normalizedMimoTtsVoice(), "Chloe");
   configValues.mimoTtsVoice = "not-a-real-mimo-voice";
-  assert.equal(api.normalizedMimoTtsVoice(), "Mia");
-  assert.equal(api.trainingSettings().mimoTtsVoice, "Mia");
+  assert.equal(api.normalizedMimoTtsVoice(), "Chloe");
+  assert.equal(api.trainingSettings().mimoTtsVoice, "Chloe");
 
   configValues.qwenTtsVoice = "Serena";
   configValues.qwenTtsLanguageType = "German";
