@@ -435,10 +435,24 @@
       const keys = objectValue(safeState.keys) || {};
       const providers = activeRouteProviders(safeState.settings);
       const missing = providers.filter((provider) => !providerKeySaved(keys, provider));
+      // The Qwen coach needs its SEPARATE Token Plan key, which the shared
+      // DashScope keys.qwen (used for Qwen ASR/TTS) does not cover. Gate the
+      // record button on that key too, otherwise a coach=qwen route reads as
+      // ready with only the DashScope key and the first recording is wasted on
+      // a "Missing … Token Plan API key" error.
+      const coachProvider = normalizeProviderForSetting(
+        "coachProvider",
+        scalarField(objectValue(safeState.settings) || {}, "coachProvider"),
+      );
+      const coachKeyMissing = coachProvider === "qwen" && safeState.qwenCoachKey !== true;
       const label = providers.map(providerLabel).join(" + ") || "Provider";
-      const missingLabel = missing.map(providerLabel).join(" + ") || label;
+      const missingNames = missing.map(providerLabel);
+      if (coachKeyMissing && missingNames.indexOf(providerLabel("qwen")) === -1) {
+        missingNames.push(providerLabel("qwen") + " coach");
+      }
+      const missingLabel = missingNames.join(" + ") || label;
       return {
-        coreKeysReady: missing.length === 0,
+        coreKeysReady: missing.length === 0 && !coachKeyMissing,
         providers,
         missing,
         label,
@@ -662,7 +676,7 @@
           <span class="chip">${esc(scalarField(state, "source") || "local")}</span>
           ${scalarField(state, "sourceLabel") ? '<span class="chip">' + esc(shortSourceLabel(scalarField(state, "sourceLabel"))) + '</span>' : ''}
         `;
-        renderProviderPanel(settings, state.keys || {});
+        renderProviderPanel(settings, { ...(objectValue(state.keys) || {}), qwenCoach: state.qwenCoachKey === true });
         renderQwenVoicePicker(settings);
         renderSpeedChips(settings);
         applyTransientAudioBusyState();
@@ -763,7 +777,7 @@
 
     const PROVIDER_ROUTES = {
       coachProvider: [
-        { value: "qwen", label: "Qwen", note: "DashScope Chat Completions", modelSetting: "qwenCoachModel", extraSetting: "qwenCompatibleBaseUrl", extraLabel: "Endpoint" },
+        { value: "qwen", label: "Qwen", note: "Token Plan (Anthropic-compatible)", modelSetting: "qwenCoachModel", extraSetting: "qwenCoachBaseUrl", extraLabel: "Endpoint", keyCommand: "configureQwenCoachKey" },
         { value: "mimo", label: "MiMo", note: "Xiaomi Token Plan", modelSetting: "mimoCoachModel" },
         { value: "gemini", label: "Gemini", note: "alternate coach", modelSetting: "geminiCoachModel" },
       ],
@@ -845,7 +859,13 @@
 
     function providerCardHtml(setting, option, settings, keys) {
       const active = normalizeProviderForSetting(setting, scalarField(settings, setting)) === option.value;
-      const hasKey = providerKeySaved(keys, option.value);
+      // The Qwen coach uses a SEPARATE Token Plan key (qwenTokenPlanApiKey),
+      // not the shared DashScope key that drives keys.qwen for ASR/TTS. Read
+      // its readiness from the dedicated qwenCoach flag so the coach card does
+      // not falsely show "key" when only the DashScope key is saved.
+      const hasKey = setting === "coachProvider" && option.value === "qwen"
+        ? providerKeySaved(keys, "qwenCoach")
+        : providerKeySaved(keys, option.value);
       const modelText = providerModelSummary(setting, option, settings);
       const modelSetting = providerModelSetting(setting, option, settings);
       const extraButtons = providerExtraSettings(option)
@@ -861,6 +881,12 @@
       const modelButton = modelSetting
         ? '<button class="secondary" data-config-setting="' + esc(modelSetting) + '">' + esc(providerModelButtonLabel(setting, option, settings)) + '</button>'
         : '';
+      // The Qwen coach key is a separate Token Plan secret, so its "Add key"
+      // action runs a dedicated command instead of the shared keys.qwen
+      // (DashScope) configureKey route used by every other card.
+      const keyButton = option.keyCommand
+        ? '<button class="secondary" data-sidebar-command="' + esc(option.keyCommand) + '">' + (hasKey ? "Key saved" : "Add key") + '</button>'
+        : '<button class="secondary" data-key="' + esc(option.value) + '">' + (hasKey ? "Key saved" : "Add key") + '</button>';
       return [
         '<div class="provider-card ' + (active ? "active" : "") + '">',
           '<div class="provider-card-top">',
@@ -870,7 +896,7 @@
           modelText ? '<div class="provider-model">' + modelText + '</div>' : '',
           '<div class="provider-card-actions">',
             useButton,
-            '<button class="secondary" data-key="' + esc(option.value) + '">' + (hasKey ? "Key saved" : "Add key") + '</button>',
+            keyButton,
             modelButton,
             extraButtons,
           '</div>',

@@ -80,6 +80,7 @@ export interface TrainingState {
   recentSessions: JsonObject[];
   generatedAt: string;
   keys: KeyAvailability;
+  qwenCoachKey: boolean;
   settings: {
     localMaterialsRoot: string;
     coachProvider: string;

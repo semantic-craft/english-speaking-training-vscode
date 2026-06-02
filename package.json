@@ -54,7 +54,7 @@
       },
       {
         "command": "englishTraining.configureDashScopeKey",
-        "title": "English Training: Configure DashScope API Key",
+        "title": "English Training: Configure Qwen DashScope Key",
         "category": "English Training"
       },
       {
@@ -312,8 +312,7 @@
           "type": "string",
           "default": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
           "enum": [
-            "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
-            "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic"
           ],
           "description": "Bailian Token Plan base URL used by Qwen Coach/analysis. Qwen-ASR/TTS keep separate DashScope endpoints and a separate DashScope key."
         },

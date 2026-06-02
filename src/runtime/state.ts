@@ -19,7 +19,7 @@ import type {
   TrainingState,
 } from "../types.js";
 import { createSessionDir, readRecentSessionLog, splitPracticeText } from "../practice/pipeline.js";
-import { apiKeyAvailability } from "../commands/provider-routes.js";
+import { apiKeyAvailability, qwenCoachKeyAvailable } from "../commands/provider-routes.js";
 import { loadLocalLearnerProfile } from "./learner-profile.js";
 import {
   dateRangeLabel,
@@ -89,6 +89,7 @@ export async function loadLocalState(
     recentSessions: readRecentSessionLog(root, 5),
     generatedAt: new Date().toISOString(),
     keys: await apiKeyAvailability(context),
+    qwenCoachKey: await qwenCoachKeyAvailable(context),
     settings,
   };
 }
