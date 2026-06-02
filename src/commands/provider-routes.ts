@@ -117,7 +117,7 @@ export async function configureApiKey(
   provider: ProviderName,
   options: { refresh?: boolean } = {},
 ): Promise<boolean> {
-  const label = providerLabel(provider);
+  const label = provider === "qwen" ? "Qwen DashScope" : providerLabel(provider);
   const value = await vscode.window.showInputBox({
     title: `Configure ${label} API Key`,
     prompt: `Paste the ${label} API key. It will be stored in VS Code SecretStorage.`,
@@ -149,7 +149,7 @@ export async function pickAndConfigureProviderKey(context: vscode.ExtensionConte
   const availability = await apiKeyAvailability(context);
   const items: (vscode.QuickPickItem & { provider: ProviderName })[] = providers.map((provider) => ({
     provider,
-    label: providerLabel(provider),
+    label: provider === "qwen" ? "Qwen DashScope" : providerLabel(provider),
     description: availability[provider] ? "saved" : "not set",
     detail: runProviderSetupHint(provider),
   }));

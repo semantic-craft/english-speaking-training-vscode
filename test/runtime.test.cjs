@@ -881,7 +881,7 @@ test("practice webview configure-key messages normalize provider names before sa
     { key: "englishTraining.dashscopeApiKey", value: "dashscope-key" },
   ]);
   assert.equal(refreshes, 1);
-  assert.deepEqual(info, ["Qwen API key saved."]);
+  assert.deepEqual(info, ["Qwen DashScope API key saved."]);
   assert.deepEqual(messages, []);
 });
 
@@ -3983,7 +3983,7 @@ test("blank API key input warns instead of silently canceling", async () => {
 
     assert.equal(saved, false);
     assert.deepEqual(stored, []);
-    assert.deepEqual(warningMessages, ["Qwen API key was empty; nothing was saved."]);
+    assert.deepEqual(warningMessages, ["Qwen DashScope API key was empty; nothing was saved."]);
   } finally {
     mockVscode.window.showInputBox = previousInputBox;
     warningMessages.length = 0;
@@ -4073,7 +4073,7 @@ test("saving an already stored API key does not rewrite secrets or refresh", asy
     assert.equal(saved, true);
     assert.deepEqual(stored, []);
     assert.equal(refreshes, 0);
-    assert.deepEqual(info, ["Qwen API key is already saved."]);
+    assert.deepEqual(info, ["Qwen DashScope API key is already saved."]);
   } finally {
     mockVscode.window.showInputBox = previousInputBox;
     mockVscode.window.showInformationMessage = previousInfoMessage;

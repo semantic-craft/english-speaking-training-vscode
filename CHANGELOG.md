@@ -21,9 +21,10 @@ and this project adheres to
 
 ### Changed
 - Qwen coach model default is now `qwen3.7-plus`; the picker offers
-  `qwen3.7-plus` / `qwen3.7-max` / `qwen3.6-flash` with guidance. Coach requests now send `enable_thinking: false`
-  on the hybrid models so DashScope structured-output (JSON) stays reliable and
-  interactive latency drops; `qwen3.7-plus` and `qwen3.7-max` keep the think-strip fallback.
+  `qwen3.7-plus` / `qwen3.7-max` / `qwen3.6-flash` with guidance. Coach requests
+  do not set any structured-output API flag; reliable JSON comes from the
+  best-effort `stripThinkBlocks` + `parseLooseJson` salvage, which strips any
+  `<think>` blocks or Markdown fences the hybrid models emit around the JSON.
 - Qwen-TTS default voice is now `Jennifer` (cinematic American English). The
   voice picker is a curated 12-voice English set with descriptions; all 48
   official Qwen3-TTS voices remain selectable via Custom… / settings.json.

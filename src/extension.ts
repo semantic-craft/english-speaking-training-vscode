@@ -232,7 +232,6 @@ const QWEN_COMPATIBLE_BASE_URL_OPTIONS = [
 
 const QWEN_COACH_BASE_URL_OPTIONS = [
   "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
-  "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
 ];
 
 const QWEN_COACH_MODEL_OPTIONS = [
