@@ -1770,6 +1770,21 @@ test("coach and drill prompts share cleaned lesson frame text", () => {
   assert.deepEqual(drillPayload.task.frames, coachingPayload.task.frames);
 });
 
+test("coach system prompts carry SkillOpt-style strict JSON gates", () => {
+  const coach = api.coachingSystemPrompt();
+  const drill = api.drillGenSystemPrompt();
+  const brief = api.composeMaterialBriefSystemPrompt();
+
+  for (const prompt of [coach, drill, brief]) {
+    assert.match(prompt, /SkillOpt-style validation gate/);
+    assert.match(prompt, /schema gate/);
+    assert.match(prompt, /strict JSON/);
+  }
+  assert.match(coach, /shadow_target/);
+  assert.match(drill, /avoid_texts/);
+  assert.match(brief, /20-40s lesson/);
+});
+
 test("drill generation failures echo request ids for stale-result filtering", async () => {
   const previousLocalMaterialsRoot = configValues.localMaterialsRoot;
   const previousWorkspaceFolders = mockVscode.workspace.workspaceFolders;
@@ -2954,6 +2969,8 @@ test("builds a provider-agnostic generation prompt embedding the contract and an
   assert.ok(prompt.includes(api.CARD_SCHEMA_VERSION));
   assert.ok(prompt.includes("2026-06-02"), "targets the requested date");
   assert.ok(prompt.includes("Conference small talk about my research"), "embeds the learner brief");
+  assert.ok(prompt.includes("SkillOpt-style validation gate"), "adds a prompt self-check gate");
+  assert.ok(prompt.includes("render gate"), "checks render-critical fields before output");
   assert.ok(prompt.includes("english-training/card-schema"), "embeds the machine-readable contract");
   assert.ok(prompt.includes("english-training.json") && prompt.includes("followup-drill.json"), "states the output contract");
 });

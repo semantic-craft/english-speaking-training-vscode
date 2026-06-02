@@ -53,6 +53,7 @@ export function coachingSystemPrompt(): string {
     "tts_style is a short English direction (under 25 words) for how the native_version should be SPOKEN aloud: accent, emotion, intonation, pacing, emphasis, or whispering. It steers the TTS voice; it is not feedback to the learner.",
     "Match tts_style to the scenario (e.g., 'Speak like a patient seminar professor; emphasize the modal verbs and slow down on the hedge phrases.' or 'Whisper softly so the learner can shadow the rhythm.'). Avoid generic instructions like 'speak naturally'.",
     "Explanations may be in Chinese, but native_version, follow_up_question, and tts_style must be natural English.",
+    skillOptStrictJsonGate("coach: ground every correction in the transcript, lesson frames, learner profile, prior turn, or shadow target; preserve shadow_target exactly when present; return only a useful next speaking move."),
   ].join(" ");
 }
 
@@ -190,6 +191,7 @@ export function drillGenSystemPrompt(): string {
     "Stay on the same scenario, frames, and legal-academic register as the task; vary the substitution slot every line.",
     "label is a short English cue; reason is a brief Chinese note (e.g. 替换 claim 槽位 / 练 nucleus 重音).",
     "Never repeat or lightly paraphrase any sentence listed in avoid_texts.",
+    skillOptStrictJsonGate("drill writer: every line must stay in the provided scenario/register, vary a real substitution slot, avoid avoid_texts, and be immediately speakable."),
   ].join(" ");
 }
 
@@ -285,6 +287,7 @@ export function composeMaterialBriefSystemPrompt(): string {
     "chinese_setup is a one-sentence Chinese task instruction for the learner.",
     "Stay in the learner's own domain inferred from the topic; do not invent unrelated content.",
     "Do not wrap the JSON in Markdown fences, comments, explanations, or trailing text.",
+    skillOptStrictJsonGate("material brief: infer only from the provided topic, keep the scope concrete enough for one 20-40s lesson, and return fields that can feed the package generator without manual repair."),
   ].join(" ");
 }
 
@@ -309,6 +312,10 @@ export function composeMaterialBriefUserPrompt(topic: string): string {
     },
   };
   return JSON.stringify(payload, null, 2);
+}
+
+function skillOptStrictJsonGate(scope: string): string {
+  return `SkillOpt-style validation gate before final answer: evidence gate = ${scope}; practice-value gate = the learner can act on the output immediately; schema gate = valid strict JSON only, no Markdown or trailing prose.`;
 }
 
 function formatMaterialBrief(parsed: JsonObject): string {
