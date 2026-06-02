@@ -91,7 +91,10 @@ import {
   writeTextArtifact,
 } from "./practice/pipeline.js";
 import {
+  coachingSystemPrompt,
   coachingUserPrompt,
+  composeMaterialBriefSystemPrompt,
+  drillGenSystemPrompt,
   drillGenUserPrompt,
   generateDrillLines as coachGenerateDrillLines,
 } from "./practice/coach.js";
@@ -432,7 +435,9 @@ export const __test__ = {
   chatCompletionsUrl,
   chooseLocalAvfoundationAudioDevice,
   coachGenerateDrillLines,
+  coachingSystemPrompt,
   coachingUserPrompt,
+  composeMaterialBriefSystemPrompt,
   configString,
   compactStatusValue,
   clearApiKeys,
@@ -449,6 +454,7 @@ export const __test__ = {
   decodeBase64AudioData,
   decodeWebviewAudioBase64,
   drillExamplesFromState,
+  drillGenSystemPrompt,
   drillGenUserPrompt,
   ensureNonEmptyAudioData,
   existingDirectoryPath,
