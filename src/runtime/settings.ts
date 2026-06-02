@@ -93,7 +93,7 @@ export function trainingSettings(): TrainingState["settings"] {
     geminiAudioUnderstandingModel: configString("geminiAudioUnderstandingModel", "gemini-3.5-flash"),
     qwenCoachBaseUrl: normalizedQwenCoachBaseUrl(),
     qwenCompatibleBaseUrl: normalizedQwenCompatibleBaseUrl(),
-    qwenCoachModel: configString("qwenCoachModel", "qwen3.6-plus"),
+    qwenCoachModel: configString("qwenCoachModel", "qwen3.7-plus"),
     qwenAudioUnderstandingModel: normalizedQwenAudioUnderstandingModel(),
     mimoAnthropicBaseUrl: configString("mimoAnthropicBaseUrl", MIMO_ANTHROPIC_BASE_URL),
     mimoCoachModel: configString("mimoCoachModel", "mimo-v2.5-pro"),

@@ -236,7 +236,8 @@ const QWEN_COACH_BASE_URL_OPTIONS = [
 ];
 
 const QWEN_COACH_MODEL_OPTIONS = [
-  "qwen3.6-plus",
+  "qwen3.7-plus",
+  "qwen3.7-max",
   "qwen3.6-flash",
 ];
 

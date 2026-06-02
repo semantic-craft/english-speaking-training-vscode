@@ -359,7 +359,7 @@ async function requestProviderJson(
       provider: "Qwen Token Plan",
       apiKey,
       baseUrl: normalizedQwenCoachBaseUrl(),
-      model: configString("qwenCoachModel", "qwen3.6-plus"),
+      model: configString("qwenCoachModel", "qwen3.7-plus"),
     });
   }
   if (provider === "mimo") {

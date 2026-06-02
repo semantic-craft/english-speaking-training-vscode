@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.51] — 2026-06-02
+
+### Changed
+- Updated the Qwen Coach default and picker from `qwen3.6-plus` to `qwen3.7-plus`, kept `qwen3.7-max` parallel, and migrated saved `qwen3.6-plus` settings forward.
+
 ## [0.1.50] — 2026-06-02
 
 ### Changed
@@ -15,11 +20,10 @@ and this project adheres to
 ## [0.1.47] — 2026-05-29
 
 ### Changed
-- Qwen coach model default is now `qwen3.6-plus` (Alibaba Bailian's recommended
-  balanced model); the picker offers `qwen3.6-plus` / `qwen3.6-flash` /
-  `qwen3.7-max` with guidance. Coach requests now send `enable_thinking: false`
+- Qwen coach model default is now `qwen3.7-plus`; the picker offers
+  `qwen3.7-plus` / `qwen3.7-max` / `qwen3.6-flash` with guidance. Coach requests now send `enable_thinking: false`
   on the hybrid models so DashScope structured-output (JSON) stays reliable and
-  interactive latency drops; `qwen3.7-max` keeps the think-strip fallback.
+  interactive latency drops; `qwen3.7-plus` and `qwen3.7-max` keep the think-strip fallback.
 - Qwen-TTS default voice is now `Jennifer` (cinematic American English). The
   voice picker is a curated 12-voice English set with descriptions; all 48
   official Qwen3-TTS voices remain selectable via Custom… / settings.json.

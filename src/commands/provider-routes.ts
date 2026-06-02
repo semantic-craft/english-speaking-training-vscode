@@ -32,11 +32,12 @@ export async function migrateGeminiModelDefaults(): Promise<boolean> {
   changed = (await migrateProviderSetting(settings, "audioUnderstandingProvider", "azure", "qwen")) || changed;
   changed = (await migrateProviderSetting(settings, "audioUnderstandingProvider", "openai", "qwen")) || changed;
   changed = (await migrateProviderSetting(settings, "ttsProvider", "openai", "qwen")) || changed;
-  // Coach: move the old Qwen default and superseded Gemini previews to the
-  // current recommended models. qwen-plus -> qwen3.6-plus (Alibaba's balanced
-  // default); the deprecated gemini-3-flash-preview and the now-shut-down
+  // Coach: move old Qwen defaults and superseded Gemini previews to the
+  // current recommended models. qwen-plus / qwen3.6-plus -> qwen3.7-plus;
+  // the deprecated gemini-3-flash-preview and the now-shut-down
   // gemini-3.1-flash-lite-preview -> their GA replacements.
-  changed = (await migrateModelDefault(settings, "qwenCoachModel", "qwen-plus", "qwen3.6-plus")) || changed;
+  changed = (await migrateModelDefault(settings, "qwenCoachModel", "qwen-plus", "qwen3.7-plus")) || changed;
+  changed = (await migrateModelDefault(settings, "qwenCoachModel", "qwen3.6-plus", "qwen3.7-plus")) || changed;
   changed = (await migrateModelDefault(settings, "geminiCoachModel", "gemini-2.5-flash", "gemini-3.5-flash")) || changed;
   changed = (await migrateModelDefault(settings, "geminiCoachModel", "gemini-3-flash-preview", "gemini-3.5-flash")) || changed;
   changed = (await migrateModelDefault(settings, "geminiCoachModel", "gemini-3.1-flash-lite-preview", "gemini-3.1-flash-lite")) || changed;
