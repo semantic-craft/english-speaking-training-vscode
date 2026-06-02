@@ -2,7 +2,7 @@
   "name": "english-speaking-training-vscode",
   "displayName": "English Speaking Training",
   "description": "Standalone VS Code speaking-practice cockpit for local EnglishSpeakingTraining files.",
-  "version": "0.1.50",
+  "version": "0.1.51",
   "publisher": "xianwei-zhang",
   "license": "MIT",
   "repository": {
@@ -319,16 +319,18 @@
         },
         "englishTraining.qwenCoachModel": {
           "type": "string",
-          "default": "qwen3.6-plus",
+          "default": "qwen3.7-plus",
           "enum": [
-            "qwen3.6-plus",
+            "qwen3.7-plus",
+            "qwen3.7-max",
             "qwen3.6-flash"
           ],
           "enumDescriptions": [
-            "Recommended. Alibaba's balanced flagship-class chat model (1M context); reliable JSON, good latency and cost. The coach forces non-thinking mode for stable structured output.",
+            "Recommended. Alibaba's current Qwen 3.7 Plus model for balanced multimodal coaching and correction.",
+            "Parallel Qwen 3.7 Max option for the hardest coaching and reasoning cases.",
             "Faster and cheaper, near-flagship quality, same 1M context and tools. Best when latency matters most."
           ],
-          "description": "Qwen Token Plan chat model for correction and follow-up coaching. Qwen is the primary coach; qwen3.6-plus is the recommended default. Qwen-ASR/TTS continue to use the separate DashScope settings."
+          "description": "Qwen Token Plan chat model for correction and follow-up coaching. Qwen is the primary coach; qwen3.7-plus is the recommended default, with qwen3.7-max available in parallel. Qwen-ASR/TTS continue to use the separate DashScope settings."
         },
         "englishTraining.qwenAudioUnderstandingModel": {
           "type": "string",

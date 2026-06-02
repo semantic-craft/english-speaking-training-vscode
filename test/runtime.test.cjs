@@ -3763,14 +3763,14 @@ test("provider model ids and external voice ids are trimmed before UI state or r
     configValues.qwenCoachModel = "   ";
     configValues.qwenAudioUnderstandingModel = "bogus-asr-model";
     configValues.qwenTtsVoice = "   ";
-    assert.equal(api.trainingSettings().qwenCoachModel, "qwen3.6-plus");
+    assert.equal(api.trainingSettings().qwenCoachModel, "qwen3.7-plus");
     assert.equal(api.trainingSettings().qwenAudioUnderstandingModel, "qwen3-asr-flash");
     assert.equal(api.trainingSettings().qwenTtsVoice, "Jennifer");
     assert.equal(api.configString("qwenTtsVoice", "fallback-voice"), "fallback-voice");
 
     configValues.qwenCoachModel = { model: "qwen-plus" };
     configValues.qwenTtsVoice = ["Cherry"];
-    assert.equal(api.trainingSettings().qwenCoachModel, "qwen3.6-plus");
+    assert.equal(api.trainingSettings().qwenCoachModel, "qwen3.7-plus");
     assert.equal(api.trainingSettings().qwenTtsVoice, "Jennifer");
   } finally {
     Object.assign(configValues, previous);
@@ -4522,8 +4522,8 @@ test("model setting pickers mark and repair blank effective default values", asy
     };
   };
   mockVscode.window.showQuickPick = async (items) => {
-    assert.equal(items.find((item) => item.label === "qwen3.6-plus")?.description, "current");
-    return items.find((item) => item.label === "qwen3.6-plus");
+    assert.equal(items.find((item) => item.label === "qwen3.7-plus")?.description, "current");
+    return items.find((item) => item.label === "qwen3.7-plus");
   };
   api.clearRefreshHandlers();
   api.registerRefreshHandler(() => {
@@ -4541,7 +4541,7 @@ test("model setting pickers mark and repair blank effective default values", asy
   }
 
   assert.deepEqual(updates, [
-    { key: "qwenCoachModel", value: "qwen3.6-plus", target: mockVscode.ConfigurationTarget.Global },
+    { key: "qwenCoachModel", value: "qwen3.7-plus", target: mockVscode.ConfigurationTarget.Global },
   ]);
   assert.equal(refreshes, 1);
 });

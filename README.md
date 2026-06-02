@@ -113,7 +113,7 @@ Practice / Skip choices after each result, and coach-generated
 
 ## Provider Defaults
 
-- Coach: Qwen Token Plan by default with `qwen3.6-plus`; `qwen3.6-flash` is
+- Coach: Qwen Token Plan by default with `qwen3.7-plus`; `qwen3.7-max` and `qwen3.6-flash` are
   available when latency matters most. Gemini and Xiaomi MiMo remain fallback
   coach routes from the sidebar or command palette.
 - Speech input: Qwen-ASR by default through DashScope compatible mode, with
