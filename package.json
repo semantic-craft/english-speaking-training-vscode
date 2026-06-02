@@ -2,7 +2,7 @@
   "name": "english-speaking-training-vscode",
   "displayName": "English Speaking Training",
   "description": "Standalone VS Code speaking-practice cockpit for local EnglishSpeakingTraining files.",
-  "version": "0.1.48",
+  "version": "0.1.52",
   "publisher": "xianwei-zhang",
   "license": "MIT",
   "repository": {
@@ -54,7 +54,7 @@
       },
       {
         "command": "englishTraining.configureDashScopeKey",
-        "title": "English Training: Configure DashScope API Key",
+        "title": "English Training: Configure Qwen DashScope Key",
         "category": "English Training"
       },
       {
@@ -203,30 +203,30 @@
           "default": "qwen",
           "enum": [
             "qwen",
-            "gemini",
-            "mimo"
+            "mimo",
+            "gemini"
           ],
-          "description": "Language-model provider for transcript correction and follow-up generation. Qwen Token Plan is the primary coach; Gemini and Xiaomi MiMo are fallback."
+          "description": "Language-model provider for transcript correction and follow-up generation. Qwen Token Plan is the primary coach; Xiaomi MiMo is the domestic fallback, with Gemini after domestic providers."
         },
         "englishTraining.audioUnderstandingProvider": {
           "type": "string",
           "default": "qwen",
           "enum": [
             "qwen",
-            "gemini",
-            "mimo"
+            "mimo",
+            "gemini"
           ],
-          "description": "Speech input (speech-to-text) provider. Qwen-ASR (qwen3-asr-flash) on DashScope is primary; Gemini and Xiaomi MiMo are fallback."
+          "description": "Speech input (speech-to-text) provider. Qwen-ASR (qwen3-asr-flash) on DashScope is primary; Xiaomi MiMo is the domestic fallback, with Gemini after domestic providers."
         },
         "englishTraining.ttsProvider": {
           "type": "string",
           "default": "qwen",
           "enum": [
             "qwen",
-            "gemini",
-            "mimo"
+            "mimo",
+            "gemini"
           ],
-          "description": "Speech output (text-to-speech) provider for native-version follow-along audio. Qwen-TTS (qwen3-tts-flash) on DashScope is primary; Gemini and Xiaomi MiMo are fallback."
+          "description": "Speech output (text-to-speech) provider for native-version follow-along audio. Qwen-TTS (qwen3-tts-flash) on DashScope is primary; Xiaomi MiMo is the domestic fallback, with Gemini after domestic providers."
         },
         "englishTraining.geminiCoachModel": {
           "type": "string",
@@ -312,23 +312,24 @@
           "type": "string",
           "default": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
           "enum": [
-            "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
-            "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic"
           ],
           "description": "Bailian Token Plan base URL used by Qwen Coach/analysis. Qwen-ASR/TTS keep separate DashScope endpoints and a separate DashScope key."
         },
         "englishTraining.qwenCoachModel": {
           "type": "string",
-          "default": "qwen3.6-plus",
+          "default": "qwen3.7-plus",
           "enum": [
-            "qwen3.6-plus",
+            "qwen3.7-plus",
+            "qwen3.7-max",
             "qwen3.6-flash"
           ],
           "enumDescriptions": [
-            "Recommended. Alibaba's balanced flagship-class chat model (1M context); reliable JSON, good latency and cost. The coach forces non-thinking mode for stable structured output.",
+            "Recommended. Alibaba's current Qwen 3.7 Plus model for balanced multimodal coaching and correction.",
+            "Parallel Qwen 3.7 Max option for the hardest coaching and reasoning cases.",
             "Faster and cheaper, near-flagship quality, same 1M context and tools. Best when latency matters most."
           ],
-          "description": "Qwen Token Plan chat model for correction and follow-up coaching. Qwen is the primary coach; qwen3.6-plus is the recommended default. Qwen-ASR/TTS continue to use the separate DashScope settings."
+          "description": "Qwen Token Plan chat model for correction and follow-up coaching. Qwen is the primary coach; qwen3.7-plus is the recommended default, with qwen3.7-max available in parallel. Qwen-ASR/TTS continue to use the separate DashScope settings."
         },
         "englishTraining.qwenAudioUnderstandingModel": {
           "type": "string",
@@ -383,15 +384,14 @@
         },
         "englishTraining.mimoTtsVoice": {
           "type": "string",
-          "default": "Mia",
+          "default": "Chloe",
           "enum": [
             "Mia",
             "Chloe",
             "Milo",
-            "Dean",
-            "mimo_default"
+            "Dean"
           ],
-          "description": "Xiaomi MiMo built-in voice for native-version audio. Mia and Chloe are female; Milo and Dean are male."
+          "description": "Xiaomi MiMo built-in English voice for native-version audio. Uses an explicit English voice because MiMo Default is region-dependent. Mia and Chloe are female; Milo and Dean are male."
         },
         "englishTraining.qwenTtsEndpoint": {
           "type": "string",

@@ -345,7 +345,7 @@ export function qwenTtsGenerationUrl(baseHttpApiUrl: string): string {
 export function providerKeyCommandTitle(provider: ProviderName): string {
   const titles: Record<ProviderName, string> = {
     gemini: "English Training: Configure Gemini API Key",
-    qwen: "English Training: Configure DashScope API Key",
+    qwen: "English Training: Configure Qwen DashScope Key",
     mimo: "English Training: Configure Xiaomi MiMo API Key",
   };
   return titles[provider];
