@@ -101,7 +101,12 @@
       if (ownsBlobUrl) localAudioObjectUrl = src;
     }
     const $ = (id) => document.getElementById(id);
-    const esc = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+    const esc = (value) => String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
     const objectValue = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null;
     const textField = (obj, key) => obj && typeof obj[key] === "string" ? obj[key].trim() : "";
     const scalarText = (value) => {
@@ -3033,8 +3038,8 @@
 
     function updateDrillAttemptBadge(key, count) {
       if (!key) return;
-      const safeKey = (window.CSS && CSS.escape) ? CSS.escape(key) : key.replace(/"/g, '\\"');
-      const badge = document.querySelector('[data-drill-attempt-badge][data-drill-attempt-key="' + safeKey + '"]');
+      const badge = Array.from(document.querySelectorAll("[data-drill-attempt-badge][data-drill-attempt-key]"))
+        .find((candidate) => datasetText(candidate, "drillAttemptKey") === key);
       if (!badge) return;
       const counter = badge.querySelector('[data-drill-attempt-count]');
       if (counter) counter.textContent = String(count);
