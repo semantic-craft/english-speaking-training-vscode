@@ -538,6 +538,8 @@ test("Qwen-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /setStatus\("Slow-read audio ready\."\);\s*playAudioOrPrompt\(player, "Slow-read audio ready — press play\."\)/);
   assert.match(mediaSource, /setStatus\("Slow read returned no audio\. Try again\.", "error"\)/);
   assert.match(mediaSource, /const audioDataUri = textField\(result, "audioDataUri"\);[\s\S]*player\.src = audioDataUri/);
+  assert.match(mediaSource, /Array\.from\(document\.querySelectorAll\("\[data-drill-attempt-badge\]\[data-drill-attempt-key\]"\)\)[\s\S]*datasetText\(candidate, "drillAttemptKey"\) === key/);
+  assert.doesNotMatch(mediaSource, /key\.replace\(\/"\/g, '\\\\"'\)/);
   assert.match(mediaSource, /let activeDrillLineRequest = null/);
   assert.match(mediaSource, /function beginDrillLineRequest/);
   assert.match(mediaSource, /function messageText\(value, fallback = ""\) \{[\s\S]*firstScalarField\(obj, "message", "error", "detail"\)[\s\S]*function messageErrorText\(value, fallback = "Unknown error"\) \{[\s\S]*return messageText\(value, fallback\);/);
