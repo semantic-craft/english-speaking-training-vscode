@@ -540,7 +540,7 @@ test("Qwen-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /const requestId = positiveInteger\(message\.requestId\);\s*if \(!requestId\) return;\s*const request = finishSlowReadRequest\(requestId\);\s*if \(!request\) return/);
   assert.match(mediaSource, /setStatus\("Slow-read audio ready\."\);\s*playAudioOrPrompt\(player, "Slow-read audio ready — press play\."\)/);
   assert.match(mediaSource, /setStatus\("Slow read returned no audio\. Try again\.", "error"\)/);
-  assert.match(mediaSource, /const audioDataUri = trustedAudioSource\(textField\(result, "audioDataUri"\)\);[\s\S]*player\.src = audioDataUri/);
+  assert.match(mediaSource, /const audioDataUri = trustedAudioSource\(textField\(result, "audioDataUri"\)\);\s*if \(audioDataUri\.startsWith\("data:audio\/wav;base64,"\)\) \{[\s\S]*player\.src = audioDataUri/);
   assert.match(mediaSource, /Array\.from\(document\.querySelectorAll\("\[data-drill-attempt-badge\]\[data-drill-attempt-key\]"\)\)[\s\S]*datasetText\(candidate, "drillAttemptKey"\) === key/);
   assert.doesNotMatch(mediaSource, /key\.replace\(\/"\/g, '\\\\"'\)/);
   assert.match(mediaSource, /let activeDrillLineRequest = null/);
@@ -578,7 +578,7 @@ test("Qwen-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /const requestId = beginTodayTtsRequest\(actionTrigger\);\s*if \(!requestId\) return;\s*clearTodayGeneratedAudio\(\);/);
   assert.match(mediaSource, /playAudioOrPrompt\(player, "Slow-read audio ready — press play\."\)/);
   assert.match(mediaSource, /playAudioOrPrompt\(audio, "Example audio ready — press play\. Your next recording will shadow this text\."\)/);
-  assert.match(mediaSource, /const audioDataUri = trustedAudioSource\(textField\(result, "audioDataUri"\)\);\s*if \(!audioDataUri\) \{[\s\S]*Example audio returned no audio\. Try again\.[\s\S]*return;/);
+  assert.match(mediaSource, /const audioDataUri = trustedAudioSource\(textField\(result, "audioDataUri"\)\);\s*if \(!audioDataUri\.startsWith\("data:audio\/wav;base64,"\)\) \{[\s\S]*Example audio returned no audio\. Try again\.[\s\S]*return;/);
   assert.match(mediaSource, /const resultText = textField\(result, "text"\);[\s\S]*pendingPracticeTarget = practiceTarget\(resultText, "Example text", ""\)/);
   assert.match(mediaSource, /listenDisabled: Boolean\(listenBlockMessage\)/);
   assert.match(mediaSource, /listenDisabled: Boolean\(ttsActionBlockMessage\(state, example && example\.text, "listen to this line"\)\)/);

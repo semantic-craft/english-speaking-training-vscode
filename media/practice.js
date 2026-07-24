@@ -3914,7 +3914,7 @@
         }
         const result = objectValue(message.result);
         const audioDataUri = trustedAudioSource(textField(result, "audioDataUri"));
-        if (audioDataUri) {
+        if (audioDataUri.startsWith("data:audio/wav;base64,")) {
           let player = document.getElementById("slowReadAudio");
           if (!player) {
             player = document.createElement("audio");
@@ -3970,7 +3970,7 @@
         }
         const result = objectValue(message.result);
         const audioDataUri = trustedAudioSource(textField(result, "audioDataUri"));
-        if (!audioDataUri) {
+        if (!audioDataUri.startsWith("data:audio/wav;base64,")) {
           const text = "Example audio returned no audio. Try again.";
           if (status) status.textContent = text;
           setStatus(text, "error");
