@@ -96,9 +96,11 @@
       clearLocalAudioSource();
       const el = $("localAudio");
       if (!el) return;
-      el.src = src;
+      const safeSrc = trustedAudioSource(src);
+      if (!safeSrc) return;
+      el.src = safeSrc;
       el.hidden = false;
-      if (ownsBlobUrl) localAudioObjectUrl = src;
+      if (ownsBlobUrl) localAudioObjectUrl = safeSrc;
     }
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value ?? "")
@@ -114,6 +116,25 @@
       if (typeof value === "number" || typeof value === "boolean") return String(value);
       return "";
     };
+    function trustedAudioSource(value) {
+      const source = scalarText(value);
+      if (/^data:audio\/(?:aac|flac|mp3|mp4|mpeg|ogg|wav|webm|x-m4a|x-wav);base64,/i.test(source)) {
+        return source;
+      }
+      try {
+        const url = new URL(source);
+        if (url.protocol === "blob:" && url.origin === window.location.origin) {
+          return url.href;
+        }
+        if (
+          url.protocol === "https:" &&
+          (url.origin === window.location.origin || url.hostname.endsWith(".vscode-resource.vscode-cdn.net"))
+        ) {
+          return url.href;
+        }
+      } catch (_) {}
+      return "";
+    }
     const compactScalarText = (value) => scalarText(value).replace(/\s+/g, " ").trim();
     const positiveInteger = (value) => {
       const parsed = typeof value === "number"
@@ -202,9 +223,9 @@
         nextDrill: firstTextField(result, "nextDrill", "next_drill"),
         drillExamples: normalizePracticeDrillExamples(result.drillExamples || result.drill_examples),
         scores: objectValue(result.scores) || {},
-        audioUri: firstTextField(result, "audioUri", "audio_uri"),
-        followUpAudioUri: firstTextField(result, "followUpAudioUri", "follow_up_audio_uri"),
-        localAudioUri: firstTextField(result, "localAudioUri", "local_audio_uri"),
+        audioUri: trustedAudioSource(firstTextField(result, "audioUri", "audio_uri")),
+        followUpAudioUri: trustedAudioSource(firstTextField(result, "followUpAudioUri", "follow_up_audio_uri")),
+        localAudioUri: trustedAudioSource(firstTextField(result, "localAudioUri", "local_audio_uri")),
         ttsStyle: firstTextField(result, "ttsStyle", "tts_style"),
         sessionDir: firstTextField(result, "sessionDir", "session_dir"),
         packageDate: firstTextField(result, "packageDate", "package_date"),
@@ -3750,7 +3771,7 @@
         setStatus("Ready ✓");
         recorderMode = null;
         clearPendingPracticeContexts(false);
-        if (r.localAudioUri) {
+        if (r.localAudioUri.startsWith("https://file+.vscode-resource.vscode-cdn.net/")) {
           setLocalAudioSource(r.localAudioUri, false);
         }
         const nativeVersion = compactScalarText(r.nativeVersion);
@@ -3892,7 +3913,7 @@
           return;
         }
         const result = objectValue(message.result);
-        const audioDataUri = textField(result, "audioDataUri");
+        const audioDataUri = trustedAudioSource(textField(result, "audioDataUri"));
         if (audioDataUri) {
           let player = document.getElementById("slowReadAudio");
           if (!player) {
@@ -3948,7 +3969,7 @@
           return;
         }
         const result = objectValue(message.result);
-        const audioDataUri = textField(result, "audioDataUri");
+        const audioDataUri = trustedAudioSource(textField(result, "audioDataUri"));
         if (!audioDataUri) {
           const text = "Example audio returned no audio. Try again.";
           if (status) status.textContent = text;
