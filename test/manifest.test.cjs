@@ -319,6 +319,8 @@ test("Qwen-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /const objectValue = \(value\) => value && typeof value === "object" && !Array\.isArray\(value\) \? value : null/);
   assert.match(mediaSource, /const textField = \(obj, key\) => obj && typeof obj\[key\] === "string" \? obj\[key\]\.trim\(\) : ""/);
   assert.match(mediaSource, /const scalarText = \(value\) => \{[\s\S]*typeof value === "number" \|\| typeof value === "boolean"[\s\S]*return "";\s*\}/);
+  assert.match(mediaSource, /function trustedAudioSource\(value\) \{[\s\S]*data:audio\\\/[\s\S]*url\.protocol === "blob:"[\s\S]*url\.hostname\.endsWith\("\.vscode-resource\.vscode-cdn\.net"\)[\s\S]*return "";/);
+  assert.match(mediaSource, /function setLocalAudioSource\(src, ownsBlobUrl\) \{[\s\S]*const safeSrc = trustedAudioSource\(src\);[\s\S]*el\.src = safeSrc/);
   assert.match(mediaSource, /const positiveInteger = \(value\) => \{[\s\S]*Number\.isInteger\(parsed\) && parsed > 0 \? parsed : 0/);
   assert.match(mediaSource, /const normalizedTtsSpeed = \(value, fallback = 0\.9\) => \{[\s\S]*Math\.max\(0\.5, Math\.min\(1\.5, Number\(speed\.toFixed\(2\)\)\)\)/);
   assert.match(mediaSource, /function compactStatusText\(value, fallback\) \{[\s\S]*scalarText\(value\) \|\| fallback \|\| ""[\s\S]*text\.length > 260/);
@@ -330,7 +332,8 @@ test("Qwen-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /const firstTextList = \(obj, \.\.\.keys\) => \{[\s\S]*const items = textList\(obj && obj\[key\]\)[\s\S]*return \[\];/);
   assert.match(coreSource, /function extractGeminiText[\s\S]*for \(const candidate of candidates\)/);
   assert.match(mediaSource, /function normalizePracticeDrillExamples\(value\)[\s\S]*const text = scalarField\(source, "text"\)[\s\S]*source: scalarField\(source, "source"\) \|\| "coach"/);
-  assert.match(mediaSource, /function normalizePracticeResult\(value\) \{[\s\S]*nativeVersion: firstTextField\(result, "nativeVersion", "native_version"\)[\s\S]*quickFix: firstTextField\(result, "quickFix", "quick_fix"\)[\s\S]*errorTags: firstTextList\(result, "errorTags", "error_tags"\)[\s\S]*audioUri: firstTextField\(result, "audioUri", "audio_uri"\)[\s\S]*localAudioUri: firstTextField\(result, "localAudioUri", "local_audio_uri"\)[\s\S]*priorTurn: objectValue\(result\.priorTurn\)/);
+  assert.match(mediaSource, /function normalizePracticeResult\(value\) \{[\s\S]*nativeVersion: firstTextField\(result, "nativeVersion", "native_version"\)[\s\S]*quickFix: firstTextField\(result, "quickFix", "quick_fix"\)[\s\S]*errorTags: firstTextList\(result, "errorTags", "error_tags"\)[\s\S]*audioUri: trustedAudioSource\(firstTextField\(result, "audioUri", "audio_uri"\)\)[\s\S]*localAudioUri: trustedAudioSource\(firstTextField\(result, "localAudioUri", "local_audio_uri"\)\)[\s\S]*priorTurn: objectValue\(result\.priorTurn\)/);
+  assert.match(mediaSource, /r\.localAudioUri\.startsWith\("https:\/\/file\+\.vscode-resource\.vscode-cdn\.net\/"\)[\s\S]*setLocalAudioSource\(r\.localAudioUri, false\)/);
   assert.match(mediaSource, /function practiceTarget\(referenceText, referenceLabel, followUpQuestion\) \{[\s\S]*const text = compactScalarText\(referenceText\);[\s\S]*referenceLabel: scalarText\(referenceLabel\) \|\| "Reference",[\s\S]*followUpQuestion: compactScalarText\(followUpQuestion\)/);
   assert.match(mediaSource, /const turnAudioObjectUrls = new Set\(\)/);
   assert.match(mediaSource, /const MAX_TURN_HISTORY = 12/);
@@ -537,7 +540,7 @@ test("Qwen-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /const requestId = positiveInteger\(message\.requestId\);\s*if \(!requestId\) return;\s*const request = finishSlowReadRequest\(requestId\);\s*if \(!request\) return/);
   assert.match(mediaSource, /setStatus\("Slow-read audio ready\."\);\s*playAudioOrPrompt\(player, "Slow-read audio ready — press play\."\)/);
   assert.match(mediaSource, /setStatus\("Slow read returned no audio\. Try again\.", "error"\)/);
-  assert.match(mediaSource, /const audioDataUri = textField\(result, "audioDataUri"\);[\s\S]*player\.src = audioDataUri/);
+  assert.match(mediaSource, /const audioDataUri = trustedAudioSource\(textField\(result, "audioDataUri"\)\);[\s\S]*player\.src = audioDataUri/);
   assert.match(mediaSource, /Array\.from\(document\.querySelectorAll\("\[data-drill-attempt-badge\]\[data-drill-attempt-key\]"\)\)[\s\S]*datasetText\(candidate, "drillAttemptKey"\) === key/);
   assert.doesNotMatch(mediaSource, /key\.replace\(\/"\/g, '\\\\"'\)/);
   assert.match(mediaSource, /let activeDrillLineRequest = null/);
@@ -575,7 +578,7 @@ test("Qwen-first UX and packaging metadata stay aligned", () => {
   assert.match(mediaSource, /const requestId = beginTodayTtsRequest\(actionTrigger\);\s*if \(!requestId\) return;\s*clearTodayGeneratedAudio\(\);/);
   assert.match(mediaSource, /playAudioOrPrompt\(player, "Slow-read audio ready — press play\."\)/);
   assert.match(mediaSource, /playAudioOrPrompt\(audio, "Example audio ready — press play\. Your next recording will shadow this text\."\)/);
-  assert.match(mediaSource, /const audioDataUri = textField\(result, "audioDataUri"\);\s*if \(!audioDataUri\) \{[\s\S]*Example audio returned no audio\. Try again\.[\s\S]*return;/);
+  assert.match(mediaSource, /const audioDataUri = trustedAudioSource\(textField\(result, "audioDataUri"\)\);\s*if \(!audioDataUri\) \{[\s\S]*Example audio returned no audio\. Try again\.[\s\S]*return;/);
   assert.match(mediaSource, /const resultText = textField\(result, "text"\);[\s\S]*pendingPracticeTarget = practiceTarget\(resultText, "Example text", ""\)/);
   assert.match(mediaSource, /listenDisabled: Boolean\(listenBlockMessage\)/);
   assert.match(mediaSource, /listenDisabled: Boolean\(ttsActionBlockMessage\(state, example && example\.text, "listen to this line"\)\)/);
